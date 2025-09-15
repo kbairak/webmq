@@ -88,6 +88,12 @@ emit('chat.room.1', data);
 
 The runtime JavaScript works correctly (see `examples/basic-chat/backend.js`), but TypeScript source cannot be compiled. This is the primary technical debt to resolve.
 
+**Channel Error Handling**: The backend currently uses a shared RabbitMQ channel for all WebSocket connections without error recovery. In production, we need to implement:
+- Channel error handling and automatic recreation
+- Connection recovery with exponential backoff
+- Graceful degradation when RabbitMQ is unavailable
+- Health checks and monitoring
+
 ## Development Notes
 
 - RabbitMQ management UI available at http://localhost:15672 (guest/guest)

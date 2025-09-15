@@ -1,6 +1,7 @@
 import WebSocket, { WebSocketServer } from 'ws';
-import amqplib, { Connection as AMQPConnection, Channel, ChannelModel } from 'amqplib';
+import amqplib, { Channel, ChannelModel } from 'amqplib';
 import crypto from 'crypto';
+import { EventEmitter } from 'events';
 
 // --- Type Definitions ---
 
@@ -19,6 +20,20 @@ export interface ClientMessage {
   payload?: any;
 }
 
+/** A RabbitMQ subscription with queue and consumer information. */
+export interface Subscription {
+  queue: string;
+  consumerTag: string;
+}
+
+/** Connection data stored for each WebSocket client. */
+export interface ConnectionData {
+  ws: WebSocket;
+  subscriptions: Map<string, Subscription>;
+  context: ConnectionContext;
+}
+
+
 /** A hook function to intercept and process messages. */
 export type Hook = (
   context: ConnectionContext,
@@ -29,6 +44,7 @@ export type Hook = (
 interface WebMQBackendOptions {
   rabbitmqUrl: string;
   exchangeName: string;
+  exchangeDurable?: boolean; // Default: false for performance in real-time apps
   hooks?: {
     pre?: Hook[];
     onListen?: Hook[];
@@ -37,170 +53,138 @@ interface WebMQBackendOptions {
   };
 }
 
-// --- Connection Implementation ---
+// --- Connection Management ---
 
-class Connection {
-  private readonly id: string;
-  private readonly ws: WebSocket;
-  private readonly channel: Channel;
-  private readonly backend: WebMQBackend;
-  private readonly subscriptions = new Map<string, { queue: string; consumerTag: string }>();
+export class ConnectionManager {
+  private connections = new Map<string, ConnectionData>();
 
-  constructor(ws: WebSocket, channel: Channel, backend: WebMQBackend) {
-    this.id = crypto.randomUUID();
-    this.ws = ws;
-    this.channel = channel;
-    this.backend = backend;
+  createConnection(ws: WebSocket): string {
+    const id = crypto.randomUUID();
+    const context: ConnectionContext = { ws, id };
+    const subscriptions = new Map<string, Subscription>();
+
+    this.connections.set(id, { ws, subscriptions, context });
+    return id;
   }
 
-  async initialize(): Promise<void> {
-    console.log(`Client ${this.id} connected.`);
-    this.setupEventHandlers();
+  getConnection(id: string): ConnectionData | undefined {
+    return this.connections.get(id);
   }
 
-  private setupEventHandlers(): void {
-    this.ws.on('message', async (data: WebSocket.RawData) => {
-      try {
-        const message: ClientMessage = JSON.parse(data.toString());
-        await this.processMessage(message);
-      } catch (error: any) {
-        console.error(`[${this.id}] Error processing message:`, error.message);
-        this.ws.send(JSON.stringify({ type: 'error', message: error.message }));
+  removeConnection(id: string): boolean {
+    return this.connections.delete(id);
+  }
+
+  getAllConnections(): ConnectionData[] {
+    return Array.from(this.connections.values());
+  }
+
+  getConnectionIds(): string[] {
+    return Array.from(this.connections.keys());
+  }
+
+  size(): number {
+    return this.connections.size;
+  }
+}
+
+// --- Subscription Management ---
+
+export class SubscriptionManager {
+  constructor(
+    private channel: Channel,
+    private exchangeName: string
+  ) { }
+
+  async subscribe(bindingKey: string): Promise<Subscription> {
+    const { queue } = await this.channel.assertQueue('', {
+      exclusive: true,
+      autoDelete: true
+    });
+
+    await this.channel.bindQueue(queue, this.exchangeName, bindingKey);
+
+    const { consumerTag } = await this.channel.consume(queue, (msg) => {
+      if (msg) {
+        // This callback will be overridden by the caller
+        this.channel.ack(msg);
       }
     });
 
-    this.ws.on('close', async () => {
-      await this.cleanup();
-    });
+    return { queue, consumerTag };
   }
 
-  private async processMessage(message: ClientMessage): Promise<void> {
-    console.log(`[${this.id}] Processing message:`, JSON.stringify(message));
-
-    const context: ConnectionContext = { ws: this.ws, id: this.id };
-    const hooks = this.backend.getHooksForAction(message.action);
-
-    const run = async (index: number): Promise<void> => {
-      if (index >= hooks.length) {
-        console.log(`[${this.id}] Executing action: ${message.action}`);
-        return this.executeAction(message);
-      }
-      console.log(`[${this.id}] Running hook ${index}/${hooks.length}`);
-      await hooks[index](context, message, () => run(index + 1));
-    };
-
-    try {
-      await run(0);
-      console.log(`[${this.id}] Message processed successfully`);
-    } catch (error: any) {
-      console.error(`[${this.id}] Error in processMessage:`, error.message);
-      console.error(`[${this.id}] Stack trace:`, error.stack);
-      throw error;
-    }
+  async unsubscribe(subscription: Subscription, bindingKey: string): Promise<void> {
+    await this.channel.cancel(subscription.consumerTag);
+    await this.channel.unbindQueue(subscription.queue, this.exchangeName, bindingKey);
+    await this.channel.deleteQueue(subscription.queue);
   }
 
-  private async executeAction(message: ClientMessage): Promise<void> {
-    console.log(`[${this.id}] Executing ${message.action} action`);
-
-    try {
-      switch (message.action) {
-        case 'emit':
-          console.log(`[${this.id}] Emit - routingKey: ${message.routingKey}, payload:`, message.payload);
-          if (!message.routingKey || !message.payload) {
-            throw new Error('emit requires routingKey and payload');
-          }
-          this.channel.publish(
-            this.backend.exchangeName,
-            message.routingKey,
-            Buffer.from(JSON.stringify(message.payload))
-          );
-          console.log(`[${this.id}] Message published successfully`);
-          break;
-
-        case 'listen':
-          console.log(`[${this.id}] Listen - bindingKey: ${message.bindingKey}`);
-          if (!message.bindingKey) throw new Error('listen requires a bindingKey');
-          if (this.subscriptions.has(message.bindingKey)) {
-            console.log(`[${this.id}] Already listening to ${message.bindingKey}`);
-            return; // Already listening
-          }
-
-          const { queue } = await this.channel.assertQueue('', { exclusive: true, autoDelete: true });
-          console.log(`[${this.id}] Queue created: ${queue}`);
-
-          await this.channel.bindQueue(queue, this.backend.exchangeName, message.bindingKey);
-          console.log(`[${this.id}] Queue bound to exchange`);
-
-          const { consumerTag } = await this.channel.consume(queue, (msg) => {
-            if (msg) {
-              console.log(`[${this.id}] Received message from RabbitMQ:`, msg.content.toString());
-              this.ws.send(JSON.stringify({
-                type: 'message',
-                bindingKey: message.bindingKey,
-                payload: JSON.parse(msg.content.toString()),
-              }));
-              this.channel.ack(msg);
-            }
-          });
-
-          this.subscriptions.set(message.bindingKey, { queue, consumerTag });
-          console.log(`[${this.id}] Consumer set up with tag: ${consumerTag}`);
-          break;
-
-        case 'unlisten':
-          console.log(`[${this.id}] Unlisten - bindingKey: ${message.bindingKey}`);
-          if (!message.bindingKey) throw new Error('unlisten requires a bindingKey');
-          const sub = this.subscriptions.get(message.bindingKey);
-          if (sub) {
-            await this.channel.cancel(sub.consumerTag);
-            await this.channel.unbindQueue(sub.queue, this.backend.exchangeName, message.bindingKey);
-            await this.channel.deleteQueue(sub.queue);
-            this.subscriptions.delete(message.bindingKey);
-            console.log(`[${this.id}] Unsubscribed from ${message.bindingKey}`);
-          } else {
-            console.log(`[${this.id}] No subscription found for ${message.bindingKey}`);
-          }
-          break;
-
-        default:
-          throw new Error(`Unknown action: ${message.action}`);
-      }
-      console.log(`[${this.id}] Action ${message.action} completed successfully`);
-    } catch (error: any) {
-      console.error(`[${this.id}] Error in executeAction(${message.action}):`, error.message);
-      console.error(`[${this.id}] Stack trace:`, error.stack);
-      throw error;
-    }
+  async publish(routingKey: string, payload: any): Promise<void> {
+    this.channel.publish(
+      this.exchangeName,
+      routingKey,
+      Buffer.from(JSON.stringify(payload))
+    );
   }
 
-  private async cleanup(): Promise<void> {
-    console.log(`Client ${this.id} disconnected. Cleaning up resources.`);
-
-    for (const [bindingKey, sub] of this.subscriptions.entries()) {
+  async cleanupSubscriptions(subscriptions: Map<string, Subscription>): Promise<void> {
+    for (const [bindingKey, subscription] of subscriptions.entries()) {
       try {
-        await this.channel.cancel(sub.consumerTag);
-        await this.channel.unbindQueue(sub.queue, this.backend.exchangeName, bindingKey);
-        await this.channel.deleteQueue(sub.queue);
+        await this.unsubscribe(subscription, bindingKey);
       } catch (err) {
-        console.error(`Error cleaning up for bindingKey ${bindingKey}:`, err);
+        console.error(`Error cleaning up subscription for ${bindingKey}:`, err);
       }
     }
+  }
 
-    await this.channel.close();
+  async createConsumer(
+    subscription: Subscription,
+    messageHandler: (msg: any) => void
+  ): Promise<void> {
+    // Cancel existing consumer and create new one with custom handler
+    await this.channel.cancel(subscription.consumerTag);
+
+    const { consumerTag } = await this.channel.consume(subscription.queue, (msg) => {
+      if (msg) {
+        messageHandler(msg);
+        this.channel.ack(msg);
+      }
+    });
+
+    // Update the subscription with new consumer tag
+    subscription.consumerTag = consumerTag;
   }
 }
 
 // --- Backend Implementation ---
 
-export class WebMQBackend {
+/**
+ * WebMQBackend emits the following events:
+ *
+ * - 'client.connected': { connectionId: string }
+ * - 'client.disconnected': { connectionId: string }
+ * - 'message.received': { connectionId: string; message: ClientMessage }
+ * - 'message.processed': { connectionId: string; message: ClientMessage }
+ * - 'subscription.created': { connectionId: string; bindingKey: string; queue: string }
+ * - 'subscription.removed': { connectionId: string; bindingKey: string }
+ * - 'error': { connectionId?: string; error: Error; context?: string }
+ */
+export class WebMQBackend extends EventEmitter {
   private readonly rabbitmqUrl: string;
-  public readonly exchangeName: string;
+  private readonly exchangeName: string;
+  private readonly exchangeDurable: boolean;
   private readonly hooks: Required<NonNullable<WebMQBackendOptions['hooks']>>;
-  private channelModel: ChannelModel | null = null;
+  private connection: ChannelModel | null = null;
+  private channel: Channel | null = null;
+  private connectionManager = new ConnectionManager();
+  private subscriptionManager: SubscriptionManager | null = null;
 
   constructor(options: WebMQBackendOptions) {
+    super();
     this.rabbitmqUrl = options.rabbitmqUrl;
     this.exchangeName = options.exchangeName;
+    this.exchangeDurable = options.exchangeDurable ?? false; // Default to false for performance
     this.hooks = {
       pre: options.hooks?.pre || [],
       onListen: options.hooks?.onListen || [],
@@ -211,31 +195,173 @@ export class WebMQBackend {
 
   public async start(port: number): Promise<void> {
     console.log('Starting WebMQ Backend...');
-    this.channelModel = await amqplib.connect(this.rabbitmqUrl);
-    const channel = await this.channelModel.createChannel();
-    await channel.assertExchange(this.exchangeName, 'topic', { durable: false });
-    await channel.close();
+
+    // Establish RabbitMQ connection and shared channel
+    this.connection = await amqplib.connect(this.rabbitmqUrl);
+    this.channel = await this.connection.createChannel();
+    await this.channel.assertExchange(
+      this.exchangeName, 'topic', { durable: this.exchangeDurable }
+    );
+
+    // Initialize subscription manager
+    this.subscriptionManager = new SubscriptionManager(this.channel, this.exchangeName);
+
+    console.log('RabbitMQ connection and shared channel established');
 
     const wss = new WebSocketServer({ port });
     wss.on('connection', (ws: WebSocket) => {
-      this.handleConnection(ws);
+      if (!this.channel) {
+        throw new Error('Shared channel not established.');
+      }
+
+      const id = this.connectionManager.createConnection(ws);
+
+      console.log(`Client ${id} connected.`);
+      this.emit('client.connected', { connectionId: id });
+
+      // Set up WebSocket event handlers
+      ws.on('message', async (data: WebSocket.RawData) => {
+        try {
+          const message: ClientMessage = JSON.parse(data.toString());
+          this.emit('message.received', { connectionId: id, message });
+          await this.processMessage(id, message);
+          this.emit('message.processed', { connectionId: id, message });
+        } catch (error: any) {
+          console.error(`[${id}] Error processing message:`, error.message);
+          this.emit('error', { connectionId: id, error, context: 'message processing' });
+          ws.send(JSON.stringify({ type: 'error', message: error.message }));
+        }
+      });
+
+      ws.on('close', async () => {
+        await this.cleanup(id);
+      });
     });
 
     console.log(`WebMQ Backend started on ws://localhost:${port}`);
   }
 
-  private async handleConnection(ws: WebSocket) {
-    if (!this.channelModel) {
-      throw new Error('RabbitMQ connection not established.');
+  private async processMessage(connectionId: string, message: ClientMessage): Promise<void> {
+    const connection = this.connectionManager.getConnection(connectionId);
+    if (!connection) {
+      throw new Error(`Connection ${connectionId} not found`);
     }
 
-    const channel = await this.channelModel.createChannel();
-    const connection = new Connection(ws, channel, this);
-    await connection.initialize();
+    console.log(`[${connectionId}] Processing message:`, JSON.stringify(message));
+
+    const hooks = this.getHooksForAction(message.action);
+
+    const run = async (index: number): Promise<void> => {
+      if (index >= hooks.length) {
+        console.log(`[${connectionId}] Executing action: ${message.action}`);
+        return this.executeAction(connectionId, message);
+      }
+      console.log(`[${connectionId}] Running hook ${index}/${hooks.length}`);
+      await hooks[index](connection.context, message, () => run(index + 1));
+    };
+
+    try {
+      await run(0);
+      console.log(`[${connectionId}] Message processed successfully`);
+    } catch (error: any) {
+      console.error(`[${connectionId}] Error in processMessage:`, error.message);
+      console.error(`[${connectionId}] Stack trace:`, error.stack);
+      throw error;
+    }
   }
 
-  // Public methods for Connection class to access
-  public getHooksForAction(action: ClientMessage['action']): Hook[] {
+  private async executeAction(connectionId: string, message: ClientMessage): Promise<void> {
+    const connection = this.connectionManager.getConnection(connectionId);
+    if (!connection || !this.channel || !this.subscriptionManager) {
+      throw new Error(`Connection ${connectionId} or shared channel not available`);
+    }
+
+    console.log(`[${connectionId}] Executing ${message.action} action`);
+
+    try {
+      switch (message.action) {
+        case 'emit':
+          console.log(`[${connectionId}] Emit - routingKey: ${message.routingKey}, payload:`, message.payload);
+          if (!message.routingKey || !message.payload) {
+            throw new Error('emit requires routingKey and payload');
+          }
+          await this.subscriptionManager.publish(message.routingKey, message.payload);
+          console.log(`[${connectionId}] Message published successfully`);
+          break;
+
+        case 'listen':
+          console.log(`[${connectionId}] Listen - bindingKey: ${message.bindingKey}`);
+          if (!message.bindingKey) throw new Error('listen requires a bindingKey');
+          if (connection.subscriptions.has(message.bindingKey)) {
+            console.log(`[${connectionId}] Already listening to ${message.bindingKey}`);
+            return; // Already listening
+          }
+
+          const subscription = await this.subscriptionManager.subscribe(message.bindingKey);
+          console.log(`[${connectionId}] Queue created: ${subscription.queue}`);
+
+          // Set up custom message handler
+          await this.subscriptionManager.createConsumer(subscription, (msg) => {
+            console.log(`[${connectionId}] Received message from RabbitMQ:`, msg.content.toString());
+            connection.ws.send(JSON.stringify({
+              type: 'message',
+              bindingKey: message.bindingKey,
+              payload: JSON.parse(msg.content.toString()),
+            }));
+          });
+
+          connection.subscriptions.set(message.bindingKey, subscription);
+          this.emit('subscription.created', {
+            connectionId,
+            bindingKey: message.bindingKey,
+            queue: subscription.queue
+          });
+          console.log(`[${connectionId}] Consumer set up with tag: ${subscription.consumerTag}`);
+          break;
+
+        case 'unlisten':
+          console.log(`[${connectionId}] Unlisten - bindingKey: ${message.bindingKey}`);
+          if (!message.bindingKey) throw new Error('unlisten requires a bindingKey');
+          const sub = connection.subscriptions.get(message.bindingKey);
+          if (sub) {
+            await this.subscriptionManager.unsubscribe(sub, message.bindingKey);
+            connection.subscriptions.delete(message.bindingKey);
+            this.emit('subscription.removed', { connectionId, bindingKey: message.bindingKey });
+            console.log(`[${connectionId}] Unsubscribed from ${message.bindingKey}`);
+          } else {
+            console.log(`[${connectionId}] No subscription found for ${message.bindingKey}`);
+          }
+          break;
+
+        default:
+          throw new Error(`Unknown action: ${message.action}`);
+      }
+      console.log(`[${connectionId}] Action ${message.action} completed successfully`);
+    } catch (error: any) {
+      console.error(`[${connectionId}] Error in executeAction(${message.action}):`, error.message);
+      console.error(`[${connectionId}] Stack trace:`, error.stack);
+      throw error;
+    }
+  }
+
+  private async cleanup(connectionId: string): Promise<void> {
+    const connection = this.connectionManager.getConnection(connectionId);
+    if (!connection) {
+      console.warn(`Connection ${connectionId} not found during cleanup`);
+      return;
+    }
+
+    console.log(`Client ${connectionId} disconnected. Cleaning up resources.`);
+
+    if (this.subscriptionManager) {
+      await this.subscriptionManager.cleanupSubscriptions(connection.subscriptions);
+    }
+
+    this.connectionManager.removeConnection(connectionId);
+    this.emit('client.disconnected', { connectionId });
+  }
+
+  private getHooksForAction(action: ClientMessage['action']): Hook[] {
     switch (action) {
       case 'listen':
         return [...this.hooks.pre, ...this.hooks.onListen];

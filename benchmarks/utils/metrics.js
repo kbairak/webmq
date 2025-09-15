@@ -183,4 +183,4 @@ class Metrics {
   }
 }
 
-module.exports = { Metrics };
+export { Metrics };

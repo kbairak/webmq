@@ -2,6 +2,7 @@
   "name": "webmq-benchmarks",
   "version": "1.0.0",
   "description": "Performance benchmarks for WebMQ framework",
+  "type": "module",
   "private": true,
   "scripts": {
     "backend": "node test-backend.js",

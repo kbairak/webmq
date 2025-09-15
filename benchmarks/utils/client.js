@@ -1,8 +1,8 @@
 /**
  * WebMQ client simulator for benchmarks
  */
-const WebSocket = require('ws');
-const { EventEmitter } = require('events');
+import WebSocket from 'ws';
+import { EventEmitter } from 'events';
 
 class WebMQClient extends EventEmitter {
   constructor(url = 'ws://localhost:8080') {
@@ -178,4 +178,4 @@ class WebMQClient extends EventEmitter {
   }
 }
 
-module.exports = { WebMQClient };
+export { WebMQClient };
