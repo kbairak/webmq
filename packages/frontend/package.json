@@ -1,0 +1,23 @@
+{
+  "name": "webmq-frontend",
+  "version": "1.0.0",
+  "description": "Frontend library for WebMQ",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "esbuild src/index.ts --bundle --platform=browser --outfile=dist/index.js --format=esm",
+    "dev": "esbuild src/index.ts --bundle --platform=browser --outfile=dist/index.js --format=esm --watch",
+    "test": "jest"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@types/jest": "^29.5.3",
+    "esbuild": "^0.25.9",
+    "jest": "^29.6.2",
+    "jest-environment-jsdom": "^29.6.2",
+    "ts-jest": "^29.1.1",
+    "typescript": "^5.1.6"
+  }
+}

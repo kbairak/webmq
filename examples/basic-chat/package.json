@@ -1,0 +1,21 @@
+{
+  "name": "basic-chat",
+  "version": "1.0.0",
+  "description": "Basic chat example for WebMQ",
+  "private": true,
+  "scripts": {
+    "start:backend": "node backend.js",
+    "start:frontend": "vite",
+    "start": "npm run start:backend & npm run start:frontend"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "esbuild": "0.25.9",
+    "webmq-backend": "1.0.0",
+    "webmq-frontend": "1.0.0"
+  },
+  "devDependencies": {
+    "vite": "^7.1.5"
+  }
+}

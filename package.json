@@ -1,0 +1,26 @@
+{
+  "name": "webmq-monorepo",
+  "private": true,
+  "version": "1.0.0",
+  "description": "A framework to connect web frontends with RabbitMQ via WebSockets.",
+  "main": "index.js",
+  "scripts": {
+    "install:all": "npm install",
+    "build:backend": "npm run build -w webmq-backend",
+    "build:frontend": "npm run build -w webmq-frontend",
+    "build": "npm run build --workspaces --if-present",
+    "start:chat": "npm start -w basic-chat"
+  },
+  "keywords": [
+    "rabbitmq",
+    "websocket",
+    "backend",
+    "frontend"
+  ],
+  "author": "Gemini",
+  "license": "ISC",
+  "workspaces": [
+    "packages/*",
+    "examples/*"
+  ]
+}
