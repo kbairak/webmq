@@ -75,67 +75,101 @@ class Connection {
   }
 
   private async processMessage(message: ClientMessage): Promise<void> {
+    console.log(`[${this.id}] Processing message:`, JSON.stringify(message));
+
     const context: ConnectionContext = { ws: this.ws, id: this.id };
-    const actionHooks = this.backend.getHooksForAction(message.action);
-    const allHooks = [...this.backend.getPreHooks(), ...actionHooks];
+    const hooks = this.backend.getHooksForAction(message.action);
 
     const run = async (index: number): Promise<void> => {
-      if (index >= allHooks.length) {
+      if (index >= hooks.length) {
+        console.log(`[${this.id}] Executing action: ${message.action}`);
         return this.executeAction(message);
       }
-      await allHooks[index](context, message, () => run(index + 1));
+      console.log(`[${this.id}] Running hook ${index}/${hooks.length}`);
+      await hooks[index](context, message, () => run(index + 1));
     };
 
-    await run(0);
+    try {
+      await run(0);
+      console.log(`[${this.id}] Message processed successfully`);
+    } catch (error: any) {
+      console.error(`[${this.id}] Error in processMessage:`, error.message);
+      console.error(`[${this.id}] Stack trace:`, error.stack);
+      throw error;
+    }
   }
 
   private async executeAction(message: ClientMessage): Promise<void> {
-    switch (message.action) {
-      case 'emit':
-        if (!message.routingKey || !message.payload) {
-          throw new Error('emit requires routingKey and payload');
-        }
-        await this.channel.publish(
-          this.backend.getExchangeName(),
-          message.routingKey,
-          Buffer.from(JSON.stringify(message.payload))
-        );
-        break;
+    console.log(`[${this.id}] Executing ${message.action} action`);
 
-      case 'listen':
-        if (!message.bindingKey) throw new Error('listen requires a bindingKey');
-        if (this.subscriptions.has(message.bindingKey)) return; // Already listening
-
-        const { queue } = await this.channel.assertQueue('', { exclusive: true, autoDelete: true });
-        await this.channel.bindQueue(queue, this.backend.getExchangeName(), message.bindingKey);
-
-        const { consumerTag } = await this.channel.consume(queue, (msg) => {
-          if (msg) {
-            this.ws.send(JSON.stringify({
-              type: 'message',
-              bindingKey: message.bindingKey,
-              payload: JSON.parse(msg.content.toString()),
-            }));
-            this.channel.ack(msg);
+    try {
+      switch (message.action) {
+        case 'emit':
+          console.log(`[${this.id}] Emit - routingKey: ${message.routingKey}, payload:`, message.payload);
+          if (!message.routingKey || !message.payload) {
+            throw new Error('emit requires routingKey and payload');
           }
-        });
+          this.channel.publish(
+            this.backend.exchangeName,
+            message.routingKey,
+            Buffer.from(JSON.stringify(message.payload))
+          );
+          console.log(`[${this.id}] Message published successfully`);
+          break;
 
-        this.subscriptions.set(message.bindingKey, { queue, consumerTag });
-        break;
+        case 'listen':
+          console.log(`[${this.id}] Listen - bindingKey: ${message.bindingKey}`);
+          if (!message.bindingKey) throw new Error('listen requires a bindingKey');
+          if (this.subscriptions.has(message.bindingKey)) {
+            console.log(`[${this.id}] Already listening to ${message.bindingKey}`);
+            return; // Already listening
+          }
 
-      case 'unlisten':
-        if (!message.bindingKey) throw new Error('unlisten requires a bindingKey');
-        const sub = this.subscriptions.get(message.bindingKey);
-        if (sub) {
-          await this.channel.cancel(sub.consumerTag);
-          await this.channel.unbindQueue(sub.queue, this.backend.getExchangeName(), message.bindingKey);
-          await this.channel.deleteQueue(sub.queue);
-          this.subscriptions.delete(message.bindingKey);
-        }
-        break;
+          const { queue } = await this.channel.assertQueue('', { exclusive: true, autoDelete: true });
+          console.log(`[${this.id}] Queue created: ${queue}`);
 
-      default:
-        throw new Error('Unknown action');
+          await this.channel.bindQueue(queue, this.backend.exchangeName, message.bindingKey);
+          console.log(`[${this.id}] Queue bound to exchange`);
+
+          const { consumerTag } = await this.channel.consume(queue, (msg) => {
+            if (msg) {
+              console.log(`[${this.id}] Received message from RabbitMQ:`, msg.content.toString());
+              this.ws.send(JSON.stringify({
+                type: 'message',
+                bindingKey: message.bindingKey,
+                payload: JSON.parse(msg.content.toString()),
+              }));
+              this.channel.ack(msg);
+            }
+          });
+
+          this.subscriptions.set(message.bindingKey, { queue, consumerTag });
+          console.log(`[${this.id}] Consumer set up with tag: ${consumerTag}`);
+          break;
+
+        case 'unlisten':
+          console.log(`[${this.id}] Unlisten - bindingKey: ${message.bindingKey}`);
+          if (!message.bindingKey) throw new Error('unlisten requires a bindingKey');
+          const sub = this.subscriptions.get(message.bindingKey);
+          if (sub) {
+            await this.channel.cancel(sub.consumerTag);
+            await this.channel.unbindQueue(sub.queue, this.backend.exchangeName, message.bindingKey);
+            await this.channel.deleteQueue(sub.queue);
+            this.subscriptions.delete(message.bindingKey);
+            console.log(`[${this.id}] Unsubscribed from ${message.bindingKey}`);
+          } else {
+            console.log(`[${this.id}] No subscription found for ${message.bindingKey}`);
+          }
+          break;
+
+        default:
+          throw new Error(`Unknown action: ${message.action}`);
+      }
+      console.log(`[${this.id}] Action ${message.action} completed successfully`);
+    } catch (error: any) {
+      console.error(`[${this.id}] Error in executeAction(${message.action}):`, error.message);
+      console.error(`[${this.id}] Stack trace:`, error.stack);
+      throw error;
     }
   }
 
@@ -145,7 +179,7 @@ class Connection {
     for (const [bindingKey, sub] of this.subscriptions.entries()) {
       try {
         await this.channel.cancel(sub.consumerTag);
-        await this.channel.unbindQueue(sub.queue, this.backend.getExchangeName(), bindingKey);
+        await this.channel.unbindQueue(sub.queue, this.backend.exchangeName, bindingKey);
         await this.channel.deleteQueue(sub.queue);
       } catch (err) {
         console.error(`Error cleaning up for bindingKey ${bindingKey}:`, err);
@@ -160,7 +194,7 @@ class Connection {
 
 export class WebMQBackend {
   private readonly rabbitmqUrl: string;
-  private readonly exchangeName: string;
+  public readonly exchangeName: string;
   private readonly hooks: Required<NonNullable<WebMQBackendOptions['hooks']>>;
   private channelModel: ChannelModel | null = null;
 
@@ -204,22 +238,13 @@ export class WebMQBackend {
   public getHooksForAction(action: ClientMessage['action']): Hook[] {
     switch (action) {
       case 'listen':
-        return this.hooks.onListen;
+        return [...this.hooks.pre, ...this.hooks.onListen];
       case 'unlisten':
-        return this.hooks.onUnlisten;
+        return [...this.hooks.pre, ...this.hooks.onUnlisten];
       case 'emit':
-        return this.hooks.onEmit;
+        return [...this.hooks.pre, ...this.hooks.onEmit];
       default:
-        return [];
+        return this.hooks.pre;
     }
   }
-
-  public getPreHooks(): Hook[] {
-    return this.hooks.pre;
-  }
-
-  public getExchangeName(): string {
-    return this.exchangeName;
-  }
-
 }
