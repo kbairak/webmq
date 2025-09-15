@@ -42,6 +42,8 @@ const { mockConnection, mockChannel } = require('amqplib');
 
 describe('WebMQBackend', () => {
   let backend: WebMQBackend;
+  let mockWSSInstance: jest.Mocked<WebSocketServer>;
+  let mockWSInstance: jest.Mocked<WebSocket>;
   // Access the mocked WebSocket and WebSocketServer directly from the module
   const { WebSocket: MockWebSocket, WebSocketServer: MockWebSocketServer } = require('ws');
 
@@ -50,8 +52,8 @@ describe('WebMQBackend', () => {
     jest.clearAllMocks();
 
     // Setup ws mock instances
-    const mockWSSInstance = { on: jest.fn() } as unknown as jest.Mocked<WebSocketServer>;
-    const mockWSInstance = { on: jest.fn(), send: jest.fn() } as unknown as jest.Mocked<WebSocket>;
+    mockWSSInstance = { on: jest.fn() } as unknown as jest.Mocked<WebSocketServer>;
+    mockWSInstance = { on: jest.fn(), send: jest.fn() } as unknown as jest.Mocked<WebSocket>;
 
     // Set the mock implementations for WebSocket and WebSocketServer
     (MockWebSocket as jest.Mock).mockImplementation(() => mockWSInstance);
@@ -60,23 +62,21 @@ describe('WebMQBackend', () => {
     // Re-mock amqplib connect for each test to have a clean slate
     (amqplib.connect as jest.Mock).mockClear().mockResolvedValue(mockConnection);
     (mockConnection.createChannel as jest.Mock).mockClear().mockResolvedValue(mockChannel);
+
+    // Clear the mock channel calls for each test
+    Object.values(mockChannel).forEach((mockFn: any) => {
+      if (typeof mockFn === 'function' && mockFn.mockClear) {
+        mockFn.mockClear();
+      }
+    });
   });
 
   const getWSSConnectionCallback = () => {
-    // Access the mockWSSInstance from the mocked WebSocketServer
-    const mockWSSInstance = (MockWebSocketServer as jest.Mock).mock.results[0]?.value;
-    if (!mockWSSInstance) throw new Error("mockWSSInstance not found");
+    // Return the connection callback from the mockWSSInstance
     const onConnectionCall = (mockWSSInstance.on as jest.Mock).mock.calls.find((call: any) => call[0] === 'connection');
     return onConnectionCall ? onConnectionCall[1] : null;
   };
 
-  const getWSMessageCallback = () => {
-    // Access the mockWSInstance from the mocked WebSocket
-    const mockWSInstance = (MockWebSocket as jest.Mock).mock.results[0]?.value;
-    if (!mockWSInstance) throw new Error("mockWSInstance not found");
-    const onMessageCall = (mockWSInstance.on as jest.Mock).mock.calls.find((call: any) => call[0] === 'message');
-    return onMessageCall ? onMessageCall[1] : null;
-  };
 
   it('should start, connect to RabbitMQ, and set up WebSocket server', async () => {
     backend = new WebMQBackend({ rabbitmqUrl: 'amqp://localhost', exchangeName: 'test-exchange' });
@@ -85,8 +85,8 @@ describe('WebMQBackend', () => {
     expect(amqplib.connect).toHaveBeenCalledWith('amqp://localhost');
     expect(mockConnection.createChannel).toHaveBeenCalled();
     expect(mockChannel.assertExchange).toHaveBeenCalledWith('test-exchange', 'topic', { durable: false });
-    expect(require('ws').Server).toHaveBeenCalledWith({ port: 8080 });
-    expect(mockWSS.on).toHaveBeenCalledWith('connection', expect.any(Function));
+    expect(MockWebSocketServer).toHaveBeenCalledWith({ port: 8080 });
+    expect(mockWSSInstance.on).toHaveBeenCalledWith('connection', expect.any(Function));
   });
 
   it('should handle a listen message correctly', async () => {
@@ -94,11 +94,15 @@ describe('WebMQBackend', () => {
     await backend.start(8080);
 
     const onConnection = getWSSConnectionCallback();
-    onConnection(mockWS);
+    await onConnection(mockWSInstance); // Wait for connection handling to complete
 
-    const onMessage = getWSMessageCallback();
+    // Manually trigger the message event on the mock WebSocket
     const listenMessage: ClientMessage = { action: 'listen', bindingKey: 'test.key' };
-    await onMessage(JSON.stringify(listenMessage));
+    const messageCallback = (mockWSInstance.on as jest.Mock).mock.calls.find((call: any) => call[0] === 'message')?.[1];
+
+    if (messageCallback) {
+      await messageCallback(Buffer.from(JSON.stringify(listenMessage)));
+    }
 
     expect(mockChannel.assertQueue).toHaveBeenCalledWith('', { exclusive: true, autoDelete: true });
     expect(mockChannel.bindQueue).toHaveBeenCalledWith('test-queue', 'test-exchange', 'test.key');
@@ -110,11 +114,15 @@ describe('WebMQBackend', () => {
     await backend.start(8080);
 
     const onConnection = getWSSConnectionCallback();
-    onConnection(mockWS);
+    await onConnection(mockWSInstance);
 
-    const onMessage = getWSMessageCallback();
+    // Manually trigger the message event on the mock WebSocket
     const emitMessage: ClientMessage = { action: 'emit', routingKey: 'test.route', payload: { data: 'test' } };
-    await onMessage(JSON.stringify(emitMessage));
+    const messageCallback = (mockWSInstance.on as jest.Mock).mock.calls.find((call: any) => call[0] === 'message')?.[1];
+
+    if (messageCallback) {
+      await messageCallback(Buffer.from(JSON.stringify(emitMessage)));
+    }
 
     expect(mockChannel.publish).toHaveBeenCalledWith(
       'test-exchange',
@@ -133,11 +141,15 @@ describe('WebMQBackend', () => {
     await backend.start(8080);
 
     const onConnection = getWSSConnectionCallback();
-    onConnection(mockWS);
+    await onConnection(mockWSInstance);
 
-    const onMessage = getWSMessageCallback();
+    // Manually trigger the message event on the mock WebSocket
     const emitMessage: ClientMessage = { action: 'emit', routingKey: 'test.route', payload: {} };
-    await onMessage(JSON.stringify(emitMessage));
+    const messageCallback = (mockWSInstance.on as jest.Mock).mock.calls.find((call: any) => call[0] === 'message')?.[1];
+
+    if (messageCallback) {
+      await messageCallback(Buffer.from(JSON.stringify(emitMessage)));
+    }
 
     expect(hook).toHaveBeenCalled();
     expect(mockChannel.publish).toHaveBeenCalled(); // Ensure the chain continued
@@ -152,14 +164,18 @@ describe('WebMQBackend', () => {
     await backend.start(8080);
 
     const onConnection = getWSSConnectionCallback();
-    onConnection(mockWS);
+    await onConnection(mockWSInstance);
 
-    const onMessage = getWSMessageCallback();
+    // Manually trigger the message event on the mock WebSocket
     const emitMessage: ClientMessage = { action: 'emit', routingKey: 'test.route', payload: {} };
-    await onMessage(JSON.stringify(emitMessage));
+    const messageCallback = (mockWSInstance.on as jest.Mock).mock.calls.find((call: any) => call[0] === 'message')?.[1];
+
+    if (messageCallback) {
+      await messageCallback(Buffer.from(JSON.stringify(emitMessage)));
+    }
 
     expect(hook).toHaveBeenCalled();
     expect(mockChannel.publish).not.toHaveBeenCalled();
-    expect(mockWS.send).toHaveBeenCalledWith(JSON.stringify({ type: 'error', message: 'Permission Denied' }));
+    expect(mockWSInstance.send).toHaveBeenCalledWith(JSON.stringify({ type: 'error', message: 'Permission Denied' }));
   });
 });
