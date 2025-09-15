@@ -35,7 +35,7 @@ export class WebMQClient {
       this.connectionPromise = new Promise((resolve, reject) => {
         this.ws = new WebSocket(this.url!);
 
-        this.ws.onopen = () => {
+        this.ws.addEventListener('open', () => {
           console.log('WebMQ client connected.');
           this.isConnected = true;
           // Resubscribe to all existing listeners on reconnection
@@ -43,9 +43,9 @@ export class WebMQClient {
             this.ws?.send(JSON.stringify({ action: 'listen', bindingKey }));
           }
           resolve();
-        };
+        });
 
-        this.ws.onmessage = (event) => {
+        this.ws.addEventListener('message', (event) => {
           try {
             const message = JSON.parse(event.data);
             if (message.type === 'message' && message.bindingKey) {
@@ -57,21 +57,21 @@ export class WebMQClient {
           } catch (e) {
             console.error('Error parsing message from server:', e);
           }
-        };
+        });
 
-        this.ws.onerror = (err) => {
+        this.ws.addEventListener('error', (err) => {
           console.error('WebMQ client error:', err);
           if (!this.isConnected) {
             reject(new Error('WebSocket connection failed.'));
           }
-        };
+        });
 
-        this.ws.onclose = () => {
+        this.ws.addEventListener('close', () => {
           console.log('WebMQ client disconnected.');
           this.isConnected = false;
           this.ws = null;
           this.connectionPromise = null;
-        };
+        });
       });
     }
     return this.connectionPromise;

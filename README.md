@@ -29,15 +29,18 @@ This project is a monorepo managed with `npm` workspaces.
 
 ### Development Setup
 
-1.  **Start RabbitMQ:**
+1. **Start RabbitMQ:**
     From the project root, start a RabbitMQ server using Docker Compose.
+
     ```bash
     docker-compose up -d
     ```
+
     The management UI will be available at [http://localhost:15672](http://localhost:15672) (user: `guest`, pass: `guest`).
 
-2.  **Install Dependencies:**
+2. **Install Dependencies:**
     Install all dependencies for all packages and link the local workspaces.
+
     ```bash
     npm install
     ```
@@ -46,18 +49,22 @@ This project is a monorepo managed with `npm` workspaces.
 
 The `basic-chat` example demonstrates a simple real-time chat room.
 
-1.  **Start the Backend Server:**
+1. **Start the Backend Server:**
     In a terminal, run the following command from the project root:
+
     ```bash
     npm run start:backend -w basic-chat
     ```
+
     This will start the WebMQ backend on `ws://localhost:8080`.
 
-2.  **Start the Frontend Application:**
+2. **Start the Frontend Application:**
     In a second terminal, run:
+
     ```bash
     npm run start:frontend -w basic-chat
     ```
+
     This will start a Vite development server and provide you with a URL to open the chat application in your browser.
 
 Open the URL in multiple browser tabs to see the real-time communication in action.
@@ -293,7 +300,3 @@ def on_feed_request(channel, method, properties, body):
 channel.basic_consume(queue='feed_requests', on_message_callback=on_feed_request, auto_ack=True)
 channel.start_consuming()
 ```
-
-## Known Issues
-
-- **Backend Compilation Error:** The `webmq-backend` package currently fails to compile with `tsc` due to a persistent and difficult-to-resolve TypeScript type error related to the `amqplib` library. The runtime logic in the JavaScript files (`examples/basic-chat/backend.js`) is correct and functional, but the TypeScript source in `packages/backend/src/index.ts` cannot be successfully type-checked as-is. This prevents the backend tests from running and prevents building the backend package from source. Resolving this type definition issue is the main priority.

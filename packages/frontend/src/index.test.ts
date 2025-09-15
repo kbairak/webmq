@@ -1,24 +1,41 @@
-import { WebMQClient, setup, listen, emit, unlisten, connect } from './index';
+import { WebMQClient } from './index';
 
 // Mock WebSocket
 const mockSend = jest.fn();
 const mockClose = jest.fn();
-let mockServer = {
-  onmessage: (event: { data: string }) => {},
-  onopen: () => {},
-  onclose: () => {},
-  onerror: (error: Error) => {},
+let mockEventListeners: { [key: string]: Function[] } = {};
+
+// Helper function to trigger event listeners
+const triggerEvent = (event: string, data?: any) => {
+  if (mockEventListeners[event]) {
+    mockEventListeners[event].forEach(callback => {
+      if (event === 'message') {
+        callback({ data });
+      } else {
+        callback(data);
+      }
+    });
+  }
 };
 
 global.WebSocket = jest.fn().mockImplementation((url) => {
+  mockEventListeners = {}; // Reset for each WebSocket instance
+
   const wsInstance = {
     url,
     send: mockSend,
     close: mockClose,
-    set onmessage(callback: (event: { data: string }) => void) { mockServer.onmessage = callback; },
-    set onopen(callback: () => void) { mockServer.onopen = callback; },
-    set onclose(callback: () => void) { mockServer.onclose = callback; },
-    set onerror(callback: (error: Error) => void) { mockServer.onerror = callback; },
+    addEventListener: jest.fn((event: string, callback: Function) => {
+      if (!mockEventListeners[event]) {
+        mockEventListeners[event] = [];
+      }
+      mockEventListeners[event].push(callback);
+    }),
+    removeEventListener: jest.fn((event: string, callback: Function) => {
+      if (mockEventListeners[event]) {
+        mockEventListeners[event] = mockEventListeners[event].filter(cb => cb !== callback);
+      }
+    }),
   };
   return wsInstance;
 }) as any;
@@ -42,9 +59,9 @@ describe('WebMQClient (Singleton)', () => {
     });
 
     it('should connect and send a listen message on first listen', async () => {
-      const promise = client.listen('test.key', () => {});
+      const promise = client.listen('test.key', () => { });
       // Simulate server connection
-      mockServer.onopen();
+      triggerEvent('open');
       await promise;
 
       expect(global.WebSocket).toHaveBeenCalledWith('ws://localhost:8080');
@@ -52,11 +69,11 @@ describe('WebMQClient (Singleton)', () => {
     });
 
     it('should only send one listen message for multiple listeners on the same key', async () => {
-      const promise = client.listen('test.key', () => {});
-      mockServer.onopen();
+      const promise = client.listen('test.key', () => { });
+      triggerEvent('open');
       await promise;
 
-      await client.listen('test.key', () => {});
+      await client.listen('test.key', () => { });
 
       expect(mockSend).toHaveBeenCalledTimes(1);
     });
@@ -66,21 +83,21 @@ describe('WebMQClient (Singleton)', () => {
       const callback2 = jest.fn();
 
       const promise = client.listen('test.key', callback1);
-      mockServer.onopen();
+      triggerEvent('open');
       await promise;
       await client.listen('another.key', callback2);
 
       const message = { type: 'message', bindingKey: 'test.key', payload: { data: 'hello' } };
-      mockServer.onmessage({ data: JSON.stringify(message) });
+      triggerEvent('message', JSON.stringify(message));
 
       expect(callback1).toHaveBeenCalledWith({ data: 'hello' });
       expect(callback2).not.toHaveBeenCalled();
     });
 
     it('should send unlisten message when the last callback is removed', async () => {
-      const callback = () => {};
+      const callback = () => { };
       const promise = client.listen('test.key', callback);
-      mockServer.onopen();
+      triggerEvent('open');
       await promise;
 
       // Now unlisten
@@ -90,10 +107,10 @@ describe('WebMQClient (Singleton)', () => {
     });
 
     it('should NOT send unlisten message if other callbacks still exist', async () => {
-      const callback1 = () => {};
-      const callback2 = () => {};
+      const callback1 = () => { };
+      const callback2 = () => { };
       const promise = client.listen('test.key', callback1);
-      mockServer.onopen();
+      triggerEvent('open');
       await promise;
       await client.listen('test.key', callback2);
 
@@ -107,10 +124,12 @@ describe('WebMQClient (Singleton)', () => {
 
     it('should send an emit message', async () => {
       const promise = client.emit('test.route', { data: 123 });
-      mockServer.onopen();
+      triggerEvent('open');
       await promise;
 
-      expect(mockSend).toHaveBeenCalledWith(JSON.stringify({ action: 'emit', routingKey: 'test.route', payload: { data: 123 } }));
+      expect(mockSend).toHaveBeenCalledWith(JSON.stringify({
+        action: 'emit', routingKey: 'test.route', payload: { data: 123 }
+      }));
     });
   });
 });
