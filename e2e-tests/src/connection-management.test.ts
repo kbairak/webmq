@@ -18,6 +18,7 @@ describe('WebMQ Connection Management', () => {
     backendPort = await getAvailablePort();
 
     // Create backend
+    // TODO: Can't we simply import this at the top?
     const WebMQBackend = (await import('webmq-backend')).WebMQBackend;
     backend = new WebMQBackend({
       rabbitmqUrl,
@@ -31,6 +32,8 @@ describe('WebMQ Connection Management', () => {
     try {
       if (backend) {
         await backend.stop();
+        // Wait for backend cleanup to complete
+        await new Promise(resolve => setTimeout(resolve, 100));
       }
     } catch (error) {
       console.warn('Error stopping backend:', error);
@@ -71,8 +74,12 @@ describe('WebMQ Connection Management', () => {
 
     // Cleanup
     for (const client of clients) {
+      client.clearQueue();
       client.disconnect({ onActiveListeners: 'clear' });
     }
+
+    // Wait for all clients to disconnect
+    await new Promise(resolve => setTimeout(resolve, 100));
 
     // Test passed if no errors thrown
     expect(true).toBe(true);

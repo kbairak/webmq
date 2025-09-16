@@ -22,7 +22,10 @@ describe('WebMQ Hooks and Authentication', () => {
   afterAll(async () => {
     try {
       if (client) {
+        client.clearQueue();
         client.disconnect({ onActiveListeners: 'clear' });
+        // Wait for disconnect to complete
+        await new Promise(resolve => setTimeout(resolve, 100));
       }
     } catch (error) {
       console.warn('Error disconnecting client:', error);
@@ -31,6 +34,8 @@ describe('WebMQ Hooks and Authentication', () => {
     try {
       if (backend) {
         await backend.stop();
+        // Wait for backend cleanup to complete
+        await new Promise(resolve => setTimeout(resolve, 100));
       }
     } catch (error) {
       console.warn('Error stopping backend:', error);

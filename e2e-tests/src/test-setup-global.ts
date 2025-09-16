@@ -3,7 +3,7 @@ export class GlobalTestSetup {
   private mockAmqpUrl: string = 'amqp://mock:mock@localhost:5672';
   private initialized: boolean = false;
 
-  private constructor() {}
+  private constructor() { }
 
   static getInstance(): GlobalTestSetup {
     if (!GlobalTestSetup.instance) {
@@ -55,6 +55,7 @@ export class GlobalTestSetup {
 }
 
 // Helper function to get unique exchange name for test isolation
+// TODO: Why not crypto.randomUUID()?
 export function getTestExchangeName(testSuiteName: string): string {
   const timestamp = Date.now();
   const random = Math.random().toString(36).substring(2, 8);

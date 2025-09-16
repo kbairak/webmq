@@ -189,11 +189,13 @@ client.off('connect', handler); // Clean removal
 ```
 
 **Event Types:**
+
 - **`connect`**: Fired on initial successful connection
 - **`disconnect`**: Fired when connection is lost
 - **`reconnect`**: Fired when connection is re-established after being lost
 
 **React Example:**
+
 ```jsx
 import { useEffect, useState } from 'react';
 import { client } from 'webmq-frontend';
@@ -250,6 +252,7 @@ client.on('reconnect', () => {
 ```
 
 **Queue Behavior:**
+
 - **FIFO ordering**: Messages are sent in the order they were queued
 - **Size limits**: Configurable via `maxQueueSize` option (default: 100)
 - **Overflow handling**: When full, oldest messages are dropped to make room
@@ -257,6 +260,7 @@ client.on('reconnect', () => {
 - **Memory efficient**: Queue is cleared after successful transmission
 
 **Use Cases:**
+
 - **Chat applications**: Don't lose messages during brief disconnections
 - **Form submissions**: Queue critical data when offline
 - **Analytics events**: Ensure user interactions are captured even with poor connectivity
@@ -283,20 +287,21 @@ try {
 ```
 
 **Acknowledgment Behavior:**
+
 - **Automatic**: All messages require acknowledgment (no opt-out)
 - **Promise-based**: Simple async/await or .then()/.catch() patterns
 - **Timeout protection**: Configurable timeout (default: 10 seconds)
 - **Error handling**: Server rejections and timeouts throw descriptive errors
 
 **Server Response Protocol:**
+
 ```javascript
 // Client sends:
 {
   action: 'emit',
   routingKey: 'user.action',
   payload: { action: 'click' },
-  messageId: 'msg_1234567890_abc123',
-  requireAck: true
+  messageId: 'msg_1234567890_abc123'
 }
 
 // Server responds with:
@@ -306,12 +311,14 @@ try {
 ```
 
 **Error Scenarios:**
+
 - **Server rejection**: Business logic errors, validation failures
 - **Timeout**: Server doesn't respond within `messageTimeout`
 - **Queue overflow**: Message dropped when offline queue is full
 - **Network errors**: Connection lost during transmission
 
 **Best Practices:**
+
 ```javascript
 // Handle specific error types
 try {
@@ -555,6 +562,7 @@ This section tracks potential enhancements that could be added to WebMQ in the f
   - Request-response pattern (`request(topic, data)` returns Promise)
   - Message filtering/transformation functions
   - Message batching to reduce WebSocket overhead
+  - Hooks for Frontend
 
 - **Developer Experience:**
   - Debug mode with verbose logging

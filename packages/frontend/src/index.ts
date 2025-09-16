@@ -1,6 +1,115 @@
 import { EventEmitter } from 'events';
 
 // --- Type Definitions ---
+
+/**
+ * Base interface for all WebMQ messages
+ */
+export interface WebMQMessage {
+  action: string;
+}
+
+/**
+ * Message sent to establish a listener for a specific routing pattern
+ */
+export interface ListenMessage extends WebMQMessage {
+  action: 'listen';
+  bindingKey: string;
+}
+
+/**
+ * Message sent to remove a listener for a specific routing pattern
+ */
+export interface UnlistenMessage extends WebMQMessage {
+  action: 'unlisten';
+  bindingKey: string;
+}
+
+/**
+ * Message sent to emit data to a routing key
+ */
+export interface EmitMessage extends WebMQMessage {
+  action: 'emit';
+  routingKey: string;
+  payload: any;
+  messageId: string;
+}
+
+/**
+ * Message received from server containing routed data
+ */
+export interface IncomingDataMessage {
+  type: 'message';
+  bindingKey: string;
+  payload: any;
+  routingKey?: string;
+}
+
+/**
+ * Acknowledgment message received from server
+ */
+export interface AckMessage {
+  type: 'ack';
+  messageId: string;
+  status: 'success' | 'error';
+  error?: string;
+}
+
+/**
+ * Negative acknowledgment message received from server
+ */
+export interface NackMessage {
+  type: 'nack';
+  messageId: string;
+  error: string;
+}
+
+/**
+ * Union type for all client-to-server messages
+ */
+export type ClientMessage = ListenMessage | UnlistenMessage | EmitMessage;
+
+/**
+ * Union type for all server-to-client messages
+ */
+export type ServerMessage = IncomingDataMessage | AckMessage | NackMessage;
+
+/**
+ * Configuration options for WebMQ client setup
+ */
+export interface WebMQClientOptions {
+  maxReconnectAttempts?: number;
+  maxQueueSize?: number;
+  messageTimeout?: number;
+}
+
+/**
+ * Options for client disconnection behavior
+ */
+export interface DisconnectOptions {
+  onActiveListeners?: 'ignore' | 'throw' | 'clear';
+}
+
+/**
+ * Queued message structure for offline scenarios
+ */
+export interface QueuedMessage {
+  routingKey: string;
+  payload: any;
+  messageId: string;
+  resolve: (value?: any) => void;
+  reject: (reason?: any) => void;
+}
+
+/**
+ * Pending message tracking structure for acknowledgments
+ */
+export interface PendingMessage {
+  resolve: (value?: any) => void;
+  reject: (reason?: any) => void;
+  timeout: ReturnType<typeof setTimeout>;
+}
+
 type MessageCallback = (payload: any) => void;
 
 // --- Class Implementation ---
@@ -20,11 +129,11 @@ export class WebMQClient extends EventEmitter {
   private reconnectTimeout: number | null = null;
 
   // Message queuing for offline scenarios
-  private messageQueue: Array<{ routingKey: string; payload: any; messageId: string; resolve: (value?: any) => void; reject: (reason?: any) => void }> = [];
+  private messageQueue: QueuedMessage[] = [];
   private maxQueueSize = 100;
 
   // Message acknowledgment tracking
-  private pendingMessages: Map<string, { resolve: (value?: any) => void; reject: (reason?: any) => void; timeout: ReturnType<typeof setTimeout> }> = new Map();
+  private pendingMessages: Map<string, PendingMessage> = new Map();
   private messageTimeout = 10000; // 10 seconds default
 
   constructor() {
@@ -36,7 +145,7 @@ export class WebMQClient extends EventEmitter {
    * @param url The WebSocket URL (e.g., 'ws://localhost:8080')
    * @param options Configuration options
    */
-  public setup(url: string, options: { maxReconnectAttempts?: number; maxQueueSize?: number; messageTimeout?: number } = {}) {
+  public setup(url: string, options: WebMQClientOptions = {}) {
     this.url = url;
     if (options.maxReconnectAttempts !== undefined) {
       this.maxReconnectAttempts = options.maxReconnectAttempts;
@@ -72,8 +181,9 @@ export class WebMQClient extends EventEmitter {
             this.reconnectTimeout = null;
           }
           // Resubscribe to all existing listeners on reconnection
-          for (const bindingKey of this.messageListeners.keys()) {
-            this.ws?.send(JSON.stringify({ action: 'listen', bindingKey }));
+          for (const bindingKey of Array.from(this.messageListeners.keys())) {
+            const listenMessage: ListenMessage = { action: 'listen', bindingKey };
+            this.ws?.send(JSON.stringify(listenMessage));
           }
 
           // Send any queued messages
@@ -91,20 +201,31 @@ export class WebMQClient extends EventEmitter {
 
         this.ws.addEventListener('message', (event) => {
           try {
-            const message = JSON.parse(event.data);
+            const message: ServerMessage = JSON.parse(event.data);
 
-            if (message.type === 'message' && message.bindingKey) {
+            // TODO: Maybe use switch here?
+            if (message.type === 'message') {
               // Handle regular topic messages
-              const callbacks = this.messageListeners.get(message.bindingKey);
+              const dataMessage = message as IncomingDataMessage;
+              const callbacks = this.messageListeners.get(dataMessage.bindingKey);
               if (callbacks) {
-                callbacks.forEach(cb => cb(message.payload));
+                callbacks.forEach(cb => cb(dataMessage.payload));
               }
-            } else if (message.type === 'ack' && message.messageId) {
+            } else if (message.type === 'ack') {
               // Handle message acknowledgments
-              this.handleMessageAck(message.messageId, message.status === 'success' ? null : new Error(message.error || 'Message failed'));
-            } else if (message.type === 'nack' && message.messageId) {
+              const ackMessage = message as AckMessage;
+              // TODO: Why would the server send an ack type and a non success status?
+              this.handleMessageAck(
+                ackMessage.messageId,
+                ackMessage.status === 'success' ? null : new Error(ackMessage.error || 'Message failed')
+              );
+            } else if (message.type === 'nack') {
               // Handle message rejections
-              this.handleMessageAck(message.messageId, new Error(message.error || 'Message rejected by server'));
+              const nackMessage = message as NackMessage;
+              this.handleMessageAck(
+                nackMessage.messageId,
+                new Error(nackMessage.error || 'Message rejected by server')
+              );
             }
           } catch (e) {
             console.error('Error parsing message from server:', e);
@@ -112,6 +233,7 @@ export class WebMQClient extends EventEmitter {
         });
 
         this.ws.addEventListener('error', (err) => {
+          // TODO: Shouldn't we set isConnect to false and emit an error event?
           console.error('WebMQ client error:', err);
           if (!this.isConnected) {
             reject(new Error('WebSocket connection failed.'));
@@ -164,6 +286,7 @@ export class WebMQClient extends EventEmitter {
    * @param payload The data to send.
    * @returns Promise that resolves when server confirms delivery or rejects on failure/timeout
    */
+  // TODO: Does this need to be async if we return a new Promise?
   public async send(routingKey: string, payload: any): Promise<void> {
     const messageId = this.generateMessageId();
 
@@ -192,7 +315,8 @@ export class WebMQClient extends EventEmitter {
       existing.push(callback);
     } else {
       this.messageListeners.set(bindingKey, [callback]);
-      this.ws?.send(JSON.stringify({ action: 'listen', bindingKey }));
+      const listenMessage: ListenMessage = { action: 'listen', bindingKey };
+      this.ws?.send(JSON.stringify(listenMessage));
     }
   }
 
@@ -212,7 +336,8 @@ export class WebMQClient extends EventEmitter {
     } else {
       this.messageListeners.delete(bindingKey);
       await this._ensureConnected();
-      this.ws?.send(JSON.stringify({ action: 'unlisten', bindingKey }));
+      const unlistenMessage: UnlistenMessage = { action: 'unlisten', bindingKey };
+      this.ws?.send(JSON.stringify(unlistenMessage));
     }
   }
 
@@ -220,12 +345,14 @@ export class WebMQClient extends EventEmitter {
    * Disconnects from the WebSocket server.
    * @param options Configuration for handling active listeners
    */
-  public disconnect(options: { onActiveListeners?: 'ignore' | 'throw' | 'clear' } = {}): void {
+  public disconnect(options: DisconnectOptions = {}): void {
     const { onActiveListeners = 'ignore' } = options;
 
     // Validate option first
     if (!['ignore', 'throw', 'clear'].includes(onActiveListeners)) {
-      throw new Error(`Invalid onActiveListeners option: ${onActiveListeners}. Must be 'ignore', 'throw', or 'clear'.`);
+      throw new Error(
+        `Invalid onActiveListeners option: ${onActiveListeners}. Must be 'ignore', 'throw', or 'clear'.`
+      );
     }
 
     if (this.messageListeners.size > 0) {
@@ -299,6 +426,7 @@ export class WebMQClient extends EventEmitter {
   /**
    * Returns the current number of queued messages.
    */
+  // TODO: Is this needed?
   public getQueueSize(): number {
     return this.messageQueue.length;
   }
@@ -306,6 +434,7 @@ export class WebMQClient extends EventEmitter {
   /**
    * Clears all queued messages.
    */
+  // TODO: Is this needed?
   public clearQueue(): void {
     const droppedMessages = [...this.messageQueue];
     this.messageQueue = [];
@@ -323,6 +452,7 @@ export class WebMQClient extends EventEmitter {
   /**
    * Generates a unique message ID for tracking acknowledgments.
    */
+  // TODO: Why not crypto.randomUUID()?
   private generateMessageId(): string {
     return `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
   }
@@ -341,13 +471,13 @@ export class WebMQClient extends EventEmitter {
     this.pendingMessages.set(messageId, { resolve, reject, timeout: timeoutId });
 
     // Send the message
-    this.ws?.send(JSON.stringify({
+    const emitMessage: EmitMessage = {
       action: 'emit',
       routingKey,
       payload,
-      messageId,
-      requireAck: true
-    }));
+      messageId
+    };
+    this.ws?.send(JSON.stringify(emitMessage));
   }
 
   /**
@@ -381,9 +511,11 @@ export const send = defaultClient.send.bind(defaultClient);
 export const listen = defaultClient.listen.bind(defaultClient);
 export const unlisten = defaultClient.unlisten.bind(defaultClient);
 export const disconnect = defaultClient.disconnect.bind(defaultClient);
+// TODO: Even if these are needed, why expose them publicly?
 export const getQueueSize = defaultClient.getQueueSize.bind(defaultClient);
 export const clearQueue = defaultClient.clearQueue.bind(defaultClient);
 
+// TODO: Lets not do that
 // Keep emit as an alias for backwards compatibility
 export const emit = defaultClient.send.bind(defaultClient);
 

@@ -19,7 +19,6 @@ export interface ClientMessage {
   bindingKey?: string;
   payload?: any;
   messageId?: string;
-  requireAck?: boolean;
 }
 
 /** A RabbitMQ subscription with queue and consumer information. */
@@ -234,10 +233,10 @@ export class WebMQBackend extends EventEmitter {
           console.error(`[${id}] Error processing message:`, error.message);
           this.emit('error', { connectionId: id, error, context: 'message processing' });
 
-          // Send nack if this was a message requiring acknowledgment
+          // Send nack for failed message
           try {
             const message: ClientMessage = JSON.parse(data.toString());
-            if (message.requireAck && message.messageId) {
+            if (message.messageId) {
               ws.send(JSON.stringify({
                 type: 'nack',
                 messageId: message.messageId,
@@ -339,8 +338,8 @@ export class WebMQBackend extends EventEmitter {
             await this.subscriptionManager.publish(message.routingKey, message.payload);
             console.log(`[${connectionId}] Message published successfully`);
 
-            // Send acknowledgment if requested
-            if (message.requireAck && message.messageId) {
+            // Send acknowledgment
+            if (message.messageId) {
               connection.ws.send(JSON.stringify({
                 type: 'ack',
                 messageId: message.messageId,
@@ -351,8 +350,8 @@ export class WebMQBackend extends EventEmitter {
           } catch (error: any) {
             console.error(`[${connectionId}] Error publishing message:`, error.message);
 
-            // Send negative acknowledgment if requested
-            if (message.requireAck && message.messageId) {
+            // Send negative acknowledgment
+            if (message.messageId) {
               connection.ws.send(JSON.stringify({
                 type: 'nack',
                 messageId: message.messageId,

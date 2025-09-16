@@ -8,7 +8,7 @@ let mockEventListeners: { [key: string]: Function[] } = {};
 // Helper function to trigger event listeners
 const triggerEvent = (event: string, data?: any) => {
   if (mockEventListeners[event]) {
-    mockEventListeners[event].forEach(callback => {
+    mockEventListeners[event].forEach((callback) => {
       if (event === 'message') {
         callback({ data });
       } else {
@@ -141,8 +141,7 @@ describe('WebMQClient (Singleton)', () => {
       expect(sentMessage).toMatchObject({
         action: 'emit',
         routingKey: 'test.route',
-        payload: { data: 123 },
-        requireAck: true
+        payload: { data: 123 }
       });
       expect(sentMessage.messageId).toBeDefined();
     });
@@ -158,7 +157,7 @@ describe('WebMQClient (Singleton)', () => {
       });
 
       it('should ignore disconnect by default when listeners exist', async () => {
-        const callback = () => {};
+        const callback = () => { };
         const promise = client.listen('test.key', callback);
         triggerEvent('open');
         await promise;
@@ -169,7 +168,7 @@ describe('WebMQClient (Singleton)', () => {
       });
 
       it('should ignore disconnect explicitly when listeners exist', async () => {
-        const callback = () => {};
+        const callback = () => { };
         const promise = client.listen('test.key', callback);
         triggerEvent('open');
         await promise;
@@ -180,7 +179,7 @@ describe('WebMQClient (Singleton)', () => {
       });
 
       it('should throw error when listeners exist and onActiveListeners is "throw"', async () => {
-        const callback = () => {};
+        const callback = () => { };
         const promise = client.listen('test.key', callback);
         triggerEvent('open');
         await promise;
@@ -191,7 +190,7 @@ describe('WebMQClient (Singleton)', () => {
       });
 
       it('should clear listeners and disconnect when onActiveListeners is "clear"', async () => {
-        const callback = () => {};
+        const callback = () => { };
         const promise = client.listen('test.key', callback);
         triggerEvent('open');
         await promise;
@@ -574,14 +573,12 @@ describe('WebMQClient (Singleton)', () => {
         expect(message1).toMatchObject({
           action: 'emit',
           routingKey: 'test.route1',
-          payload: { data: 1 },
-          requireAck: true
+          payload: { data: 1 }
         });
         expect(message2).toMatchObject({
           action: 'emit',
           routingKey: 'test.route2',
-          payload: { data: 2 },
-          requireAck: true
+          payload: { data: 2 }
         });
       });
 
@@ -611,8 +608,7 @@ describe('WebMQClient (Singleton)', () => {
         expect(sentMessage).toMatchObject({
           action: 'emit',
           routingKey: 'test.route',
-          payload: { data: 123 },
-          requireAck: true
+          payload: { data: 123 }
         });
       });
 
@@ -652,14 +648,12 @@ describe('WebMQClient (Singleton)', () => {
         expect(message2).toMatchObject({
           action: 'emit',
           routingKey: 'test.route2',
-          payload: { data: 2 },
-          requireAck: true
+          payload: { data: 2 }
         });
         expect(message3).toMatchObject({
           action: 'emit',
           routingKey: 'test.route3',
-          payload: { data: 3 },
-          requireAck: true
+          payload: { data: 3 }
         });
       });
 
@@ -759,7 +753,7 @@ describe('WebMQClient (Singleton)', () => {
         await expect(sendPromise).rejects.toThrow('Message timeout after 1000ms');
       });
 
-      it('should send messages with unique messageId and requireAck', async () => {
+      it('should send messages with unique messageId', async () => {
         // Connect first
         const promise = client.connect();
         triggerEvent('open');
@@ -780,8 +774,7 @@ describe('WebMQClient (Singleton)', () => {
         expect(message1).toMatchObject({
           action: 'emit',
           routingKey: 'test.route1',
-          payload: { data: 1 },
-          requireAck: true
+          payload: { data: 1 }
         });
         expect(message1.messageId).toBeDefined();
         expect(message1.messageId).toMatch(/^msg_\d+_[a-z0-9]+$/);
@@ -789,8 +782,7 @@ describe('WebMQClient (Singleton)', () => {
         expect(message2).toMatchObject({
           action: 'emit',
           routingKey: 'test.route2',
-          payload: { data: 2 },
-          requireAck: true
+          payload: { data: 2 }
         });
         expect(message2.messageId).toBeDefined();
         expect(message2.messageId).not.toBe(message1.messageId);
