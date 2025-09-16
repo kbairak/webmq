@@ -2,10 +2,10 @@
 node_modules/
 /.pnp
 .pnp.js
-coverage
 
-# Build artifacts
-/dist
+# Coverage and build artifacts (recursive)
+**/coverage/
+**/dist/
 /build
 /.esbuild/
 

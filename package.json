@@ -9,7 +9,10 @@
     "build:backend": "npm run build -w webmq-backend",
     "build:frontend": "npm run build -w webmq-frontend",
     "build": "npm run build --workspaces --if-present",
-    "start:chat": "npm start -w basic-chat"
+    "start:chat": "npm start -w basic-chat",
+    "test:backend": "npm run test -w webmq-backend",
+    "test:frontend": "npm run test -w webmq-frontend",
+    "test": "npm run test --workspaces --if-present"
   },
   "keywords": [
     "rabbitmq",
@@ -21,6 +24,7 @@
   "license": "ISC",
   "workspaces": [
     "packages/*",
-    "examples/*"
+    "examples/*",
+    "e2e-tests"
   ]
 }

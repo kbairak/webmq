@@ -18,6 +18,8 @@ export interface ClientMessage {
   routingKey?: string;
   bindingKey?: string;
   payload?: any;
+  messageId?: string;
+  requireAck?: boolean;
 }
 
 /** A RabbitMQ subscription with queue and consumer information. */
@@ -193,6 +195,8 @@ export class WebMQBackend extends EventEmitter {
     };
   }
 
+  private wss: WebSocketServer | null = null;
+
   public async start(port: number): Promise<void> {
     console.log('Starting WebMQ Backend...');
 
@@ -208,8 +212,8 @@ export class WebMQBackend extends EventEmitter {
 
     console.log('RabbitMQ connection and shared channel established');
 
-    const wss = new WebSocketServer({ port });
-    wss.on('connection', (ws: WebSocket) => {
+    this.wss = new WebSocketServer({ port });
+    this.wss.on('connection', (ws: WebSocket) => {
       if (!this.channel) {
         throw new Error('Shared channel not established.');
       }
@@ -229,7 +233,24 @@ export class WebMQBackend extends EventEmitter {
         } catch (error: any) {
           console.error(`[${id}] Error processing message:`, error.message);
           this.emit('error', { connectionId: id, error, context: 'message processing' });
-          ws.send(JSON.stringify({ type: 'error', message: error.message }));
+
+          // Send nack if this was a message requiring acknowledgment
+          try {
+            const message: ClientMessage = JSON.parse(data.toString());
+            if (message.requireAck && message.messageId) {
+              ws.send(JSON.stringify({
+                type: 'nack',
+                messageId: message.messageId,
+                error: error.message
+              }));
+              console.log(`[${id}] Sent nack for message ${message.messageId}`);
+            } else {
+              ws.send(JSON.stringify({ type: 'error', message: error.message }));
+            }
+          } catch (parseError) {
+            // If we can't parse the message, send a generic error
+            ws.send(JSON.stringify({ type: 'error', message: error.message }));
+          }
         }
       });
 
@@ -239,6 +260,35 @@ export class WebMQBackend extends EventEmitter {
     });
 
     console.log(`WebMQ Backend started on ws://localhost:${port}`);
+
+    // Add error handler to prevent unhandled error crashes
+    this.on('error', (errorEvent) => {
+      console.error('WebMQ Backend error event:', errorEvent);
+      // Don't re-throw, just log it
+    });
+  }
+
+  public async stop(): Promise<void> {
+    console.log('Stopping WebMQ Backend...');
+
+    // Close WebSocket server
+    if (this.wss) {
+      this.wss.close();
+      this.wss = null;
+    }
+
+    // Close RabbitMQ channel and connection
+    if (this.channel) {
+      await this.channel.close();
+      this.channel = null;
+    }
+
+    if (this.connection) {
+      await this.connection.close();
+      this.connection = null;
+    }
+
+    console.log('WebMQ Backend stopped');
   }
 
   private async processMessage(connectionId: string, message: ClientMessage): Promise<void> {
@@ -285,8 +335,33 @@ export class WebMQBackend extends EventEmitter {
           if (!message.routingKey || !message.payload) {
             throw new Error('emit requires routingKey and payload');
           }
-          await this.subscriptionManager.publish(message.routingKey, message.payload);
-          console.log(`[${connectionId}] Message published successfully`);
+          try {
+            await this.subscriptionManager.publish(message.routingKey, message.payload);
+            console.log(`[${connectionId}] Message published successfully`);
+
+            // Send acknowledgment if requested
+            if (message.requireAck && message.messageId) {
+              connection.ws.send(JSON.stringify({
+                type: 'ack',
+                messageId: message.messageId,
+                status: 'success'
+              }));
+              console.log(`[${connectionId}] Sent ack for message ${message.messageId}`);
+            }
+          } catch (error: any) {
+            console.error(`[${connectionId}] Error publishing message:`, error.message);
+
+            // Send negative acknowledgment if requested
+            if (message.requireAck && message.messageId) {
+              connection.ws.send(JSON.stringify({
+                type: 'nack',
+                messageId: message.messageId,
+                error: error.message
+              }));
+              console.log(`[${connectionId}] Sent nack for message ${message.messageId}`);
+            }
+            throw error; // Re-throw to maintain existing error handling
+          }
           break;
 
         case 'listen':

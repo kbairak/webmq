@@ -1,0 +1,26 @@
+{
+  "name": "webmq-e2e-tests",
+  "version": "1.0.0",
+  "description": "End-to-end tests for WebMQ using Testcontainers",
+  "type": "module",
+  "scripts": {
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:verbose": "jest --verbose"
+  },
+  "dependencies": {
+    "webmq-backend": "file:../packages/backend",
+    "webmq-frontend": "file:../packages/frontend",
+    "ws": "^8.13.0",
+    "amqplib": "^0.10.3"
+  },
+  "devDependencies": {
+    "@types/amqplib": "^0.10.1",
+    "@jest/globals": "^29.6.2",
+    "@types/jest": "^29.5.3",
+    "jest": "^29.6.2",
+    "testcontainers": "^10.2.1",
+    "ts-jest": "^29.1.1",
+    "typescript": "^5.1.6"
+  }
+}
