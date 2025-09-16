@@ -1,42 +1,54 @@
 import { describe, test, expect, beforeAll, afterAll } from '@jest/globals';
-import { GenericContainer, StartedTestContainer, Wait } from 'testcontainers';
+import { GlobalTestSetup, getTestExchangeName } from './test-setup-global';
 
 describe('WebMQ Error Handling and Edge Cases', () => {
-  let rabbitmqContainer: StartedTestContainer;
   let rabbitmqUrl: string;
   let backend: any;
   let client: any;
   let backendPort: number;
+  let exchangeName: string;
 
   beforeAll(async () => {
-    // Start RabbitMQ container
-    rabbitmqContainer = await new GenericContainer('rabbitmq:3.11-management')
-      .withExposedPorts(5672, 15672)
-      .withEnvironment({
-        RABBITMQ_DEFAULT_USER: 'guest',
-        RABBITMQ_DEFAULT_PASS: 'guest'
-      })
-      .withWaitStrategy(Wait.forListeningPorts())
-      .start();
+    // Use shared RabbitMQ container
+    const globalSetup = GlobalTestSetup.getInstance();
+    rabbitmqUrl = await globalSetup.getRabbitMQUrl();
+    console.log('🚀 Using in-memory AMQP mock for error handling test');
 
-    const rabbitmqPort = rabbitmqContainer.getMappedPort(5672);
-    rabbitmqUrl = `amqp://guest:guest@localhost:${rabbitmqPort}`;
+    // Generate unique exchange name for test isolation
+    exchangeName = getTestExchangeName('error_handling');
     backendPort = await getAvailablePort();
 
     // Create backend
     const WebMQBackend = (await import('webmq-backend')).WebMQBackend;
     backend = new WebMQBackend({
       rabbitmqUrl,
-      exchangeName: 'webmq_error_test'
+      exchangeName
     });
 
     await backend.start(backendPort);
   });
 
   afterAll(async () => {
-    if (client) client.disconnect({ onActiveListeners: 'clear' });
-    if (backend) await backend.stop();
-    if (rabbitmqContainer) await rabbitmqContainer.stop();
+    try {
+      if (client) {
+        client.disconnect({ onActiveListeners: 'clear' });
+      }
+    } catch (error) {
+      console.warn('Error disconnecting client:', error);
+    }
+
+    try {
+      if (backend) {
+        await backend.stop();
+      }
+    } catch (error) {
+      console.warn('Error stopping backend:', error);
+    }
+
+    // Force garbage collection if available (no need to stop shared container)
+    if (global.gc) {
+      global.gc();
+    }
   });
 
   test('should handle connection to non-existent backend gracefully', async () => {

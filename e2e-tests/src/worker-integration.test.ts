@@ -1,41 +1,33 @@
 import { describe, test, expect, beforeAll, afterAll } from '@jest/globals';
-import { GenericContainer, StartedTestContainer, Wait } from 'testcontainers';
 import amqplib from 'amqplib';
+import { GlobalTestSetup, getTestExchangeName } from './test-setup-global';
 
 describe('WebMQ Worker Integration Test', () => {
-  let rabbitmqContainer: StartedTestContainer;
   let rabbitmqUrl: string;
   let backend: any;
   let client: any;
   let backendPort: number;
   let workerConnection: any;
   let workerChannel: any;
+  let exchangeName: string;
 
   // Message storage for worker
   const receivedMessages: any[] = [];
 
   beforeAll(async () => {
-    // Start RabbitMQ container
-    console.log('Starting RabbitMQ container...');
-    rabbitmqContainer = await new GenericContainer('rabbitmq:3.11-management')
-      .withExposedPorts(5672, 15672)
-      .withEnvironment({
-        RABBITMQ_DEFAULT_USER: 'guest',
-        RABBITMQ_DEFAULT_PASS: 'guest'
-      })
-      .withWaitStrategy(Wait.forListeningPorts())
-      .start();
+    // Use shared RabbitMQ container
+    const globalSetup = GlobalTestSetup.getInstance();
+    rabbitmqUrl = await globalSetup.getRabbitMQUrl();
+    console.log('🚀 Using in-memory AMQP mock for worker integration test');
 
-    const rabbitmqPort = rabbitmqContainer.getMappedPort(5672);
-    rabbitmqUrl = `amqp://guest:guest@localhost:${rabbitmqPort}`;
-    console.log(`RabbitMQ started on port ${rabbitmqPort}`);
+    // Generate unique exchange name for test isolation
+    exchangeName = getTestExchangeName('worker_integration');
 
     // Set up RabbitMQ worker (direct AMQP consumer)
     console.log('Setting up RabbitMQ worker...');
     workerConnection = await amqplib.connect(rabbitmqUrl);
     workerChannel = await workerConnection.createChannel();
 
-    const exchangeName = 'webmq_worker_test_exchange';
     await workerChannel.assertExchange(exchangeName, 'topic', { durable: false });
 
     // Create worker queue for specific routing key
@@ -85,25 +77,42 @@ describe('WebMQ Worker Integration Test', () => {
   });
 
   afterAll(async () => {
-    // Cleanup
-    if (client) {
-      client.disconnect({ onActiveListeners: 'clear' });
+    // Cleanup with proper error handling (no need to stop shared container)
+    try {
+      if (client) {
+        client.disconnect({ onActiveListeners: 'clear' });
+      }
+    } catch (error) {
+      console.warn('Error disconnecting client:', error);
     }
 
-    if (backend) {
-      await backend.stop();
+    try {
+      if (backend) {
+        await backend.stop();
+      }
+    } catch (error) {
+      console.warn('Error stopping backend:', error);
     }
 
-    if (workerChannel) {
-      await workerChannel.close();
+    try {
+      if (workerChannel) {
+        await workerChannel.close();
+      }
+    } catch (error) {
+      console.warn('Error closing worker channel:', error);
     }
 
-    if (workerConnection) {
-      await workerConnection.close();
+    try {
+      if (workerConnection) {
+        await workerConnection.close();
+      }
+    } catch (error) {
+      console.warn('Error closing worker connection:', error);
     }
 
-    if (rabbitmqContainer) {
-      await rabbitmqContainer.stop();
+    // Force garbage collection if available
+    if (global.gc) {
+      global.gc();
     }
   });
 

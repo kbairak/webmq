@@ -1,33 +1,45 @@
 import { describe, test, expect, beforeAll, afterAll } from '@jest/globals';
-import { GenericContainer, StartedTestContainer, Wait } from 'testcontainers';
+import { GlobalTestSetup, getTestExchangeName } from './test-setup-global';
 
 describe('WebMQ Hooks and Authentication', () => {
-  let rabbitmqContainer: StartedTestContainer;
   let rabbitmqUrl: string;
   let backend: any;
   let client: any;
   let backendPort: number;
+  let exchangeName: string;
 
   beforeAll(async () => {
-    // Start RabbitMQ container
-    rabbitmqContainer = await new GenericContainer('rabbitmq:3.11-management')
-      .withExposedPorts(5672, 15672)
-      .withEnvironment({
-        RABBITMQ_DEFAULT_USER: 'guest',
-        RABBITMQ_DEFAULT_PASS: 'guest'
-      })
-      .withWaitStrategy(Wait.forListeningPorts())
-      .start();
+    // Use shared RabbitMQ container
+    const globalSetup = GlobalTestSetup.getInstance();
+    rabbitmqUrl = await globalSetup.getRabbitMQUrl();
+    console.log('🚀 Using in-memory AMQP mock for hooks and auth test');
 
-    const rabbitmqPort = rabbitmqContainer.getMappedPort(5672);
-    rabbitmqUrl = `amqp://guest:guest@localhost:${rabbitmqPort}`;
+    // Generate unique exchange name for test isolation
+    exchangeName = getTestExchangeName('hooks_auth');
     backendPort = await getAvailablePort();
   });
 
   afterAll(async () => {
-    if (client) client.disconnect({ onActiveListeners: 'clear' });
-    if (backend) await backend.stop();
-    if (rabbitmqContainer) await rabbitmqContainer.stop();
+    try {
+      if (client) {
+        client.disconnect({ onActiveListeners: 'clear' });
+      }
+    } catch (error) {
+      console.warn('Error disconnecting client:', error);
+    }
+
+    try {
+      if (backend) {
+        await backend.stop();
+      }
+    } catch (error) {
+      console.warn('Error stopping backend:', error);
+    }
+
+    // Force garbage collection if available (no need to stop shared container)
+    if (global.gc) {
+      global.gc();
+    }
   });
 
   test('should execute hooks in sequence', async () => {
@@ -37,7 +49,7 @@ describe('WebMQ Hooks and Authentication', () => {
     const WebMQBackend = (await import('webmq-backend')).WebMQBackend;
     backend = new WebMQBackend({
       rabbitmqUrl,
-      exchangeName: 'webmq_hooks_test',
+      exchangeName,
       hooks: {
         onEmit: [
           async (context: any, routingKey: string, payload: any) => {
@@ -79,7 +91,7 @@ describe('WebMQ Hooks and Authentication', () => {
     const WebMQBackend = (await import('webmq-backend')).WebMQBackend;
     backend = new WebMQBackend({
       rabbitmqUrl,
-      exchangeName: 'webmq_validation_test',
+      exchangeName,
       hooks: {
         onEmit: [async (context: any, routingKey: string, payload: any) => {
           if (!payload.message || typeof payload.message !== 'string') {
@@ -128,7 +140,7 @@ describe('WebMQ Hooks and Authentication', () => {
     const WebMQBackend = (await import('webmq-backend')).WebMQBackend;
     backend = new WebMQBackend({
       rabbitmqUrl,
-      exchangeName: 'webmq_context_test',
+      exchangeName,
       hooks: {
         onEmit: [async (context: any, routingKey: string, payload: any) => {
           // Just verify the hook was called
