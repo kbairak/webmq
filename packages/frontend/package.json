@@ -2,10 +2,11 @@
   "name": "webmq-frontend",
   "version": "1.0.0",
   "description": "Frontend library for WebMQ",
-  "main": "dist/index.js",
+  "main": "dist/index.cjs",
+  "module": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
-    "build": "esbuild src/index.ts --bundle --platform=browser --outfile=dist/index.js --format=esm",
+    "build": "tsc --emitDeclarationOnly && esbuild src/index.ts --bundle --platform=browser --outfile=dist/index.js --format=esm && esbuild src/index.ts --bundle --platform=node --outfile=dist/index.cjs --format=cjs",
     "dev": "esbuild src/index.ts --bundle --platform=browser --outfile=dist/index.js --format=esm --watch",
     "test": "jest"
   },

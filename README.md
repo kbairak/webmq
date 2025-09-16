@@ -114,9 +114,9 @@ disconnect();
 The backend is a class that you can integrate into your Node.js application.
 
 ```javascript
-import { WebMQBackend } from 'webmq-backend';
+import { WebMQServer } from 'webmq-backend';
 
-const backend = new WebMQBackend({
+const server = new WebMQServer({
   rabbitmqUrl: 'amqp://guest:guest@localhost:5672',
   exchangeName: 'my_app_exchange',
   // Optional: Add action-specific hooks for auth, validation, etc.
@@ -126,7 +126,7 @@ const backend = new WebMQBackend({
   }
 });
 
-backend.start(8080).catch(console.error);
+server.start(8080).catch(console.error);
 ```
 
 #### Disconnect Options
@@ -398,7 +398,7 @@ const authHook = async (context, message, next) => {
   await next();
 };
 
-const backend = new WebMQBackend({
+const server = new WebMQServer({
   // ...
   hooks: {
     pre: [authHook],
@@ -545,6 +545,8 @@ channel.start_consuming()
 
 ## Potential Future Features
 
+(TODO: update this section if we already implemented something)
+
 This section tracks potential enhancements that could be added to WebMQ in the future.
 
 ### Frontend Features
@@ -594,6 +596,7 @@ This section tracks potential enhancements that could be added to WebMQ in the f
   - Message acknowledgments (server confirms delivery)
   - Presence system (who's online/offline)
   - Room/namespace support (isolated message spaces)
+  - Look into (de)serialization options for speed and memory (msgpack perhaps?)
 
 ### Priority Recommendations
 

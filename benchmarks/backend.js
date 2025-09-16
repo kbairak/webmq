@@ -1,4 +1,4 @@
-import { WebMQBackend } from "webmq-backend";
+import { WebMQServer } from "webmq-backend";
 
 const port = 8080;
 const rabbitmqUrl =
@@ -6,7 +6,7 @@ const rabbitmqUrl =
 const exchangeName = "webmq_benchmark_exchange";
 
 // Simple backend without validation hooks for benchmarks
-const backend = new WebMQBackend({
+const server = new WebMQServer({
   rabbitmqUrl,
   exchangeName,
   hooks: {
@@ -15,4 +15,4 @@ const backend = new WebMQBackend({
 });
 
 console.log('Starting WebMQ benchmark backend...');
-backend.start(port).catch(console.error);
+server.start(port).catch(console.error);

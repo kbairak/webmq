@@ -1,4 +1,4 @@
-import { WebMQBackend } from "webmq-backend";
+import { WebMQServer } from "webmq-backend";
 
 const port = 8080;
 const rabbitmqUrl =
@@ -27,7 +27,7 @@ const listenValidationHook = async (context, message, next) => {
   await next();
 };
 
-const backend = new WebMQBackend({
+const server = new WebMQServer({
   rabbitmqUrl,
   exchangeName,
   hooks: {
@@ -36,4 +36,4 @@ const backend = new WebMQBackend({
   },
 });
 
-backend.start(port).catch(console.error);
+server.start(port).catch(console.error);

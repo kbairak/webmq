@@ -1,4 +1,7 @@
-import { WebMQClient } from './index';
+import { WebMQClient, client } from './index';
+
+// Disable all logging during tests
+client.setLogLevel('silent');
 
 // Mock WebSocket
 const mockSend = jest.fn();
@@ -125,7 +128,7 @@ describe('WebMQClient (Singleton)', () => {
     });
 
     it('should send a message', async () => {
-      const promise = client.send('test.route', { data: 123 });
+      const promise = client.publish('test.route', { data: 123 });
       triggerEvent('open');
 
       // Acknowledge the message
@@ -139,7 +142,7 @@ describe('WebMQClient (Singleton)', () => {
       await promise;
 
       expect(sentMessage).toMatchObject({
-        action: 'emit',
+        action: 'publish',
         routingKey: 'test.route',
         payload: { data: 123 }
       });
@@ -424,6 +427,14 @@ describe('WebMQClient (Singleton)', () => {
     });
 
     describe('connection state events', () => {
+      beforeEach(() => {
+        jest.useFakeTimers();
+      });
+
+      afterEach(() => {
+        jest.useRealTimers();
+      });
+
       it('should emit connect event on initial connection', async () => {
         const connectSpy = jest.fn();
         client.on('connect', connectSpy);
@@ -537,13 +548,13 @@ describe('WebMQClient (Singleton)', () => {
         jest.useRealTimers();
       });
 
-      it('should queue messages when disconnected and send them on reconnection', async () => {
+      it('should queue messages when disconnected and publish them on reconnection', async () => {
         // Start disconnected
         expect(client.getQueueSize()).toBe(0);
 
         // Send messages while disconnected - they should be queued
-        const sendPromise1 = client.send('test.route1', { data: 1 });
-        const sendPromise2 = client.send('test.route2', { data: 2 });
+        const sendPromise1 = client.publish('test.route1', { data: 1 });
+        const sendPromise2 = client.publish('test.route2', { data: 2 });
 
         expect(client.getQueueSize()).toBe(2);
 
@@ -571,18 +582,18 @@ describe('WebMQClient (Singleton)', () => {
         expect(client.getQueueSize()).toBe(0);
         expect(mockSend).toHaveBeenCalledTimes(2);
         expect(message1).toMatchObject({
-          action: 'emit',
+          action: 'publish',
           routingKey: 'test.route1',
           payload: { data: 1 }
         });
         expect(message2).toMatchObject({
-          action: 'emit',
+          action: 'publish',
           routingKey: 'test.route2',
           payload: { data: 2 }
         });
       });
 
-      it('should send messages immediately when connected', async () => {
+      it('should publish messages immediately when connected', async () => {
         // Connect first
         const promise = client.connect();
         triggerEvent('open');
@@ -591,7 +602,7 @@ describe('WebMQClient (Singleton)', () => {
         mockSend.mockClear();
 
         // Send message while connected - should go directly
-        const sendPromise = client.send('test.route', { data: 123 });
+        const sendPromise = client.publish('test.route', { data: 123 });
 
         // Acknowledge the message
         const sentMessage = JSON.parse(mockSend.mock.calls[0][0]);
@@ -606,7 +617,7 @@ describe('WebMQClient (Singleton)', () => {
         expect(client.getQueueSize()).toBe(0);
         expect(mockSend).toHaveBeenCalledTimes(1);
         expect(sentMessage).toMatchObject({
-          action: 'emit',
+          action: 'publish',
           routingKey: 'test.route',
           payload: { data: 123 }
         });
@@ -616,9 +627,9 @@ describe('WebMQClient (Singleton)', () => {
         client.setup('ws://localhost:8080', { maxQueueSize: 2 });
 
         // Send 3 messages while disconnected
-        const sendPromise1 = client.send('test.route1', { data: 1 });
-        const sendPromise2 = client.send('test.route2', { data: 2 });
-        const sendPromise3 = client.send('test.route3', { data: 3 }); // Should drop first message
+        const sendPromise1 = client.publish('test.route1', { data: 1 });
+        const sendPromise2 = client.publish('test.route2', { data: 2 });
+        const sendPromise3 = client.publish('test.route3', { data: 3 }); // Should drop first message
 
         expect(client.getQueueSize()).toBe(2);
 
@@ -646,12 +657,12 @@ describe('WebMQClient (Singleton)', () => {
 
         expect(mockSend).toHaveBeenCalledTimes(2);
         expect(message2).toMatchObject({
-          action: 'emit',
+          action: 'publish',
           routingKey: 'test.route2',
           payload: { data: 2 }
         });
         expect(message3).toMatchObject({
-          action: 'emit',
+          action: 'publish',
           routingKey: 'test.route3',
           payload: { data: 3 }
         });
@@ -659,8 +670,8 @@ describe('WebMQClient (Singleton)', () => {
 
       it('should clear queue manually', async () => {
         // Queue some messages
-        const sendPromise1 = client.send('test.route1', { data: 1 });
-        const sendPromise2 = client.send('test.route2', { data: 2 });
+        const sendPromise1 = client.publish('test.route1', { data: 1 });
+        const sendPromise2 = client.publish('test.route2', { data: 2 });
 
         expect(client.getQueueSize()).toBe(2);
 
@@ -700,7 +711,7 @@ describe('WebMQClient (Singleton)', () => {
         await promise;
 
         // Send message and wait for response
-        const sendPromise = client.send('test.route', { data: 123 });
+        const sendPromise = client.publish('test.route', { data: 123 });
 
         // Simulate server acknowledgment
         const sentMessage = JSON.parse(mockSend.mock.calls[0][0]);
@@ -721,7 +732,7 @@ describe('WebMQClient (Singleton)', () => {
         await promise;
 
         // Send message
-        const sendPromise = client.send('test.route', { data: 123 });
+        const sendPromise = client.publish('test.route', { data: 123 });
 
         // Simulate server rejection
         const sentMessage = JSON.parse(mockSend.mock.calls[0][0]);
@@ -744,7 +755,7 @@ describe('WebMQClient (Singleton)', () => {
         await promise;
 
         // Send message but don't respond
-        const sendPromise = client.send('test.route', { data: 123 });
+        const sendPromise = client.publish('test.route', { data: 123 });
 
         // Advance time past timeout
         jest.advanceTimersByTime(1001);
@@ -753,7 +764,7 @@ describe('WebMQClient (Singleton)', () => {
         await expect(sendPromise).rejects.toThrow('Message timeout after 1000ms');
       });
 
-      it('should send messages with unique messageId', async () => {
+      it('should publish messages with unique messageId', async () => {
         // Connect first
         const promise = client.connect();
         triggerEvent('open');
@@ -762,8 +773,8 @@ describe('WebMQClient (Singleton)', () => {
         mockSend.mockClear();
 
         // Send two messages
-        const sendPromise1 = client.send('test.route1', { data: 1 });
-        const sendPromise2 = client.send('test.route2', { data: 2 });
+        const sendPromise1 = client.publish('test.route1', { data: 1 });
+        const sendPromise2 = client.publish('test.route2', { data: 2 });
 
         expect(mockSend).toHaveBeenCalledTimes(2);
 
@@ -772,7 +783,7 @@ describe('WebMQClient (Singleton)', () => {
         const message2 = JSON.parse(mockSend.mock.calls[1][0]);
 
         expect(message1).toMatchObject({
-          action: 'emit',
+          action: 'publish',
           routingKey: 'test.route1',
           payload: { data: 1 }
         });
@@ -780,7 +791,7 @@ describe('WebMQClient (Singleton)', () => {
         expect(message1.messageId).toMatch(/^msg_\d+_[a-z0-9]+$/);
 
         expect(message2).toMatchObject({
-          action: 'emit',
+          action: 'publish',
           routingKey: 'test.route2',
           payload: { data: 2 }
         });
@@ -804,8 +815,8 @@ describe('WebMQClient (Singleton)', () => {
 
       it('should handle queued messages with acknowledgments', async () => {
         // Send messages while disconnected
-        const sendPromise1 = client.send('test.route1', { data: 1 });
-        const sendPromise2 = client.send('test.route2', { data: 2 });
+        const sendPromise1 = client.publish('test.route1', { data: 1 });
+        const sendPromise2 = client.publish('test.route2', { data: 2 });
 
         expect(client.getQueueSize()).toBe(2);
 
@@ -833,8 +844,8 @@ describe('WebMQClient (Singleton)', () => {
 
       it('should reject queued messages when queue is cleared', async () => {
         // Queue messages
-        const sendPromise1 = client.send('test.route1', { data: 1 });
-        const sendPromise2 = client.send('test.route2', { data: 2 });
+        const sendPromise1 = client.publish('test.route1', { data: 1 });
+        const sendPromise2 = client.publish('test.route2', { data: 2 });
 
         expect(client.getQueueSize()).toBe(2);
 
@@ -850,11 +861,11 @@ describe('WebMQClient (Singleton)', () => {
         client.setup('ws://localhost:8080', { maxQueueSize: 2 });
 
         // Fill queue
-        const sendPromise1 = client.send('test.route1', { data: 1 });
-        const sendPromise2 = client.send('test.route2', { data: 2 });
+        const sendPromise1 = client.publish('test.route1', { data: 1 });
+        const sendPromise2 = client.publish('test.route2', { data: 2 });
 
         // This should drop the first message
-        const sendPromise3 = client.send('test.route3', { data: 3 });
+        const sendPromise3 = client.publish('test.route3', { data: 3 });
 
         expect(client.getQueueSize()).toBe(2);
 
@@ -892,8 +903,8 @@ describe('WebMQClient (Singleton)', () => {
         triggerEvent('close');
 
         // Send messages while disconnected
-        const sendPromise1 = client.send('test.route1', { data: 1 });
-        const sendPromise2 = client.send('test.route2', { data: 2 });
+        const sendPromise1 = client.publish('test.route1', { data: 1 });
+        const sendPromise2 = client.publish('test.route2', { data: 2 });
 
         expect(client.getQueueSize()).toBe(2);
 
