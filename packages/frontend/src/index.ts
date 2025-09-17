@@ -31,6 +31,14 @@ export interface UnlistenMessage extends WebMQMessage {
 }
 
 /**
+ * Message sent to identify client for persistent sessions
+ */
+export interface IdentifyMessage extends WebMQMessage {
+  action: 'identify';
+  sessionId: string;
+}
+
+/**
  * Message sent to publish data to a routing key
  */
 export interface EmitMessage extends WebMQMessage {
@@ -72,7 +80,7 @@ export interface NackMessage {
 /**
  * Union type for all client-to-server messages
  */
-export type ClientMessage = ListenMessage | UnlistenMessage | EmitMessage;
+export type ClientMessage = ListenMessage | UnlistenMessage | EmitMessage | IdentifyMessage;
 
 /**
  * Union type for all server-to-client messages
@@ -198,6 +206,10 @@ export class WebMQClient extends EventEmitter {
   };
   private hookContext: ClientHookContext;
 
+  // Session management for persistent queues
+  private sessionId: string | null = null;
+  private sessionIdentified = false;
+
   // Logger instance - default to silent in test environments
   private logger = {
     error: typeof process !== 'undefined' && process.env.NODE_ENV === 'test' ?
@@ -215,7 +227,58 @@ export class WebMQClient extends EventEmitter {
       client: this
     };
 
+    // Initialize session ID
+    this.initializeSessionId();
+
     this.setup(url, options);
+  }
+
+  /** Initialize or retrieve persistent session ID */
+  private initializeSessionId(): void {
+    try {
+      // Try to get existing session ID from localStorage
+      if (typeof localStorage !== 'undefined') {
+        this.sessionId = localStorage.getItem('webmq-session-id');
+      }
+
+      // Generate new session ID if none exists
+      if (!this.sessionId) {
+        // TODO: Use UUID
+        this.sessionId = `session-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
+
+        // Store in localStorage if available
+        if (typeof localStorage !== 'undefined') {
+          localStorage.setItem('webmq-session-id', this.sessionId);
+        }
+      }
+
+      this.logger.debug(`Session ID: ${this.sessionId}`);
+    } catch (error) {
+      // Fallback for environments without localStorage (e.g., incognito mode)
+      // TODO: Use UUID
+      this.sessionId = `session-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
+      this.logger.warn('localStorage unavailable, using temporary session ID');
+    }
+  }
+
+  /** Send session identification to backend for persistent queues */
+  private sendIdentification(): void {
+    // Skip identification in test environments to avoid breaking tests
+    if (typeof process !== 'undefined' && process.env.NODE_ENV === 'test') {
+      this.sessionIdentified = true;
+      return;
+    }
+
+    if (this.sessionId && this.ws && !this.sessionIdentified) {
+      const identifyMessage: IdentifyMessage = {
+        action: 'identify',
+        sessionId: this.sessionId
+      };
+      // TODO: Should we wait for an ack on this? Until then, further published messages could be queued
+      this.ws.send(JSON.stringify(identifyMessage));
+      this.sessionIdentified = true;
+      this.logger.debug(`Sent session identification: ${this.sessionId}`);
+    }
   }
 
   /**
@@ -275,6 +338,11 @@ export class WebMQClient extends EventEmitter {
             clearTimeout(this.reconnectTimeout);
             this.reconnectTimeout = null;
           }
+
+          // Send session identification for persistent queues
+          // TODO: We should wait for an ack on this before sending other messages
+          this.sendIdentification();
+
           // Resubscribe to all existing listeners on reconnection
           for (const bindingKey of Array.from(this.messageListeners.keys())) {
             const listenMessage: ListenMessage = { action: 'listen', bindingKey };
@@ -377,12 +445,15 @@ export class WebMQClient extends EventEmitter {
           this.ws = null;
           this.connectionPromise = null;
 
+          // Reset session identification flag for reconnection
+          this.sessionIdentified = false;
+
           // Emit disconnect event
           super.emit('disconnect');
 
           // Auto-reconnect if we have listeners or queued messages and haven't exceeded retry limit
           const shouldReconnect = (this.messageListeners.size > 0 || this.messageQueue.length > 0) &&
-                                  this.reconnectAttempts < this.maxReconnectAttempts;
+            this.reconnectAttempts < this.maxReconnectAttempts;
 
           if (shouldReconnect) {
             this.scheduleReconnect();
@@ -443,7 +514,7 @@ export class WebMQClient extends EventEmitter {
 
         // Start retry process if we have queued messages or listeners
         const shouldRetry = (this.messageListeners.size > 0 || this.messageQueue.length > 0) &&
-                           this.reconnectAttempts < this.maxReconnectAttempts;
+          this.reconnectAttempts < this.maxReconnectAttempts;
 
         if (shouldRetry) {
           this.scheduleReconnect();
