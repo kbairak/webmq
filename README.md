@@ -71,6 +71,27 @@ WebMQ acts as a bridge between WebSocket connections and RabbitMQ's topic exchan
 
 **Bidirectional Flow**: Frontends can both publish events and subscribe to updates. Backend services can process events and publish results back to specific users or broadcast to all connected clients.
 
+### Architecture
+
+WebMQ uses clean, modular architectures in both frontend and backend to ensure maintainability and extensibility.
+
+**Frontend Component Architecture**: The client uses specialized managers that co-locate related functionality:
+
+- **ConnectionManager**: WebSocket lifecycle and reconnection logic
+- **SessionManager**: Persistent session handling for message persistence
+- **ActionExecutor**: Centralized action dispatching with hook support
+- **MessagePublisher**: Publishing with acknowledgments and queuing
+- **SubscriptionManager**: Topic subscriptions and message routing
+
+**Backend Strategy Pattern**: Actions are handled by dedicated strategy classes that co-locate validation, execution, and response logic:
+
+- **PublishStrategy**: Message publishing with success/failure acknowledgments
+- **ListenStrategy**: Subscription setup with event emission
+- **UnlistenStrategy**: Subscription cleanup with proper resource management
+- **MessageProcessor**: Centralized strategy selection and execution
+
+This architecture ensures that actions and their consequences (like publish/ack or listen/events) are located together, making the codebase easier to understand and maintain.
+
 ### Server-Side Hooks
 
 WebMQ uses Express-style middleware hooks to intercept and process messages on the backend. Each hook receives a `context` (connection data), `message` (the client request), and `next` function. Call `await next()` to continue to the next hook, return without calling `next` to abort silently, or throw an error to reject the request.
