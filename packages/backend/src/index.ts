@@ -182,6 +182,154 @@ export class SubscriptionManager {
   }
 }
 
+// --- Action Strategy Pattern ---
+
+interface ActionContext {
+  connectionId: string;
+  connection: ConnectionData;
+  subscriptionManager: SubscriptionManager;
+  serverEmitter: EventEmitter;
+}
+
+interface ActionResult {
+  success: boolean;
+  data?: any;
+  error?: string;
+}
+
+interface ActionStrategy {
+  validate(message: ClientMessage): void;
+  execute(context: ActionContext, message: ClientMessage): Promise<ActionResult>;
+  respond(context: ActionContext, message: ClientMessage, result: ActionResult): Promise<void>;
+}
+
+class PublishStrategy implements ActionStrategy {
+  validate(message: ClientMessage): void {
+    if (!message.routingKey || !message.payload) {
+      throw new Error('publish requires routingKey and payload');
+    }
+  }
+
+  async execute(context: ActionContext, message: ClientMessage): Promise<ActionResult> {
+    try {
+      await context.subscriptionManager.publish(message.routingKey!, message.payload);
+      logger.debug(`[${context.connectionId}] Message published successfully`);
+      return { success: true };
+    } catch (error: any) {
+      logger.error(`[${context.connectionId}] Error publishing message:`, error.message);
+      return { success: false, error: error.message };
+    }
+  }
+
+  async respond(context: ActionContext, message: ClientMessage, result: ActionResult): Promise<void> {
+    if (message.messageId) {
+      const response = result.success
+        ? { type: 'ack', messageId: message.messageId, status: 'success' }
+        : { type: 'nack', messageId: message.messageId, error: result.error };
+
+      context.connection.ws.send(JSON.stringify(response));
+      logger.debug(`[${context.connectionId}] Sent ${result.success ? 'ack' : 'nack'} for message ${message.messageId}`);
+    }
+
+    if (!result.success) {
+      throw new Error(result.error);
+    }
+  }
+}
+
+class ListenStrategy implements ActionStrategy {
+  validate(message: ClientMessage): void {
+    if (!message.bindingKey) {
+      throw new Error('listen requires a bindingKey');
+    }
+  }
+
+  async execute(context: ActionContext, message: ClientMessage): Promise<ActionResult> {
+    if (context.connection.subscriptions.has(message.bindingKey!)) {
+      logger.debug(`[${context.connectionId}] Already listening to ${message.bindingKey}`);
+      return { success: true, data: 'already_subscribed' };
+    }
+
+    const subscription = await context.subscriptionManager.subscribe(message.bindingKey!, (msg) => {
+      logger.debug(`[${context.connectionId}] Received message from RabbitMQ:`, msg.content.toString());
+      context.connection.ws.send(JSON.stringify({
+        type: 'message',
+        bindingKey: message.bindingKey,
+        payload: JSON.parse(msg.content.toString()),
+      }));
+    });
+
+    logger.debug(`[${context.connectionId}] Queue created: ${subscription.queue}`);
+    context.connection.subscriptions.set(message.bindingKey!, subscription);
+    logger.debug(`[${context.connectionId}] Consumer set up with tag: ${subscription.consumerTag}`);
+
+    return { success: true, data: subscription };
+  }
+
+  async respond(context: ActionContext, message: ClientMessage, result: ActionResult): Promise<void> {
+    if (result.success && result.data !== 'already_subscribed') {
+      context.serverEmitter.emit('subscription.created', {
+        connectionId: context.connectionId,
+        bindingKey: message.bindingKey,
+        queue: result.data.queue
+      });
+    }
+  }
+}
+
+class UnlistenStrategy implements ActionStrategy {
+  validate(message: ClientMessage): void {
+    if (!message.bindingKey) {
+      throw new Error('unlisten requires a bindingKey');
+    }
+  }
+
+  async execute(context: ActionContext, message: ClientMessage): Promise<ActionResult> {
+    const subscription = context.connection.subscriptions.get(message.bindingKey!);
+    if (subscription) {
+      await context.subscriptionManager.unsubscribe(subscription, message.bindingKey!);
+      context.connection.subscriptions.delete(message.bindingKey!);
+      logger.debug(`[${context.connectionId}] Unsubscribed from ${message.bindingKey}`);
+      return { success: true, data: subscription };
+    } else {
+      logger.debug(`[${context.connectionId}] No subscription found for ${message.bindingKey}`);
+      return { success: true, data: 'not_found' };
+    }
+  }
+
+  async respond(context: ActionContext, message: ClientMessage, result: ActionResult): Promise<void> {
+    if (result.success && result.data !== 'not_found') {
+      context.serverEmitter.emit('subscription.removed', {
+        connectionId: context.connectionId,
+        bindingKey: message.bindingKey
+      });
+    }
+  }
+}
+
+class MessageProcessor {
+  private strategies = new Map<string, ActionStrategy>([
+    ['publish', new PublishStrategy()],
+    ['listen', new ListenStrategy()],
+    ['unlisten', new UnlistenStrategy()]
+  ]);
+
+  async executeAction(context: ActionContext, message: ClientMessage): Promise<void> {
+    const strategy = this.strategies.get(message.action);
+    if (!strategy) {
+      throw new Error(`Unknown action: ${message.action}`);
+    }
+
+    logger.debug(`[${context.connectionId}] Executing ${message.action} action`);
+
+    strategy.validate(message);
+    const result = await strategy.execute(context, message);
+    await strategy.respond(context, message, result);
+
+    logger.debug(`[${context.connectionId}] Action ${message.action} completed successfully`);
+  }
+}
+
 // --- Backend Implementation ---
 
 /**
@@ -217,6 +365,7 @@ export class WebMQServer extends EventEmitter {
   private channel: Channel | null = null;
   private connectionManager = new ConnectionManager();
   private subscriptionManager: SubscriptionManager | null = null;
+  private messageProcessor = new MessageProcessor();
 
   constructor(options: WebMQServerOptions) {
     super();
@@ -370,89 +519,15 @@ export class WebMQServer extends EventEmitter {
       throw new Error(`Connection ${connectionId} or shared channel not available`);
     }
 
-    logger.debug(`[${connectionId}] Executing ${message.action} action`);
+    const context: ActionContext = {
+      connectionId,
+      connection,
+      subscriptionManager: this.subscriptionManager,
+      serverEmitter: this
+    };
 
     try {
-      switch (message.action) {
-        case 'publish':
-          logger.debug(`[${connectionId}] Emit - routingKey: ${message.routingKey}, payload:`, message.payload);
-          if (!message.routingKey || !message.payload) {
-            throw new Error('publish requires routingKey and payload');
-          }
-          try {
-            await this.subscriptionManager.publish(message.routingKey, message.payload);
-            logger.debug(`[${connectionId}] Message published successfully`);
-
-            // Send acknowledgment
-            if (message.messageId) {
-              connection.ws.send(JSON.stringify({
-                type: 'ack',
-                messageId: message.messageId,
-                status: 'success'
-              }));
-              logger.debug(`[${connectionId}] Sent ack for message ${message.messageId}`);
-            }
-          } catch (error: any) {
-            logger.error(`[${connectionId}] Error publishing message:`, error.message);
-
-            // Send negative acknowledgment
-            if (message.messageId) {
-              connection.ws.send(JSON.stringify({
-                type: 'nack',
-                messageId: message.messageId,
-                error: error.message
-              }));
-              logger.debug(`[${connectionId}] Sent nack for message ${message.messageId}`);
-            }
-            throw error; // Re-throw to maintain existing error handling
-          }
-          break;
-
-        case 'listen':
-          logger.debug(`[${connectionId}] Listen - bindingKey: ${message.bindingKey}`);
-          if (!message.bindingKey) throw new Error('listen requires a bindingKey');
-          if (connection.subscriptions.has(message.bindingKey)) {
-            logger.debug(`[${connectionId}] Already listening to ${message.bindingKey}`);
-            return; // Already listening
-          }
-
-          const subscription = await this.subscriptionManager.subscribe(message.bindingKey, (msg) => {
-            logger.debug(`[${connectionId}] Received message from RabbitMQ:`, msg.content.toString());
-            connection.ws.send(JSON.stringify({
-              type: 'message',
-              bindingKey: message.bindingKey,
-              payload: JSON.parse(msg.content.toString()),
-            }));
-          });
-          logger.debug(`[${connectionId}] Queue created: ${subscription.queue}`);
-
-          connection.subscriptions.set(message.bindingKey, subscription);
-          this.emit('subscription.created', {
-            connectionId,
-            bindingKey: message.bindingKey,
-            queue: subscription.queue
-          });
-          logger.debug(`[${connectionId}] Consumer set up with tag: ${subscription.consumerTag}`);
-          break;
-
-        case 'unlisten':
-          logger.debug(`[${connectionId}] Unlisten - bindingKey: ${message.bindingKey}`);
-          if (!message.bindingKey) throw new Error('unlisten requires a bindingKey');
-          const sub = connection.subscriptions.get(message.bindingKey);
-          if (sub) {
-            await this.subscriptionManager.unsubscribe(sub, message.bindingKey);
-            connection.subscriptions.delete(message.bindingKey);
-            this.emit('subscription.removed', { connectionId, bindingKey: message.bindingKey });
-            logger.debug(`[${connectionId}] Unsubscribed from ${message.bindingKey}`);
-          } else {
-            logger.debug(`[${connectionId}] No subscription found for ${message.bindingKey}`);
-          }
-          break;
-
-        default:
-          throw new Error(`Unknown action: ${message.action}`);
-      }
-      logger.debug(`[${connectionId}] Action ${message.action} completed successfully`);
+      await this.messageProcessor.executeAction(context, message);
     } catch (error: any) {
       logger.error(`[${connectionId}] Error in executeAction(${message.action}):`, error.message);
       logger.error(`[${connectionId}] Stack trace:`, error.stack);

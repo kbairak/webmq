@@ -65,6 +65,7 @@ describe('WebMQServer Integration (Mocked Abstractions)', () => {
       on: jest.fn(),
       send: jest.fn(),
       close: jest.fn(),
+      readyState: 1, // WebSocket.OPEN
     } as any;
 
     mockConnection = {
@@ -559,6 +560,7 @@ describe('WebSocket message handling', () => {
       on: jest.fn(),
       send: jest.fn(),
       close: jest.fn(),
+      readyState: 1, // WebSocket.OPEN
     } as any;
 
     mockConnection = {
