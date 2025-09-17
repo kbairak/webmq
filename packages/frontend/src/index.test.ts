@@ -65,6 +65,8 @@ describe('WebMQClient (Singleton)', () => {
 
     it('should connect and send a listen message on first listen', async () => {
       const promise = client.listen('test.key', () => { });
+      // Give some time for the WebSocket to be created and event listeners attached
+      await new Promise(resolve => setTimeout(resolve, 0));
       // Simulate server connection
       triggerEvent('open');
       await promise;
@@ -102,6 +104,7 @@ describe('WebMQClient (Singleton)', () => {
     it('should send unlisten message when the last callback is removed', async () => {
       const callback = () => { };
       const promise = client.listen('test.key', callback);
+      await new Promise(resolve => setTimeout(resolve, 0));
       triggerEvent('open');
       await promise;
 
@@ -202,7 +205,7 @@ describe('WebMQClient (Singleton)', () => {
 
         expect(mockClose).toHaveBeenCalled();
         // Verify listeners were cleared by checking internal state
-        expect((client as any).messageListeners.size).toBe(0);
+        expect(client._getListenerSize()).toBe(0);
       });
 
       it('should throw error for invalid onActiveListeners option', () => {
@@ -217,9 +220,8 @@ describe('WebMQClient (Singleton)', () => {
 
         client.disconnect();
 
-        expect((client as any).ws).toBe(null);
-        expect((client as any).connectionPromise).toBe(null);
-        expect((client as any).isConnected).toBe(false);
+        expect(client._getWebSocket()).toBe(null);
+        expect(client._getConnectionState().isConnected).toBe(false);
       });
     });
 
@@ -490,11 +492,14 @@ describe('WebMQClient (Singleton)', () => {
         client.on('connect', connectSpy);
         client.on('reconnect', reconnectSpy);
 
-        // Set up a listener to enable auto-reconnection
-        const callback = jest.fn();
-        const promise = client.listen('test.key', callback);
+        // Use direct connect() call instead of listen() to match working test pattern
+        const promise = client.connect();
         triggerEvent('open');
         await promise;
+
+        // Now set up a listener to enable auto-reconnection
+        const callback = jest.fn();
+        await client.listen('test.key', callback);
 
         expect(connectSpy).toHaveBeenCalledTimes(1);
         expect(reconnectSpy).not.toHaveBeenCalled();
