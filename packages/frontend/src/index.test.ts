@@ -788,7 +788,7 @@ describe('WebMQClient (Singleton)', () => {
           payload: { data: 1 }
         });
         expect(message1.messageId).toBeDefined();
-        expect(message1.messageId).toMatch(/^msg_\d+_[a-z0-9]+$/);
+        expect(message1.messageId).toMatch(/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/); // UUID v4 format
 
         expect(message2).toMatchObject({
           action: 'publish',

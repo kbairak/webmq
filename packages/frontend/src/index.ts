@@ -1,4 +1,5 @@
 import { EventEmitter } from 'events';
+import { v4 as uuidv4 } from 'uuid';
 
 // --- Logger Configuration ---
 
@@ -118,9 +119,17 @@ type MessageCallback = (payload: any) => void;
 
 // --- Class Implementation ---
 
-// TODO: Add usage examples in the docstring
 /**
  * A client for interacting with a WebMQ backend.
+ *
+ * @example
+ * ```javascript
+ * import { setup, listen, publish } from 'webmq-frontend';
+ *
+ * setup('ws://localhost:8080');
+ * listen('chat.room.1', (message) => console.log('Received:', message));
+ * await publish('chat.room.1', { text: 'Hello World!' });
+ * ```
  */
 export class WebMQClient extends EventEmitter {
   private ws: WebSocket | null = null;
@@ -276,6 +285,7 @@ export class WebMQClient extends EventEmitter {
             this.emit('error', err);
           }
           if (!wasConnected) {
+            // For initial connection failures, reject this attempt but allow retries
             reject(new Error('WebSocket connection failed.'));
           }
         });
@@ -289,11 +299,19 @@ export class WebMQClient extends EventEmitter {
           // Emit disconnect event
           super.emit('disconnect');
 
-          // Auto-reconnect if we have listeners and haven't exceeded retry limit
-          if (this.messageListeners.size > 0 && this.reconnectAttempts < this.maxReconnectAttempts) {
+          // Auto-reconnect if we have listeners or queued messages and haven't exceeded retry limit
+          const shouldReconnect = (this.messageListeners.size > 0 || this.messageQueue.length > 0) &&
+                                  this.reconnectAttempts < this.maxReconnectAttempts;
+
+          if (shouldReconnect) {
             this.scheduleReconnect();
           } else if (this.reconnectAttempts >= this.maxReconnectAttempts) {
             this.logger.error(`WebMQ client failed to reconnect after ${this.maxReconnectAttempts} attempts.`);
+            // Reject all queued messages
+            for (const message of this.messageQueue) {
+              message.reject(new Error('Failed to connect after maximum retry attempts'));
+            }
+            this.messageQueue = [];
           }
         });
       });
@@ -315,7 +333,24 @@ export class WebMQClient extends EventEmitter {
 
   private async _ensureConnected(): Promise<void> {
     if (!this.isConnected && !this.connectionPromise) {
-      await this.connect();
+      try {
+        await this.connect();
+      } catch (error) {
+        // Initial connection failed, but we want to trigger retries
+        // Reset connectionPromise so retries can happen
+        this.connectionPromise = null;
+
+        // Start retry process if we have queued messages or listeners
+        const shouldRetry = (this.messageListeners.size > 0 || this.messageQueue.length > 0) &&
+                           this.reconnectAttempts < this.maxReconnectAttempts;
+
+        if (shouldRetry) {
+          this.scheduleReconnect();
+        }
+
+        // Don't re-throw the error since we're handling retries
+        return;
+      }
     }
     return this.connectionPromise!;
   }
@@ -327,7 +362,7 @@ export class WebMQClient extends EventEmitter {
    * @returns Promise that resolves when server confirms delivery or rejects on failure/timeout
    */
   public publish(routingKey: string, payload: any): Promise<void> {
-    const messageId = this.generateMessageId();
+    const messageId = uuidv4();
 
     return new Promise<void>((resolve, reject) => {
       if (this.isConnected && this.ws) {
@@ -337,7 +372,11 @@ export class WebMQClient extends EventEmitter {
         // Queue message if disconnected
         this.queueMessage(routingKey, payload, messageId, resolve, reject);
         // Try to connect (will flush queue when connected)
-        this._ensureConnected().catch(reject);
+        // Don't reject the publish promise if initial connection fails
+        this._ensureConnected().catch(() => {
+          // Connection failed, but message is already queued
+          // It will be sent when connection is eventually established
+        });
       }
     });
   }
@@ -348,14 +387,25 @@ export class WebMQClient extends EventEmitter {
    * @param callback The function to call with the message payload.
    */
   public async listen(bindingKey: string, callback: MessageCallback): Promise<void> {
-    await this._ensureConnected();
+    // Add the listener first, regardless of connection status
     const existing = this.messageListeners.get(bindingKey);
     if (existing) {
       existing.push(callback);
+      // Don't send another listen message for the same key
+      return;
     } else {
       this.messageListeners.set(bindingKey, [callback]);
+    }
+
+    // Only send listen message for the first listener on this key
+    if (this.isConnected && this.ws) {
       const listenMessage: ListenMessage = { action: 'listen', bindingKey };
-      this.ws?.send(JSON.stringify(listenMessage));
+      this.ws.send(JSON.stringify(listenMessage));
+    } else {
+      // Not connected - trigger connection (listeners will be restored on connect)
+      this._ensureConnected().catch(() => {
+        // Connection failed, but listener is stored and will be sent on reconnect
+      });
     }
   }
 
@@ -486,18 +536,6 @@ export class WebMQClient extends EventEmitter {
     }
   }
 
-  /**
-   * Generates a unique message ID for tracking acknowledgments.
-   */
-  // TODO: add crypto to package json and only use that; in fact, get rid of this method and call crypto.randomUUID() directly
-  private generateMessageId(): string {
-    // Use crypto.randomUUID() if available, fallback for test environments
-    if (typeof crypto !== 'undefined' && crypto.randomUUID) {
-      return crypto.randomUUID();
-    }
-    // Fallback for environments where crypto.randomUUID is not available
-    return `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-  }
 
 
   /**

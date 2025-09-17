@@ -424,7 +424,7 @@ describe('Hook system', () => {
       exchangeName: 'test-exchange',
       hooks: {
         pre: [preHook],
-        onEmit: [emitHook],
+        onPublish: [emitHook],
       }
     });
 

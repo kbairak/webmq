@@ -1,64 +1,41 @@
 import { RabbitMQContainer, StartedRabbitMQContainer } from '@testcontainers/rabbitmq';
-import { WebMQServer } from 'webmq-backend';
+import { WebMQServer, SubscriptionManager } from 'webmq-backend';
 import { WebMQClient } from 'webmq-frontend';
 import amqplib from 'amqplib';
+import net from 'net';
 
 let rabbitmq: StartedRabbitMQContainer;
 let webmqServer: WebMQServer;
 let webmqClient: WebMQClient;
 let serverPort: number;
+let workerConnection: amqplib.ChannelModel;
+let subscriptionManager: SubscriptionManager;
 
-// TODO: This class looks a lot like backend's SubscriptionManager, can we see the similarities, refactor and use SubscriptionManager here?
-class Worker {
-  private connection: amqplib.ChannelModel | null = null;
-  private channel: amqplib.Channel | null = null;
-  private connected: boolean = false;
-
-  private async ensureConnected() {
-    if (this.connected) return;
-    this.connection = await amqplib.connect(rabbitmq.getAmqpUrl());
-    this.channel = await this.connection.createChannel();
-    await this.channel.assertExchange('e2e_exchange', 'topic', { durable: false });
-    this.connected = true;
-  }
-
-  public async listen(bindingKey: string, callback: (msg: any) => void) {
-    await this.ensureConnected();
-    const { queue } = await this.channel!.assertQueue('', { exclusive: true, autoDelete: true });
-    await this.channel!.bindQueue(queue, 'e2e_exchange', bindingKey);
-    await this.channel!.consume(queue, (msg) => {
-      if (msg) {
-        callback(JSON.parse(msg.content.toString()));
-        this.channel!.ack(msg);
-      }
+async function findFreePort(startPort: number = 8080): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.listen(startPort, () => {
+      const port = (server.address() as net.AddressInfo).port;
+      server.close(() => resolve(port));
     });
-  }
-
-  public async publish(routingKey: string, obj: any) {
-    await this.ensureConnected();
-    this.channel!.publish(
-      'e2e_exchange',
-      routingKey,
-      Buffer.from(JSON.stringify(obj)),
-    );
-  }
-  public async close() {
-    if (this.connection) {
-      await this.connection.close();
-      this.connection = null;
-      this.channel = null;
-      this.connected = false;
-    }
-  }
+    server.on('error', () => {
+      // Port is in use, try next one
+      resolve(findFreePort(startPort + 1));
+    });
+  });
 }
-const worker = new Worker();
 
 beforeAll(async () => {
-  // Use a random port to avoid conflicts
-  // TODO: verify if the port is actually free, try a different one if not
-  serverPort = 8080 + Math.floor(Math.random() * 1000);
+  serverPort = await findFreePort(8080 + Math.floor(Math.random() * 1000));
 
   rabbitmq = await new RabbitMQContainer('rabbitmq:3.11').start();
+
+  // Set up worker connection and subscription manager
+  workerConnection = await amqplib.connect(rabbitmq.getAmqpUrl());
+  const channel = await workerConnection.createChannel();
+  await channel.assertExchange('e2e_exchange', 'topic', { durable: false });
+  subscriptionManager = new SubscriptionManager(channel, 'e2e_exchange');
+
   webmqServer = new WebMQServer({
     rabbitmqUrl: rabbitmq.getAmqpUrl(),
     exchangeName: 'e2e_exchange',
@@ -75,7 +52,7 @@ beforeAll(async () => {
 afterAll(async () => {
   // Clean up in reverse order
   webmqClient.disconnect({ onActiveListeners: 'clear' });
-  await worker.close();
+  await workerConnection.close();
   await webmqServer.stop();
   await rabbitmq.stop();
 }, 30000); // 30 second timeout for cleanup
@@ -83,7 +60,9 @@ afterAll(async () => {
 it('worker receives message', async () => {
   // arrange
   const capturedMessages: any[] = [];
-  await worker.listen('routingKey', (msg) => { capturedMessages.push(msg); });
+  await subscriptionManager.subscribeJSON('routingKey', (payload) => {
+    capturedMessages.push(payload);
+  });
 
   // act
   await webmqClient.publish('routingKey', { hello: 'from frontend' });
@@ -100,11 +79,80 @@ it('client receives message', async () => {
   await new Promise(resolve => setTimeout(resolve, 100));
 
   // act
-  await worker.publish('routingKey', { hello: 'from backend' });
+  await subscriptionManager.publish('routingKey', { hello: 'from backend' });
 
   // assert
   await new Promise(resolve => setTimeout(resolve, 100));
   expect(capturedMessages).toEqual([{ hello: 'from backend' }]);
 });
 
-// TODO: Add more tests, don't test errors, make sure they are no more complex than the existing ones, if something looks complex, don't test it here, we have individual frontend and backend tests anyway
+it('multiple messages in sequence', async () => {
+  // arrange
+  const capturedMessages: any[] = [];
+  await webmqClient.listen('test.sequence', (msg) => { capturedMessages.push(msg); });
+  await new Promise(resolve => setTimeout(resolve, 100));
+
+  // act
+  await subscriptionManager.publish('test.sequence', { id: 1 });
+  await subscriptionManager.publish('test.sequence', { id: 2 });
+  await subscriptionManager.publish('test.sequence', { id: 3 });
+
+  // assert
+  await new Promise(resolve => setTimeout(resolve, 100));
+  expect(capturedMessages).toEqual([{ id: 1 }, { id: 2 }, { id: 3 }]);
+});
+
+it('wildcard routing patterns', async () => {
+  // arrange
+  const capturedMessages: any[] = [];
+  await webmqClient.listen('user.*', (msg) => { capturedMessages.push(msg); });
+  await new Promise(resolve => setTimeout(resolve, 100));
+
+  // act
+  await subscriptionManager.publish('user.login', { action: 'login' });
+  await subscriptionManager.publish('user.logout', { action: 'logout' });
+
+  // assert
+  await new Promise(resolve => setTimeout(resolve, 100));
+  expect(capturedMessages).toEqual([{ action: 'login' }, { action: 'logout' }]);
+});
+
+it('frontend wildcard receives backend specific routing keys', async () => {
+  // arrange
+  const capturedMessages: any[] = [];
+  await webmqClient.listen('order.*', (msg) => { capturedMessages.push(msg); });
+  await new Promise(resolve => setTimeout(resolve, 100));
+
+  // act
+  await subscriptionManager.publish('order.created', { id: 123 });
+  await subscriptionManager.publish('order.updated', { id: 123, status: 'shipped' });
+  await subscriptionManager.publish('payment.completed', { id: 456 }); // Should not match
+
+  // assert
+  await new Promise(resolve => setTimeout(resolve, 100));
+  expect(capturedMessages).toEqual([
+    { id: 123 },
+    { id: 123, status: 'shipped' }
+  ]);
+});
+
+it('backend wildcard receives frontend specific routing keys', async () => {
+  // arrange
+  const capturedMessages: any[] = [];
+  await subscriptionManager.subscribeJSON('notification.*', (payload) => {
+    capturedMessages.push(payload);
+  });
+  await new Promise(resolve => setTimeout(resolve, 100));
+
+  // act
+  await webmqClient.publish('notification.email', { type: 'email', subject: 'Hello' });
+  await webmqClient.publish('notification.sms', { type: 'sms', text: 'Hi' });
+  await webmqClient.publish('analytics.click', { button: 'submit' }); // Should not match
+
+  // assert
+  await new Promise(resolve => setTimeout(resolve, 100));
+  expect(capturedMessages).toEqual([
+    { type: 'email', subject: 'Hello' },
+    { type: 'sms', text: 'Hi' }
+  ]);
+});

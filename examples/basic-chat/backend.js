@@ -31,9 +31,10 @@ const server = new WebMQServer({
   rabbitmqUrl,
   exchangeName,
   hooks: {
-    onEmit: [emitValidationHook],
+    onPublish: [emitValidationHook],
     onListen: [listenValidationHook],
   },
 });
 
+server.setLogLevel('info');
 server.start(port).catch(console.error);

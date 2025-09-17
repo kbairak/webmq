@@ -1,607 +1,374 @@
 # WebMQ
 
-WebMQ is a framework designed to bridge web frontends with a RabbitMQ message broker. It uses WebSockets to enable real-time, bidirectional communication, allowing frontend applications to easily publish messages and subscribe to topics.
+A real-time messaging framework that bridges web frontends with RabbitMQ using WebSockets for event-driven architecture.
 
-## Features
+## Why WebMQ?
 
-- **Real-time Communication:** Built on WebSockets for low-latency message passing.
-- **Topic-Based Routing:** Uses a RabbitMQ topic exchange by default for flexible pub/sub patterns.
-- **Simple Frontend API:** Provides a clean `send`, `listen`, and `unlisten` API for frontend applications.
-- **Extensible Backend:** The backend is a library that can be integrated into any Node.js application and extended with middleware-style hooks for authentication, validation, and logging.
+Traditional web applications rely on request-response patterns where the client asks for data and waits for a reply. This works well for CRUD operations but falls short for real-time features like live chat, collaborative editing, or status updates. Event-driven development flips this model: applications react to events as they happen, enabling truly responsive user experiences.
 
-## Project Structure
+While WebSocket libraries exist, WebMQ leverages RabbitMQ's battle-tested message routing, persistence, and clustering capabilities. This means your real-time features inherit decades of messaging reliability. When you need to scale horizontally, simply spin up more backend instances—RabbitMQ handles message distribution seamlessly across your infrastructure.
 
-This project is a monorepo managed with `npm` workspaces.
+## Quick Start
 
-- `packages/`: Contains the core libraries.
-  - `webmq-backend/`: The Node.js backend library.
-  - `webmq-frontend/`: The framework-agnostic frontend library.
-- `examples/`: Contains example applications demonstrating how to use the framework.
-  - `basic-chat/`: A simple, real-time chat application.
+Here's a complete real-time chat in under 30 lines:
 
-## Getting Started
-
-### Prerequisites
-
-- Node.js (v18+ recommended)
-- npm (v7+ recommended)
-- Docker and Docker Compose
-
-### Development Setup
-
-1. **Start RabbitMQ:**
-    From the project root, start a RabbitMQ server using Docker Compose.
-
-    ```bash
-    docker-compose up -d
-    ```
-
-    The management UI will be available at [http://localhost:15672](http://localhost:15672) (user: `guest`, pass: `guest`).
-
-2. **Install Dependencies:**
-    Install all dependencies for all packages and link the local workspaces.
-
-    ```bash
-    npm install
-    ```
-
-### Running the Example Application
-
-The `basic-chat` example demonstrates a simple real-time chat room.
-
-1. **Start the Backend Server:**
-    In a terminal, run the following command from the project root:
-
-    ```bash
-    npm run start:backend -w basic-chat
-    ```
-
-    This will start the WebMQ backend on `ws://localhost:8080`.
-
-2. **Start the Frontend Application:**
-    In a second terminal, run:
-
-    ```bash
-    npm run start:frontend -w basic-chat
-    ```
-
-    This will start a Vite development server and provide you with a URL to open the chat application in your browser.
-
-Open the URL in multiple browser tabs to see the real-time communication in action.
-
----
-
-## API Usage
-
-### Frontend (`webmq-frontend`)
-
-The frontend library provides a simple singleton API.
-
-```javascript
-import { setup, listen, send, disconnect, client, getQueueSize } from 'webmq-frontend';
-
-// 1. Configure the connection with optional settings
-setup('ws://localhost:8080', {
-  maxReconnectAttempts: 5,
-  maxQueueSize: 100,     // Queue up to 100 messages when offline
-  messageTimeout: 10000  // Wait 10s for server acknowledgment
-});
-
-const CHAT_TOPIC = 'chat.room.1';
-
-// 2. Listen for connection events
-client.on('connect', () => console.log('Connected to WebMQ'));
-client.on('disconnect', () => console.log('Disconnected from WebMQ'));
-client.on('reconnect', () => console.log('Reconnected to WebMQ'));
-
-// 3. Listen for messages on a topic
-listen(CHAT_TOPIC, (payload) => {
-  console.log('Received message:', payload);
-});
-
-// 4. Send a message to a topic (queued if offline)
-send(CHAT_TOPIC, { user: 'Alice', text: 'Hello, world!' });
-
-// 5. Check queue status
-console.log(`Messages queued: ${getQueueSize()}`);
-
-// 6. Disconnect (optional - see disconnect options below)
-disconnect();
-```
-
-### Backend (`webmq-backend`)
-
-The backend is a class that you can integrate into your Node.js application.
+**Backend** (`server.js`):
 
 ```javascript
 import { WebMQServer } from 'webmq-backend';
 
 const server = new WebMQServer({
-  rabbitmqUrl: 'amqp://guest:guest@localhost:5672',
-  exchangeName: 'my_app_exchange',
-  // Optional: Add action-specific hooks for auth, validation, etc.
-  hooks: {
-    onListen: [ myListenHook ],
-    onEmit: [ myEmitHook ]
-  }
+  rabbitmqUrl: 'amqp://localhost',
+  exchangeName: 'chat_app'
 });
 
-server.start(8080).catch(console.error);
+await server.start(8080);
+console.log('WebMQ server running on ws://localhost:8080');
 ```
 
-#### Disconnect Options
-
-The `disconnect()` method provides options for handling active listeners:
-
-```javascript
-import { disconnect, listen, unlisten } from 'webmq-frontend';
-
-// Default behavior: ignore disconnect if listeners exist (safest for multi-component apps)
-disconnect(); // Does nothing if listeners are active
-
-// Explicit ignore (same as default)
-disconnect({ onActiveListeners: 'ignore' });
-
-// Throw error if listeners exist (good for debugging)
-disconnect({ onActiveListeners: 'throw' }); // Throws: "Cannot disconnect: X active listeners"
-
-// Force disconnect and clear all listeners (destructive)
-disconnect({ onActiveListeners: 'clear' }); // Clears listeners and disconnects
-
-// Recommended pattern for clean component cleanup
-const callback = (payload) => console.log(payload);
-listen('topic', callback);
-// Later...
-unlisten('topic', callback); // Remove specific listener
-disconnect(); // Safe to disconnect now
-```
-
-**Multi-Component Safety:** The default `'ignore'` behavior prevents components from accidentally breaking each other's listeners in large applications.
-
-#### Connection State Events
-
-WebMQ extends Node.js EventEmitter to provide connection state events. This allows your application to react to connection changes:
-
-```javascript
-import { client } from 'webmq-frontend';
-
-// Listen for connection events
-client.on('connect', () => {
-  console.log('Connected to WebMQ server');
-  updateUIStatus('connected');
-});
-
-client.on('disconnect', () => {
-  console.log('Lost connection to WebMQ server');
-  updateUIStatus('disconnected');
-});
-
-client.on('reconnect', () => {
-  console.log('Successfully reconnected to WebMQ server');
-  updateUIStatus('reconnected');
-  showNotification('Connection restored');
-});
-
-// Remove event listeners when no longer needed
-const handler = () => console.log('Connected!');
-client.on('connect', handler);
-client.off('connect', handler); // Clean removal
-```
-
-**Event Types:**
-
-- **`connect`**: Fired on initial successful connection
-- **`disconnect`**: Fired when connection is lost
-- **`reconnect`**: Fired when connection is re-established after being lost
-
-**React Example:**
+**Frontend** (React component):
 
 ```jsx
-import { useEffect, useState } from 'react';
-import { client } from 'webmq-frontend';
-
-export function ConnectionStatus() {
-  const [status, setStatus] = useState('disconnected');
-
-  useEffect(() => {
-    const onConnect = () => setStatus('connected');
-    const onDisconnect = () => setStatus('disconnected');
-    const onReconnect = () => setStatus('reconnected');
-
-    client.on('connect', onConnect);
-    client.on('disconnect', onDisconnect);
-    client.on('reconnect', onReconnect);
-
-    return () => {
-      client.off('connect', onConnect);
-      client.off('disconnect', onDisconnect);
-      client.off('reconnect', onReconnect);
-    };
-  }, []);
-
-  return <div className={`status-${status}`}>Status: {status}</div>;
-}
-```
-
-#### Message Queuing for Offline Support
-
-WebMQ automatically queues messages when disconnected and sends them when the connection is restored. This ensures no messages are lost during network interruptions.
-
-```javascript
-import { setup, send, getQueueSize, clearQueue, client } from 'webmq-frontend';
-
-// Configure queue size (default: 100 messages)
-setup('ws://localhost:8080', {
-  maxQueueSize: 50  // Queue up to 50 messages when offline
-});
-
-// Send messages - they'll be queued if offline
-send('chat.message', { text: 'This will be queued if offline' });
-send('user.action', { action: 'click', button: 'submit' });
-
-// Monitor queue status
-console.log(`Queued messages: ${getQueueSize()}`);
-
-// Clear queue if needed (e.g., user logs out)
-clearQueue();
-
-// Listen for reconnection to know when queued messages are sent
-client.on('reconnect', () => {
-  console.log('Reconnected - queued messages have been sent');
-});
-```
-
-**Queue Behavior:**
-
-- **FIFO ordering**: Messages are sent in the order they were queued
-- **Size limits**: Configurable via `maxQueueSize` option (default: 100)
-- **Overflow handling**: When full, oldest messages are dropped to make room
-- **Automatic flushing**: All queued messages are sent immediately upon reconnection
-- **Memory efficient**: Queue is cleared after successful transmission
-
-**Use Cases:**
-
-- **Chat applications**: Don't lose messages during brief disconnections
-- **Form submissions**: Queue critical data when offline
-- **Analytics events**: Ensure user interactions are captured even with poor connectivity
-- **Real-time games**: Buffer player actions during lag spikes
-
-#### Message Acknowledgments
-
-WebMQ provides reliable message delivery through mandatory acknowledgments. Every message sent returns a Promise that resolves when the server confirms delivery to RabbitMQ or rejects on failure.
-
-```javascript
-import { send } from 'webmq-frontend';
-
-try {
-  // Promise resolves when server confirms delivery
-  await send('payment.process', {
-    amount: 100,
-    currency: 'USD'
-  });
-  console.log('Payment processed successfully');
-} catch (error) {
-  console.error('Payment failed:', error.message);
-  // Handle failure: retry, show user error, etc.
-}
-```
-
-**Acknowledgment Behavior:**
-
-- **Automatic**: All messages require acknowledgment (no opt-out)
-- **Promise-based**: Simple async/await or .then()/.catch() patterns
-- **Timeout protection**: Configurable timeout (default: 10 seconds)
-- **Error handling**: Server rejections and timeouts throw descriptive errors
-
-**Server Response Protocol:**
-
-```javascript
-// Client sends:
-{
-  action: 'emit',
-  routingKey: 'user.action',
-  payload: { action: 'click' },
-  messageId: 'msg_1234567890_abc123'
-}
-
-// Server responds with:
-{ type: 'ack', messageId: 'msg_1234567890_abc123', status: 'success' }
-// or
-{ type: 'nack', messageId: 'msg_1234567890_abc123', error: 'Validation failed' }
-```
-
-**Error Scenarios:**
-
-- **Server rejection**: Business logic errors, validation failures
-- **Timeout**: Server doesn't respond within `messageTimeout`
-- **Queue overflow**: Message dropped when offline queue is full
-- **Network errors**: Connection lost during transmission
-
-**Best Practices:**
-
-```javascript
-// Handle specific error types
-try {
-  await send('order.create', orderData);
-} catch (error) {
-  if (error.message.includes('timeout')) {
-    // Retry logic for timeouts
-    showRetryDialog();
-  } else if (error.message.includes('validation')) {
-    // Show user input errors
-    showValidationErrors(error);
-  } else {
-    // Generic error handling
-    showErrorNotification('Order failed');
-  }
-}
-
-// Batch operations with error handling
-const messages = [
-  { topic: 'analytics.click', data: { button: 'submit' } },
-  { topic: 'user.action', data: { page: 'checkout' } }
-];
-
-const results = await Promise.allSettled(
-  messages.map(msg => send(msg.topic, msg.data))
-);
-
-// Check which succeeded/failed
-results.forEach((result, index) => {
-  if (result.status === 'rejected') {
-    console.warn(`Message ${index} failed:`, result.reason);
-  }
-});
-```
-
-### Authentication
-
-Since WebSockets do not use traditional HTTP headers for every request, authentication must be handled using messages. The recommended approach is to have the client send an `auth` message immediately after connecting.
-
-An authentication hook on the backend can then verify the client's token and attach a user identity to the connection's context for all subsequent requests.
-
-**1. Client-Side Authentication**
-
-```javascript
-import { setup, send } from 'webmq-frontend';
+import { setup, listen, publish } from 'webmq-frontend';
+import { useState, useEffect } from 'react';
 
 setup('ws://localhost:8080');
 
-// After connecting, send the token via an 'auth' message.
-// The 'send' function can be used for this.
-const token = 'your_jwt_or_api_key';
-send('auth', { token });
+export function Chat() {
+  const [messages, setMessages] = useState([]);
+  const [input, setInput] = useState('');
+
+  useEffect(() => {
+    listen('chat.messages', (msg) => {
+      setMessages(prev => [...prev, msg]);
+    });
+  }, []);
+
+  const sendMessage = () => {
+    publish('chat.messages', { text: input, user: 'Alice' });
+    setInput('');
+  };
+
+  return (
+    <div>
+      {messages.map(msg => <div key={msg.id}>{msg.user}: {msg.text}</div>)}
+      <input value={input} onChange={e => setInput(e.target.value)} />
+      <button onClick={sendMessage}>Send</button>
+    </div>
+  );
+}
 ```
 
-**2. Backend Authentication Hook**
+*Note: WebMQ works with any frontend framework—React, Vue, vanilla JavaScript, or anything that can use WebSockets.*
 
-This hook should be a `pre` hook to ensure it runs before any action-specific hooks. It handles the `auth` message and secures all other actions.
+## Core Concepts
+
+WebMQ acts as a bridge between WebSocket connections and RabbitMQ's topic exchange. When a frontend publishes to `user.login`, it's routed through RabbitMQ to any backend services or other frontends listening for `user.*` or `user.login` specifically.
+
+**Topic Routing**: Use patterns like `chat.room.1`, `order.created`, or `user.profile.updated` to organize your events. Subscribers can listen to exact matches (`order.created`) or patterns (`order.*` for all order events).
+
+**Bidirectional Flow**: Frontends can both publish events and subscribe to updates. Backend services can process events and publish results back to specific users or broadcast to all connected clients.
+
+**Hooks**: WebMQ uses Express-style middleware hooks to intercept and process messages. Each hook receives a `context` (connection data), `message` (the client request), and `next` function. Call `await next()` to continue to the next hook, return without calling `next` to abort silently, or throw an error to reject the request.
 
 ```javascript
-const authHook = async (context, message, next) => {
-  // The 'auth' action is a special case to set up the context.
+// Authentication hook
+const authenticationHook = async (context, message, next) => {
   if (message.action === 'auth') {
-    const user = await myApp.verifyToken(message.payload.token); // Your own token verification logic
-    if (!user) throw new Error('Authentication failed');
-    
-    context.user = user; // Attach user identity to the connection context
-    console.log(`Client ${context.id} authenticated as ${user.id}`);
-    return; // Stop further processing for this auth message
+    const user = await validateToken(message.payload.token);
+    if (!user) throw new Error('Invalid token');
+    context.user = user;
+    return; // Don't call next() for auth messages
   }
 
-  // For all other actions, check if a user is present on the context
   if (!context.user) {
-    throw new Error('Client is not authenticated');
+    throw new Error('Authentication required');
   }
 
-  // If authenticated, proceed to the next hook or the main logic
+  await next(); // Continue to action-specific hooks
+};
+
+// Authorization hook - only allow listening to events ending in user's UUID
+const authorizationHook = async (context, message, next) => {
+  if (message.action === 'listen') {
+    const userUUID = context.user.id;
+    if (!message.bindingKey.endsWith(userUUID)) {
+      throw new Error('Cannot listen to events for other users');
+    }
+  }
+
+  await next();
+};
+
+// Payload enhancement hook - add user ID to all published messages
+const payloadEnhancementHook = async (context, message, next) => {
+  if (message.action === 'publish') {
+    message.payload.userId = context.user.id;
+    message.payload.timestamp = Date.now();
+  }
+
   await next();
 };
 
 const server = new WebMQServer({
-  // ...
+  rabbitmqUrl: 'amqp://localhost',
+  exchangeName: 'secure_app',
   hooks: {
-    pre: [authHook],
-    onListen: [ /* other validation hooks... */ ]
+    pre: [authenticationHook],        // Runs before all actions
+    onListen: [authorizationHook],    // Runs only for 'listen' actions
+    onPublish: [payloadEnhancementHook] // Runs only for 'publish' actions
   }
 });
 ```
 
----
+## Features
 
-## React Usage Examples
+- **Auto-reconnection**: Exponential backoff handles network interruptions
+- **Message acknowledgments**: Guaranteed delivery with Promise-based confirmations
+- **Offline queuing**: Messages sent while disconnected are queued and sent on reconnect
+- **Graceful shutdowns**: Proper cleanup of connections and resources
+- **Flexible authentication**: Middleware-style hooks for custom auth logic
+- **Topic wildcards**: Subscribe to event patterns with `*` and `#` wildcards
+- **Connection events**: React to connect/disconnect/reconnect states
+- **Framework agnostic**: Works with React, Vue, Angular, or vanilla JS
 
-Here are two examples of how to use `webmq-frontend` in a React application to handle common asynchronous UI patterns.
+## API Reference
 
-### Example 1: Asynchronous Task (Stock Order)
+### Frontend API
 
-This pattern is ideal for tasks that are initiated by the client and then processed asynchronously on the backend. The client submits a task and then subscribes to status updates for that specific task.
+#### Hybrid Singleton Pattern
 
-```jsx
-import React, { useState, useEffect } from 'react';
-import { send, listen, unlisten } from 'webmq-frontend';
+WebMQ uses a hybrid approach that provides convenience for common use cases while allowing flexibility for advanced scenarios. The exported functions (`setup`, `listen`, `publish`, etc.) are convenience wrappers around a default singleton client instance.
 
-// Component to display the status of a single order
-const OrderStatus = ({ orderId }) => {
-  const [status, setStatus] = useState('Submitted');
+```javascript
+// These are equivalent:
+import { setup, listen, publish } from 'webmq-frontend';
+setup('ws://localhost:8080');
 
-  useEffect(() => {
-    const topic = `order.status.${orderId}`;
-    
-    const handleUpdate = (update) => setStatus(update.status);
+// vs
+import { WebMQClient } from 'webmq-frontend';
+const client = new WebMQClient('ws://localhost:8080');
 
-    listen(topic, handleUpdate);
-    console.log(`Listening for updates on ${topic}`);
+// or
+const client = new WebMQClient();
+client.setup('ws://localhost:8080');
+```
 
-    // Cleanup function to unlisten when the component unmounts
-    return () => {
-      unlisten(topic, handleUpdate);
-      console.log(`Stopped listening on ${topic}`);
-    };
-  }, [orderId]); // Re-run effect if orderId changes
+For advanced features like logging or queue monitoring, you can either create a custom instance or import the singleton:
 
-  return <div>Order ID: {orderId} | Status: <strong>{status}</strong></div>;
-};
+```javascript
+// Custom instance approach
+const client = new WebMQClient('ws://localhost:8080');
+client.setLogLevel('debug');
+client.on('connect', () => console.log('Connected'));
 
-// Main component that contains the order form and status display
-export const OrderPlacer = () => {
-  const [orderId, setOrderId] = useState(null);
+// Singleton approach
+import { client } from 'webmq-frontend';
+client.setLogLevel('debug');
+client.on('connect', () => console.log('Connected'));
+```
 
-  const handlePlaceOrder = (event) => {
-    event.preventDefault();
-    const newId = crypto.randomUUID();
-    const orderDetails = { stock: 'GEM', quantity: 100, price: 1000 };
+Multiple clients can be created to connect to different backends:
 
-    console.log(`Placing order with ID: ${newId}`);
-    send(`order.create`, { ...orderDetails, id: newId });
-    
-    setOrderId(newId); // Show the status component
-  };
+```javascript
+const chatClient = new WebMQClient('ws://chat.example.com');
+const analyticsClient = new WebMQClient('ws://analytics.example.com');
+```
 
-  if (orderId) {
-    return <OrderStatus orderId={orderId} />;
+#### WebMQClient API
+
+**Constructor:**
+
+- `new WebMQClient(url?, options?)`: Create new client instance
+  - `url` (string, optional): WebSocket URL
+  - `options` (object, optional): Configuration options
+
+**Configuration Methods:**
+
+- `setup(url, options?)` (also available as standalone import): Configure connection
+  - `url` (string): WebSocket URL (e.g., 'ws://localhost:8080')
+  - `options` (object, optional):
+    - `maxReconnectAttempts` (number): Default 5
+    - `messageTimeout` (number): Timeout in ms, default 10000
+    - `maxQueueSize` (number): Offline queue size, default 100
+
+**Core Methods:**
+
+- `connect()` (also available as standalone import): Explicitly connect to server
+  - Returns: Promise<void>
+  - Note: Auto-called by listen/publish
+- `listen(bindingKey, callback)` (also available as standalone import): Subscribe to events
+  - `bindingKey` (string): Topic pattern to subscribe to
+  - `callback` (function): Handler receiving payload
+  - Returns: Promise<void>
+- `publish(routingKey, payload)` (also available as standalone import): Publish events
+  - `routingKey` (string): Topic to publish to
+  - `payload` (any): Data to send (will be JSON.stringify'd)
+  - Returns: Promise<void> (resolves on server ACK)
+- `disconnect(options?)` (also available as standalone import): Disconnect from server
+  - `options` (object, optional):
+    - `onActiveListeners` ('ignore' | 'throw' | 'clear'): Default 'ignore'
+
+**Advanced Methods:**
+
+- `setLogLevel(level)`: Set logging level
+  - `level` ('silent' | 'error' | 'warn' | 'info' | 'debug')
+- `getQueueSize()`: Get number of queued offline messages
+  - Returns: number
+- `clearQueue()`: Clear all queued messages
+
+**Events (extends EventEmitter):**
+
+- `'connect'`: Initial connection established
+- `'disconnect'`: Connection lost
+- `'reconnect'`: Connection restored after being lost
+
+### Backend API
+
+#### WebMQServer Class
+
+**`new WebMQServer(options)`**
+
+- `options` (object):
+  - `rabbitmqUrl` (string): AMQP connection URL
+  - `exchangeName` (string): RabbitMQ exchange name
+  - `exchangeDurable` (boolean, optional): Default false
+  - `hooks` (object, optional):
+    - `pre` (Hook[]): Run before all actions
+    - `onListen` (Hook[]): Run for 'listen' actions
+    - `onPublish` (Hook[]): Run for 'publish' actions
+    - `onUnlisten` (Hook[]): Run for 'unlisten' actions
+
+**Instance Methods:**
+
+- `start(port)`: Start WebSocket server on port
+- `stop()`: Stop server and cleanup
+- `setLogLevel(level)`: Set logging level
+
+**Events (extends EventEmitter):**
+
+- `'client.connected'`: { connectionId }
+- `'client.disconnected'`: { connectionId }
+- `'message.received'`: { connectionId, message }
+- `'message.processed'`: { connectionId, message }
+- `'subscription.created'`: { connectionId, bindingKey, queue }
+- `'subscription.removed'`: { connectionId, bindingKey }
+- `'error'`: { connectionId?, error, context? }
+
+### Usage Examples
+
+**Basic Setup**:
+
+```javascript
+// Frontend
+import { setup, listen, publish } from 'webmq-frontend';
+setup('ws://localhost:8080');
+listen('notifications.*', console.log);
+await publish('user.action', { type: 'click' });
+
+// Backend
+import { WebMQServer } from 'webmq-backend';
+const server = new WebMQServer({
+  rabbitmqUrl: 'amqp://localhost',
+  exchangeName: 'my_app'
+});
+await server.start(8080);
+```
+
+**Connection State Monitoring**:
+
+```javascript
+import { client } from 'webmq-frontend';
+client.on('connect', () => console.log('Connected'));
+client.on('disconnect', () => console.log('Disconnected'));
+console.log(`Queue size: ${client.getQueueSize()}`);
+```
+
+**Error Handling**:
+
+```javascript
+try {
+  await publish('critical.data', payload);
+} catch (error) {
+  if (error.message.includes('timeout')) {
+    // Retry logic
+  } else {
+    // Handle other errors
   }
-
-  return (
-    <form onSubmit={handlePlaceOrder}>
-      <p>Stock: GEM, Quantity: 100</p>
-      <button type="submit">Place Order</button>
-    </form>
-  );
-};
+}
 ```
 
-### Example 2: Data Fetching (Activity Feed)
+## Future Features
 
-This pattern replaces a traditional `GET` request. The client requests a "virtual" resource, and a backend worker gathers the data and publishes it back to a topic unique to that request. This is useful for populating lists, dashboards, or feeds.
+- **Request-response pattern**: `const result = await request('user.get', { id: 123 })`
+- **Presence system**: Track which users are online/offline
+- **Room/namespace support**: Isolate message spaces for multi-tenant apps
+- **Rate limiting**: Per-connection and per-user message throttling
+- **Message persistence**: Store-and-forward for offline clients
+- **Health checks**: Monitoring endpoints for production deployments
+- **Alternative serialization**: MessagePack for performance-critical applications
 
-**Frontend React Component**
+## For Contributors
 
-```jsx
-import React, { useState, useEffect } from 'react';
-import { send, listen, unlisten } from 'webmq-frontend';
+### Prerequisites
 
-export const ActivityFeed = () => {
-  const [activities, setActivities] = useState([]);
+- Node.js 18+
+- Docker and Docker Compose
+- npm 7+
 
-  useEffect(() => {
-    const feedId = crypto.randomUUID();
-    const topic = `activity_feed.data.${feedId}`;
+### Development Setup
 
-    const handleNewActivities = (data) => {
-      // Add new activities to the list
-      setActivities(current => [...current, ...data.activities]);
-    };
+1. **Start RabbitMQ**:
 
-    console.log(`Listening for activity feed on ${topic}`);
-    listen(topic, handleNewActivities);
+   ```bash
+   docker-compose up -d
+   ```
 
-    // Request the activity feed by sending an event
-    console.log(`Requesting activity feed with ID: ${feedId}`);
-    send(`activity_feed.get`, { feedId, count: 20 });
+2. **Install dependencies**:
 
-    // Cleanup on unmount
-    return () => unlisten(topic, handleNewActivities);
-  }, []); // Runs once when the component mounts
+   ```bash
+   npm install
+   ```
 
-  return (
-    <ul>
-      {activities.map(activity => (
-        <li key={activity.id}>{activity.text}</li>
-      ))}
-    </ul>
-  );
-};
+3. **Build packages**:
+
+   ```bash
+   npm run build
+   ```
+
+4. **Run example**:
+
+   ```bash
+   npm run start:chat
+   ```
+
+### Project Structure
+
+```
+packages/
+├── backend/     # Node.js WebSocket server library
+└── frontend/    # Framework-agnostic client library
+examples/
+├── basic-chat/  # Simple chat application
+└── stock_order/ # Async workflow example
+e2e-tests/       # Integration tests
 ```
 
-**Backend Worker (Pseudocode)**
+### Development Commands
 
-A separate backend service (written in any language, e.g., Python, Go, or another Node.js process) would be listening for the `activity_feed.get` event.
+```bash
+# Build specific packages
+npm run build -w webmq-backend
+npm run build -w webmq-frontend
 
-```python
-# Example Python worker using the 'pika' library
+# Run tests
+npm run test -w webmq-backend
+npm run test -w webmq-frontend
+npm test  # Run e2e tests
 
-def on_feed_request(channel, method, properties, body):
-    message = json.loads(body)
-    feed_id = message['feedId']
-    
-    # 1. Fetch data from a database or other services
-    activities = db.get_latest_activities(count=message['count'])
-    
-    # 2. Publish the data back to the specific topic the client is listening on
-    response_topic = f"activity_feed.data.{feed_id}"
-    channel.basic_publish(
-        exchange='my_app_exchange', 
-        routing_key=response_topic, 
-        body=json.dumps({ 'activities': activities })
-    )
-
-# Listen on a queue bound to the 'activity_feed.get' routing key
-channel.basic_consume(queue='feed_requests', on_message_callback=on_feed_request, auto_ack=True)
-channel.start_consuming()
+# Development mode
+npm run dev -w webmq-backend    # TypeScript watch
+npm run dev -w webmq-frontend   # ESBuild watch
 ```
 
----
-
-## Potential Future Features
-
-(TODO: update this section if we already implemented something)
-
-This section tracks potential enhancements that could be added to WebMQ in the future.
-
-### Frontend Features
-
-- **Connection Management:**
-  - ✅ `disconnect()` method to manually close connection (implemented)
-  - ✅ Automatic reconnection with exponential backoff (implemented)
-  - ✅ Connection state events (`connect`, `disconnect`, `reconnect`) (implemented)
-  - Connection timeout configuration
-  - `isConnected()` status method
-
-- **Message Features:**
-  - ✅ Message acknowledgments/confirmations from server (implemented)
-  - ✅ Message queuing when disconnected (with configurable limits) (implemented)
-  - Request-response pattern (`request(topic, data)` returns Promise)
-  - Message filtering/transformation functions
-  - Message batching to reduce WebSocket overhead
-  - Hooks for Frontend
-
-- **Developer Experience:**
-  - Debug mode with verbose logging
-  - TypeScript interfaces for message payloads
-  - Connection health monitoring
-
-- **Authentication:**
-  - Auth token support in `setup()` options
-  - Token refresh handling
-
-### Backend Features
-
-- **Production Readiness:**
-  - Authentication middleware (JWT validation, user context)
-  - Rate limiting per connection/user
-  - Graceful shutdown handling
-  - Health checks endpoint for monitoring
-
-- **Message Processing:**
-  - Message persistence (store-and-forward for offline clients)
-  - Message transformation hooks (validation, sanitization)
-  - Dead letter queues for failed messages
-  - Multiple exchange support (not just topic)
-
-### Coordinated Frontend + Backend Features
-
-- **Enhanced Communication:**
-  - Request-response pattern (requires coordination between frontend and backend)
-  - Message acknowledgments (server confirms delivery)
-  - Presence system (who's online/offline)
-  - Room/namespace support (isolated message spaces)
-  - Look into (de)serialization options for speed and memory (msgpack perhaps?)
-
-### Priority Recommendations
-
-The highest impact additions would be:
-
-1. **Backend auth middleware** (production necessity)
-2. **Frontend auto-reconnection** (reliability)
-3. **Request-response pattern** (developer experience)
+The RabbitMQ management UI is available at <http://localhost:15672> (guest/guest).

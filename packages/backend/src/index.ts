@@ -67,7 +67,7 @@ interface WebMQServerOptions {
   hooks?: {
     pre?: Hook[];
     onListen?: Hook[];
-    onEmit?: Hook[];
+    onPublish?: Hook[];
     onUnlisten?: Hook[];
   };
 }
@@ -133,6 +133,13 @@ export class SubscriptionManager {
     return { queue, consumerTag };
   }
 
+  async subscribeJSON(bindingKey: string, messageHandler: (payload: any) => void): Promise<Subscription> {
+    return this.subscribe(bindingKey, (msg) => {
+      const payload = JSON.parse(msg.content.toString());
+      messageHandler(payload);
+    });
+  }
+
   async unsubscribe(subscription: Subscription, bindingKey: string): Promise<void> {
     // Check if channel is still open before attempting cleanup
     if (!this.channel || (this.channel as any).closing || (this.channel as any).closed) {
@@ -177,10 +184,22 @@ export class SubscriptionManager {
 
 // --- Backend Implementation ---
 
-// TODO: Add usage examples in the docstring
 /**
- * WebMQServer emits the following events:
+ * WebMQ backend server that bridges WebSocket connections with RabbitMQ message broker.
  *
+ * @example
+ * ```javascript
+ * import { WebMQServer } from 'webmq-backend';
+ *
+ * const server = new WebMQServer({
+ *   rabbitmqUrl: 'amqp://localhost',
+ *   exchangeName: 'my_exchange'
+ * });
+ *
+ * await server.start(8080);
+ * ```
+ *
+ * Events emitted by WebMQServer:
  * - 'client.connected': { connectionId: string }
  * - 'client.disconnected': { connectionId: string }
  * - 'message.received': { connectionId: string; message: ClientMessage }
@@ -207,7 +226,7 @@ export class WebMQServer extends EventEmitter {
     this.hooks = {
       pre: options.hooks?.pre || [],
       onListen: options.hooks?.onListen || [],
-      onEmit: options.hooks?.onEmit || [],
+      onPublish: options.hooks?.onPublish || [],
       onUnlisten: options.hooks?.onUnlisten || [],
     };
   }
@@ -465,7 +484,7 @@ export class WebMQServer extends EventEmitter {
       case 'unlisten':
         return [...this.hooks.pre, ...this.hooks.onUnlisten];
       case 'publish':
-        return [...this.hooks.pre, ...this.hooks.onEmit];
+        return [...this.hooks.pre, ...this.hooks.onPublish];
       default:
         return this.hooks.pre;
     }
