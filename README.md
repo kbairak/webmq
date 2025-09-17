@@ -29,7 +29,7 @@ console.log('WebMQ server running on ws://localhost:8080');
 **Frontend** (React component):
 
 ```jsx
-import { setup, listen, publish } from 'webmq-frontend';
+import { setup, listen, unlisten, publish } from 'webmq-frontend';
 import { useState, useEffect } from 'react';
 
 setup('ws://localhost:8080');
@@ -39,9 +39,11 @@ export function Chat() {
   const [input, setInput] = useState('');
 
   useEffect(() => {
-    listen('chat.messages', (msg) => {
-      setMessages(prev => [...prev, msg]);
-    });
+    function _appendMessage(msg) {
+      setMessages((prev) => [...prev, msg]);
+    }
+    listen('chat.messages', _appendMessage);
+    return () => unlisten('chat.messages', _appendMessage);
   }, []);
 
   const sendMessage = () => {
@@ -69,7 +71,9 @@ WebMQ acts as a bridge between WebSocket connections and RabbitMQ's topic exchan
 
 **Bidirectional Flow**: Frontends can both publish events and subscribe to updates. Backend services can process events and publish results back to specific users or broadcast to all connected clients.
 
-**Hooks**: WebMQ uses Express-style middleware hooks to intercept and process messages. Each hook receives a `context` (connection data), `message` (the client request), and `next` function. Call `await next()` to continue to the next hook, return without calling `next` to abort silently, or throw an error to reject the request.
+### Server-Side Hooks
+
+WebMQ uses Express-style middleware hooks to intercept and process messages on the backend. Each hook receives a `context` (connection data), `message` (the client request), and `next` function. Call `await next()` to continue to the next hook, return without calling `next` to abort silently, or throw an error to reject the request.
 
 ```javascript
 // Authentication hook
@@ -121,6 +125,131 @@ const server = new WebMQServer({
 });
 ```
 
+### Client-Side Hooks
+
+WebMQ also supports middleware-style hooks on the frontend to intercept and process messages before they're sent or received. Client-side hooks follow the exact same Express-style pattern as backend hooks, using `context`, `message`, and `next()` parameters.
+
+```javascript
+import { setup } from 'webmq-frontend';
+
+// Authentication hook - add tokens to all publish requests
+const authenticationHook = async (context, message, next) => {
+  if (!message.payload) message.payload = {};
+  message.payload.token = localStorage.getItem('authToken');
+  await next();
+};
+
+// Logging hook - track all messages
+const loggingHook = async (context, message, next) => {
+  console.log('Processing:', message.action, message.routingKey || message.bindingKey);
+  await next();
+};
+
+// Message transformation hook - decrypt incoming messages
+const decryptionHook = async (context, message, next) => {
+  if (message.payload && message.payload.encrypted) {
+    message.payload.data = decrypt(message.payload.encrypted);
+    delete message.payload.encrypted;
+  }
+  await next();
+};
+
+setup('ws://localhost:8080', {
+  hooks: {
+    pre: [loggingHook],                           // Run before all actions
+    onPublish: [authenticationHook],              // Run only for publish actions
+    onListen: [],                                 // Run only for listen actions
+    onMessage: [decryptionHook]                   // Run for incoming messages
+  }
+});
+```
+
+**Hook Types:**
+
+- **`pre`**: Runs before all actions (publish, listen, message processing)
+- **`onPublish`**: Runs only when publishing messages, can modify `message.routingKey` and `message.payload`
+- **`onListen`**: Runs only when setting up listeners, can modify `message.bindingKey`
+- **`onMessage`**: Runs for all incoming messages, can modify `message.payload` before callbacks
+
+**Hook Parameters:**
+
+Each hook receives three parameters, matching the backend pattern:
+
+- **`context`**: Persistent object containing `client` reference and user data
+- **`message`**: Action-specific data containing:
+  - `action`: The type of action ('publish', 'listen', 'message')
+  - `routingKey`: Topic being published to (publish actions)
+  - `payload`: Message data (publish, message actions)
+  - `bindingKey`: Topic pattern being listened to (listen, message actions)
+  - `callback`: Message handler function (listen actions)
+- **`next`**: Function to continue to the next hook or main action
+
+The context persists across different actions, allowing hooks to maintain state:
+
+```javascript
+const sessionHook = async (context, message, next) => {
+  if (!context.sessionId) {
+    context.sessionId = generateSessionId();
+  }
+  // sessionId will be available in all subsequent hook calls
+  await next();
+};
+```
+
+**Error Handling:**
+
+If a hook throws an error, the action is aborted:
+
+- Publishing: The publish promise rejects
+- Listening: The listen promise rejects
+- Message processing: The message callback is not called
+
+### Logging Configuration
+
+Both frontend and backend support configurable logging levels for debugging and monitoring:
+
+```javascript
+// Frontend logging
+import { client } from 'webmq-frontend';
+client.setLogLevel('debug'); // 'silent' | 'error' | 'warn' | 'info' | 'debug'
+
+// Backend logging
+const server = new WebMQServer({ /* ... */ });
+server.setLogLevel('info');
+```
+
+### EventEmitter Events
+
+Both WebMQClient and WebMQServer extend EventEmitter, providing connection state monitoring:
+
+**Frontend Events:**
+
+- `'connect'`: Initial connection established
+- `'disconnect'`: Connection lost
+- `'reconnect'`: Connection restored after being lost
+
+**Backend Events:**
+
+- `'client.connected'`: { connectionId }
+- `'client.disconnected'`: { connectionId }
+- `'message.received'`: { connectionId, message }
+- `'message.processed'`: { connectionId, message }
+- `'subscription.created'`: { connectionId, bindingKey, queue }
+- `'subscription.removed'`: { connectionId, bindingKey }
+- `'error'`: { connectionId?, error, context? }
+
+```javascript
+// Frontend event monitoring
+import { client } from 'webmq-frontend';
+client.on('connect', () => console.log('Connected'));
+client.on('disconnect', () => console.log('Disconnected'));
+
+// Backend event monitoring
+server.on('client.connected', ({ connectionId }) => {
+  console.log(`Client ${connectionId} connected`);
+});
+```
+
 ## Features
 
 - **Auto-reconnection**: Exponential backoff handles network interruptions
@@ -128,6 +257,7 @@ const server = new WebMQServer({
 - **Offline queuing**: Messages sent while disconnected are queued and sent on reconnect
 - **Graceful shutdowns**: Proper cleanup of connections and resources
 - **Flexible authentication**: Middleware-style hooks for custom auth logic
+- **Client-side hooks**: Express-style middleware for frontend message processing
 - **Topic wildcards**: Subscribe to event patterns with `*` and `#` wildcards
 - **Connection events**: React to connect/disconnect/reconnect states
 - **Framework agnostic**: Works with React, Vue, Angular, or vanilla JS
@@ -154,19 +284,7 @@ const client = new WebMQClient();
 client.setup('ws://localhost:8080');
 ```
 
-For advanced features like logging or queue monitoring, you can either create a custom instance or import the singleton:
-
-```javascript
-// Custom instance approach
-const client = new WebMQClient('ws://localhost:8080');
-client.setLogLevel('debug');
-client.on('connect', () => console.log('Connected'));
-
-// Singleton approach
-import { client } from 'webmq-frontend';
-client.setLogLevel('debug');
-client.on('connect', () => console.log('Connected'));
-```
+For advanced features like logging or queue monitoring, you can either create a custom instance or import the singleton. See [Logging Configuration](#logging-configuration) and [EventEmitter Events](#eventemitter-events) in Core Concepts.
 
 Multiple clients can be created to connect to different backends:
 
@@ -191,6 +309,11 @@ const analyticsClient = new WebMQClient('ws://analytics.example.com');
     - `maxReconnectAttempts` (number): Default 5
     - `messageTimeout` (number): Timeout in ms, default 10000
     - `maxQueueSize` (number): Offline queue size, default 100
+    - `hooks` (object, optional): Client-side middleware hooks
+      - `pre` (ClientHook[]): Run before all actions
+      - `onPublish` (ClientHook[]): Run for 'publish' actions
+      - `onListen` (ClientHook[]): Run for 'listen' actions
+      - `onMessage` (ClientHook[]): Run for incoming messages
 
 **Core Methods:**
 
@@ -211,17 +334,9 @@ const analyticsClient = new WebMQClient('ws://analytics.example.com');
 
 **Advanced Methods:**
 
-- `setLogLevel(level)`: Set logging level
-  - `level` ('silent' | 'error' | 'warn' | 'info' | 'debug')
 - `getQueueSize()`: Get number of queued offline messages
   - Returns: number
 - `clearQueue()`: Clear all queued messages
-
-**Events (extends EventEmitter):**
-
-- `'connect'`: Initial connection established
-- `'disconnect'`: Connection lost
-- `'reconnect'`: Connection restored after being lost
 
 ### Backend API
 
@@ -243,17 +358,6 @@ const analyticsClient = new WebMQClient('ws://analytics.example.com');
 
 - `start(port)`: Start WebSocket server on port
 - `stop()`: Stop server and cleanup
-- `setLogLevel(level)`: Set logging level
-
-**Events (extends EventEmitter):**
-
-- `'client.connected'`: { connectionId }
-- `'client.disconnected'`: { connectionId }
-- `'message.received'`: { connectionId, message }
-- `'message.processed'`: { connectionId, message }
-- `'subscription.created'`: { connectionId, bindingKey, queue }
-- `'subscription.removed'`: { connectionId, bindingKey }
-- `'error'`: { connectionId?, error, context? }
 
 ### Usage Examples
 
@@ -275,15 +379,6 @@ const server = new WebMQServer({
 await server.start(8080);
 ```
 
-**Connection State Monitoring**:
-
-```javascript
-import { client } from 'webmq-frontend';
-client.on('connect', () => console.log('Connected'));
-client.on('disconnect', () => console.log('Disconnected'));
-console.log(`Queue size: ${client.getQueueSize()}`);
-```
-
 **Error Handling**:
 
 ```javascript
@@ -300,9 +395,6 @@ try {
 
 ## Future Features
 
-- **Request-response pattern**: `const result = await request('user.get', { id: 123 })`
-- **Presence system**: Track which users are online/offline
-- **Room/namespace support**: Isolate message spaces for multi-tenant apps
 - **Rate limiting**: Per-connection and per-user message throttling
 - **Message persistence**: Store-and-forward for offline clients
 - **Health checks**: Monitoring endpoints for production deployments

@@ -89,14 +89,6 @@ emit('chat.room.1', data);
 
 ## Known Issues
 
-**Critical TypeScript Issue**: The backend package (`packages/backend/src/index.ts`) has persistent TypeScript compilation errors related to `amqplib` type definitions. This prevents:
-
-- Backend TypeScript compilation (`npm run build -w webmq-backend`)
-- Running backend tests
-- Building from TypeScript source
-
-The runtime JavaScript works correctly (see `examples/basic-chat/backend.js`), but TypeScript source cannot be compiled. This is the primary technical debt to resolve.
-
 **Channel Error Handling**: The backend currently uses a shared RabbitMQ channel for all WebSocket connections without error recovery. In production, we need to implement:
 
 - Channel error handling and automatic recreation

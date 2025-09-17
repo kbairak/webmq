@@ -944,5 +944,358 @@ describe('WebMQClient (Singleton)', () => {
         }));
       });
     });
+
+    describe('client-side hooks', () => {
+      describe('onPublish hooks', () => {
+        it('should execute onPublish hooks before sending messages', async () => {
+          const hookSpy = jest.fn(async (context, message, next) => await next());
+          client.setup('ws://localhost:8080', {
+            hooks: { onPublish: [hookSpy] }
+          });
+
+          const promise = client.publish('test.key', { data: 'test' });
+          // Small delay for async hook execution
+          await new Promise(resolve => setTimeout(resolve, 0));
+          triggerEvent('open');
+
+          // Acknowledge the message
+          const sentMessage = JSON.parse(mockSend.mock.calls[0][0]);
+          triggerEvent('message', JSON.stringify({
+            type: 'ack',
+            messageId: sentMessage.messageId,
+            status: 'success'
+          }));
+
+          await promise;
+
+          expect(hookSpy).toHaveBeenCalledWith(
+            expect.objectContaining({
+              client
+            }),
+            expect.objectContaining({
+              action: 'publish',
+              routingKey: 'test.key',
+              payload: { data: 'test' }
+            }),
+            expect.any(Function)
+          );
+        });
+
+        it('should allow hooks to modify routingKey and payload', async () => {
+          const modifyHook = jest.fn(async (context, message, next) => {
+            message.routingKey = 'modified.key';
+            message.payload = { modified: true };
+            await next();
+          });
+          client.setup('ws://localhost:8080', {
+            hooks: { onPublish: [modifyHook] }
+          });
+
+          const promise = client.publish('original.key', { original: true });
+          await new Promise(resolve => setTimeout(resolve, 0));
+          triggerEvent('open');
+
+          const sentMessage = JSON.parse(mockSend.mock.calls[0][0]);
+          expect(sentMessage).toEqual({
+            action: 'publish',
+            routingKey: 'modified.key',
+            payload: { modified: true },
+            messageId: expect.any(String)
+          });
+        });
+
+        it('should throw error if onPublish hook fails', async () => {
+          const failingHook = jest.fn(async () => {
+            throw new Error('Hook failed');
+          });
+          client.setup('ws://localhost:8080', {
+            hooks: { onPublish: [failingHook] }
+          });
+
+          await expect(client.publish('test.key', { data: 'test' }))
+            .rejects.toThrow('Hook failed');
+        });
+
+        it('should execute multiple onPublish hooks in order', async () => {
+          const order: number[] = [];
+          const hook1 = jest.fn(async (context, message, next) => {
+            order.push(1);
+            await next();
+            order.push(4);
+          });
+          const hook2 = jest.fn(async (context, message, next) => {
+            order.push(2);
+            await next();
+            order.push(3);
+          });
+          client.setup('ws://localhost:8080', {
+            hooks: { onPublish: [hook1, hook2] }
+          });
+
+          const promise = client.publish('test.key', { data: 'test' });
+          await new Promise(resolve => setTimeout(resolve, 0));
+          triggerEvent('open');
+
+          const sentMessage = JSON.parse(mockSend.mock.calls[0][0]);
+          triggerEvent('message', JSON.stringify({
+            type: 'ack',
+            messageId: sentMessage.messageId,
+            status: 'success'
+          }));
+
+          await promise;
+
+          expect(order).toEqual([1, 2, 3, 4]);
+        });
+      });
+
+      describe('onListen hooks', () => {
+        it('should execute onListen hooks before setting up listeners', async () => {
+          const hookSpy = jest.fn(async (context, message, next) => await next());
+          client.setup('ws://localhost:8080', {
+            hooks: { onListen: [hookSpy] }
+          });
+
+          await client.listen('test.key', () => {});
+
+          expect(hookSpy).toHaveBeenCalledWith(
+            expect.objectContaining({
+              client
+            }),
+            expect.objectContaining({
+              action: 'listen',
+              bindingKey: 'test.key',
+              callback: expect.any(Function)
+            }),
+            expect.any(Function)
+          );
+        });
+
+        it('should allow hooks to modify bindingKey', async () => {
+          const modifyHook = jest.fn(async (context, message, next) => {
+            message.bindingKey = 'modified.key';
+            await next();
+          });
+          client.setup('ws://localhost:8080', {
+            hooks: { onListen: [modifyHook] }
+          });
+
+          const promise = client.listen('original.key', () => {});
+          await new Promise(resolve => setTimeout(resolve, 0));
+          triggerEvent('open');
+          await promise;
+
+          expect(mockSend).toHaveBeenCalledWith(JSON.stringify({
+            action: 'listen',
+            bindingKey: 'modified.key'
+          }));
+        });
+
+        it('should throw error if onListen hook fails', async () => {
+          const failingHook = jest.fn(async () => {
+            throw new Error('Hook failed');
+          });
+          client.setup('ws://localhost:8080', {
+            hooks: { onListen: [failingHook] }
+          });
+
+          await expect(client.listen('test.key', () => {}))
+            .rejects.toThrow('Hook failed');
+        });
+      });
+
+      describe('onMessage hooks', () => {
+        it('should execute onMessage hooks when receiving messages', async () => {
+          const hookSpy = jest.fn(async (context, message, next) => await next());
+          client.setup('ws://localhost:8080', {
+            hooks: { onMessage: [hookSpy] }
+          });
+
+          const callback = jest.fn();
+          const promise = client.listen('test.key', callback);
+          await new Promise(resolve => setTimeout(resolve, 0));
+          triggerEvent('open');
+          await promise;
+
+          triggerEvent('message', JSON.stringify({
+            type: 'message',
+            bindingKey: 'test.key',
+            payload: { data: 'test' }
+          }));
+
+          await new Promise(resolve => setTimeout(resolve, 0));
+
+          expect(hookSpy).toHaveBeenCalledWith(
+            expect.objectContaining({
+              client
+            }),
+            expect.objectContaining({
+              action: 'message',
+              bindingKey: 'test.key',
+              payload: { data: 'test' }
+            }),
+            expect.any(Function)
+          );
+          expect(callback).toHaveBeenCalledWith({ data: 'test' });
+        });
+
+        it('should allow hooks to modify payload before callbacks', async () => {
+          const modifyHook = jest.fn(async (context, message, next) => {
+            message.payload = { modified: true };
+            await next();
+          });
+          client.setup('ws://localhost:8080', {
+            hooks: { onMessage: [modifyHook] }
+          });
+
+          const callback = jest.fn();
+          const promise = client.listen('test.key', callback);
+          await new Promise(resolve => setTimeout(resolve, 0));
+          triggerEvent('open');
+          await promise;
+
+          triggerEvent('message', JSON.stringify({
+            type: 'message',
+            bindingKey: 'test.key',
+            payload: { original: true }
+          }));
+
+          await new Promise(resolve => setTimeout(resolve, 0));
+
+          expect(callback).toHaveBeenCalledWith({ modified: true });
+        });
+
+        it('should skip callbacks if onMessage hook fails', async () => {
+          const failingHook = jest.fn(async () => {
+            throw new Error('Hook failed');
+          });
+          client.setup('ws://localhost:8080', {
+            hooks: { onMessage: [failingHook] }
+          });
+
+          const callback = jest.fn();
+          const promise = client.listen('test.key', callback);
+          await new Promise(resolve => setTimeout(resolve, 0));
+          triggerEvent('open');
+          await promise;
+
+          triggerEvent('message', JSON.stringify({
+            type: 'message',
+            bindingKey: 'test.key',
+            payload: { data: 'test' }
+          }));
+
+          await new Promise(resolve => setTimeout(resolve, 0));
+
+          expect(callback).not.toHaveBeenCalled();
+        });
+      });
+
+      describe('pre hooks', () => {
+        it('should execute pre hooks before action-specific hooks', async () => {
+          const order: string[] = [];
+          const preHook = jest.fn(async (context, message, next) => {
+            order.push('pre');
+            await next();
+          });
+          const publishHook = jest.fn(async (context, message, next) => {
+            order.push('onPublish');
+            await next();
+          });
+          client.setup('ws://localhost:8080', {
+            hooks: {
+              pre: [preHook],
+              onPublish: [publishHook]
+            }
+          });
+
+          const promise = client.publish('test.key', { data: 'test' });
+          await new Promise(resolve => setTimeout(resolve, 0));
+          triggerEvent('open');
+
+          const sentMessage = JSON.parse(mockSend.mock.calls[0][0]);
+          triggerEvent('message', JSON.stringify({
+            type: 'ack',
+            messageId: sentMessage.messageId,
+            status: 'success'
+          }));
+
+          await promise;
+
+          expect(order).toEqual(['pre', 'onPublish']);
+        });
+
+        it('should allow pre hooks to modify context for all actions', async () => {
+          const contextEnhancingHook = jest.fn(async (context, message, next) => {
+            context.enhanced = true;
+            await next();
+          });
+          const publishHook = jest.fn(async (context, message, next) => {
+            expect(context.enhanced).toBe(true);
+            await next();
+          });
+          client.setup('ws://localhost:8080', {
+            hooks: {
+              pre: [contextEnhancingHook],
+              onPublish: [publishHook]
+            }
+          });
+
+          const promise = client.publish('test.key', { data: 'test' });
+          await new Promise(resolve => setTimeout(resolve, 0));
+          triggerEvent('open');
+
+          const sentMessage = JSON.parse(mockSend.mock.calls[0][0]);
+          triggerEvent('message', JSON.stringify({
+            type: 'ack',
+            messageId: sentMessage.messageId,
+            status: 'success'
+          }));
+
+          await promise;
+
+          expect(contextEnhancingHook).toHaveBeenCalled();
+          expect(publishHook).toHaveBeenCalled();
+        });
+      });
+
+      describe('persistent context', () => {
+        it('should maintain context across different hook calls', async () => {
+          let savedContext: any;
+          const preHook = jest.fn(async (context, message, next) => {
+            context.sessionId = 'test-session';
+            savedContext = context;
+            await next();
+          });
+          client.setup('ws://localhost:8080', {
+            hooks: { pre: [preHook] }
+          });
+
+          // First action
+          const promise1 = client.publish('test.key1', { data: 1 });
+          await new Promise(resolve => setTimeout(resolve, 0));
+          triggerEvent('open');
+
+          const sentMessage1 = JSON.parse(mockSend.mock.calls[0][0]);
+          triggerEvent('message', JSON.stringify({
+            type: 'ack',
+            messageId: sentMessage1.messageId,
+            status: 'success'
+          }));
+
+          await promise1;
+
+          // Second action - context should persist
+          mockSend.mockClear();
+          const promise2 = client.listen('test.key2', () => {});
+          await promise2;
+
+          expect(preHook).toHaveBeenCalledTimes(2);
+          // Both calls should use the same context object
+          expect(preHook.mock.calls[1][0]).toBe(savedContext);
+          expect(preHook.mock.calls[1][0].sessionId).toBe('test-session');
+        });
+      });
+    });
   });
 });
