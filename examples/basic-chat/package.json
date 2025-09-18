@@ -6,7 +6,7 @@
   "scripts": {
     "start:backend": "node backend.js",
     "start:frontend": "vite",
-    "start": "npm run start:backend & npm run start:frontend"
+    "start": "concurrently \"npm run start:backend\" \"npm run start:frontend\" --names \"backend,frontend\" --prefix-colors \"blue,green\""
   },
   "author": "",
   "license": "ISC",
@@ -16,6 +16,7 @@
     "webmq-frontend": "1.0.0"
   },
   "devDependencies": {
-    "vite": "^7.1.5"
+    "vite": "^7.1.5",
+    "concurrently": "^9.2.1"
   }
 }
