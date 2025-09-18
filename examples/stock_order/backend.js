@@ -1,4 +1,4 @@
-import { WebMQServer, SubscriptionManager } from 'webmq-backend';
+import { WebMQServer, RabbitMQManager } from 'webmq-backend';
 import { RabbitMQContainer } from '@testcontainers/rabbitmq';
 import amqplib from 'amqplib';
 
@@ -11,31 +11,31 @@ const server = new WebMQServer({
 server.setLogLevel('info');
 await server.start(8080);
 
-// Use SubscriptionManager for cleaner AMQP handling
+// Use RabbitMQManager for cleaner AMQP handling
 const connection = await amqplib.connect(rabbitmq.getAmqpUrl());
 const channel = await connection.createChannel();
 await channel.assertExchange('stock_order_exchange', 'topic', { durable: false });
 
-const subscriptionManager = new SubscriptionManager(channel, 'stock_order_exchange');
+const rabbitMQManager = new RabbitMQManager(channel, 'stock_order_exchange');
 
-await subscriptionManager.subscribeJSON('orders.create', async (order) => {
+await rabbitMQManager.subscribeJSON('orders.create', async (order) => {
   await new Promise((resolve) => setTimeout(resolve, 2000));
 
   order.status = 'Retrieving FX rate';
-  await subscriptionManager.publish(`orders.updated.${order.id}`, order);
+  await rabbitMQManager.publish(`orders.updated.${order.id}`, order);
 
   await new Promise((resolve) => setTimeout(resolve, 2000));
 
   order.fx_rate = 1.1;
   order.amount_usd = order.amount_eur * order.fx_rate;
   order.status = 'Placing order with stock provider';
-  await subscriptionManager.publish(`orders.updated.${order.id}`, order);
+  await rabbitMQManager.publish(`orders.updated.${order.id}`, order);
 
   await new Promise((resolve) => setTimeout(resolve, 2000));
 
   order.units = order.amount_eur * 0.0428;
   order.status = 'Waiting for delivery';
-  await subscriptionManager.publish(`orders.updated.${order.id}`, order);
+  await rabbitMQManager.publish(`orders.updated.${order.id}`, order);
 });
 
 // Graceful shutdown handling

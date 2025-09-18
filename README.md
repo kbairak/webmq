@@ -86,8 +86,8 @@ WebMQ uses clean, modular architectures in both frontend and backend to ensure m
 **Backend Strategy Pattern**: Actions are handled by dedicated strategy classes that co-locate validation, execution, and response logic:
 
 - **PublishStrategy**: Message publishing with success/failure acknowledgments
-- **ListenStrategy**: Subscription setup with event emission
-- **UnlistenStrategy**: Subscription cleanup with proper resource management
+- **ListenStrategy**: RabbitMQSubscription setup with event emission
+- **UnlistenStrategy**: RabbitMQSubscription cleanup with proper resource management
 - **MessageProcessor**: Centralized strategy selection and execution
 
 This architecture ensures that actions and their consequences (like publish/ack or listen/events) are located together, making the codebase easier to understand and maintain.

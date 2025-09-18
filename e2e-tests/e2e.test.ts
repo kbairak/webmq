@@ -1,4 +1,4 @@
-import { WebMQServer, SubscriptionManager } from 'webmq-backend';
+import { WebMQServer, RabbitMQManager } from 'webmq-backend';
 import { WebMQClient } from 'webmq-frontend';
 import { getRabbitMQConnection } from './rabbitmq-utils';
 import amqplib from 'amqplib';
@@ -10,7 +10,7 @@ let webmqServer: WebMQServer;
 let webmqClient: WebMQClient;
 let serverPort: number;
 let workerConnection: amqplib.ChannelModel;
-let subscriptionManager: SubscriptionManager;
+let rabbitMQManager: RabbitMQManager;
 
 async function findFreePort(startPort: number = 8080): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -37,12 +37,12 @@ beforeAll(async () => {
   // Set up worker connection and subscription manager
   workerConnection = await amqplib.connect(rabbitmqUrl);
   const channel = await workerConnection.createChannel();
-  await channel.assertExchange('e2e_exchange', 'topic', { durable: false });
-  subscriptionManager = new SubscriptionManager(channel, 'e2e_exchange');
+  await channel.assertExchange('e2e_exchange_durable', 'topic', { durable: true });
+  rabbitMQManager = new RabbitMQManager(channel, 'e2e_exchange_durable');
 
   webmqServer = new WebMQServer({
     rabbitmqUrl: rabbitmqUrl,
-    exchangeName: 'e2e_exchange',
+    exchangeName: 'e2e_exchange_durable',
   });
   webmqServer.setLogLevel('silent');
   await webmqServer.start(serverPort);
@@ -64,7 +64,7 @@ afterAll(async () => {
 it('worker receives message', async () => {
   // arrange
   const capturedMessages: any[] = [];
-  await subscriptionManager.subscribeJSON('routingKey', (payload) => {
+  await rabbitMQManager.subscribeJSON('routingKey', (payload) => {
     capturedMessages.push(payload);
   });
 
@@ -83,7 +83,7 @@ it('client receives message', async () => {
   await new Promise(resolve => setTimeout(resolve, 100));
 
   // act
-  await subscriptionManager.publish('routingKey', { hello: 'from backend' });
+  await rabbitMQManager.publish('routingKey', { hello: 'from backend' });
 
   // assert
   await new Promise(resolve => setTimeout(resolve, 100));
@@ -97,9 +97,9 @@ it('multiple messages in sequence', async () => {
   await new Promise(resolve => setTimeout(resolve, 100));
 
   // act
-  await subscriptionManager.publish('test.sequence', { id: 1 });
-  await subscriptionManager.publish('test.sequence', { id: 2 });
-  await subscriptionManager.publish('test.sequence', { id: 3 });
+  await rabbitMQManager.publish('test.sequence', { id: 1 });
+  await rabbitMQManager.publish('test.sequence', { id: 2 });
+  await rabbitMQManager.publish('test.sequence', { id: 3 });
 
   // assert
   await new Promise(resolve => setTimeout(resolve, 100));
@@ -113,8 +113,8 @@ it('wildcard routing patterns', async () => {
   await new Promise(resolve => setTimeout(resolve, 100));
 
   // act
-  await subscriptionManager.publish('user.login', { action: 'login' });
-  await subscriptionManager.publish('user.logout', { action: 'logout' });
+  await rabbitMQManager.publish('user.login', { action: 'login' });
+  await rabbitMQManager.publish('user.logout', { action: 'logout' });
 
   // assert
   await new Promise(resolve => setTimeout(resolve, 100));
@@ -128,9 +128,9 @@ it('frontend wildcard receives backend specific routing keys', async () => {
   await new Promise(resolve => setTimeout(resolve, 100));
 
   // act
-  await subscriptionManager.publish('order.created', { id: 123 });
-  await subscriptionManager.publish('order.updated', { id: 123, status: 'shipped' });
-  await subscriptionManager.publish('payment.completed', { id: 456 }); // Should not match
+  await rabbitMQManager.publish('order.created', { id: 123 });
+  await rabbitMQManager.publish('order.updated', { id: 123, status: 'shipped' });
+  await rabbitMQManager.publish('payment.completed', { id: 456 }); // Should not match
 
   // assert
   await new Promise(resolve => setTimeout(resolve, 100));
@@ -143,7 +143,7 @@ it('frontend wildcard receives backend specific routing keys', async () => {
 it('backend wildcard receives frontend specific routing keys', async () => {
   // arrange
   const capturedMessages: any[] = [];
-  await subscriptionManager.subscribeJSON('notification.*', (payload) => {
+  await rabbitMQManager.subscribeJSON('notification.*', (payload) => {
     capturedMessages.push(payload);
   });
   await new Promise(resolve => setTimeout(resolve, 100));

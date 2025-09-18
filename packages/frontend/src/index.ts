@@ -48,11 +48,16 @@ export interface EmitMessage extends WebMQMessage {
   messageId: string;
 }
 
+// All messages now consistently use 'action' instead of mixed 'type'/'action'
+// TODO: Hierarchy: Message <- OutgoingMessage <- [ListenMessage, UnlistenMessage, EmitMessage, IdentifyMessage]
+//                          <- IncomingMesage <- [DataMessage, AckMessage, NackMessage]
+// TODO: Maybe this is too many types, the backend has just one Client message for everything
+// TODO: Also, write a comment with this hierarchy
 /**
  * Message received from server containing routed data
  */
 export interface IncomingDataMessage {
-  type: 'message';
+  action: 'message';
   bindingKey: string;
   payload: any;
   routingKey?: string;
@@ -62,7 +67,7 @@ export interface IncomingDataMessage {
  * Acknowledgment message received from server
  */
 export interface AckMessage {
-  type: 'ack';
+  action: 'ack';
   messageId: string;
   status: 'success' | 'error';
   error?: string;
@@ -72,7 +77,7 @@ export interface AckMessage {
  * Negative acknowledgment message received from server
  */
 export interface NackMessage {
-  type: 'nack';
+  action: 'nack';
   messageId: string;
   error: string;
 }
@@ -311,8 +316,7 @@ class SessionManager {
       }
 
       if (!this.sessionId) {
-        // TODO: Use UUID
-        this.sessionId = `session-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
+        this.sessionId = uuidv4();
         if (typeof localStorage !== 'undefined') {
           localStorage.setItem('webmq-session-id', this.sessionId);
         }
@@ -320,7 +324,7 @@ class SessionManager {
 
       this.logger.debug(`Session ID: ${this.sessionId}`);
     } catch (error) {
-      this.sessionId = `session-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
+      this.sessionId = uuidv4();
       this.logger.warn('localStorage unavailable, using temporary session ID');
     }
   }
@@ -710,18 +714,14 @@ export class WebMQClient extends EventEmitter {
       this.messagePublisher.flushMessageQueue();
 
       if (wasReconnection) {
+        // TODO: Does this need to be 'super'?
         super.emit('reconnect');
       } else {
         super.emit('connect');
       }
     });
 
-    // Handle connection errors
-    this.on('connection:error', ({ err, wasConnected }) => {
-      if (this.listenerCount('error') > 0) {
-        this.emit('error', err);
-      }
-    });
+    // Connection errors are handled directly in the WebSocket error event listener
 
     // Handle connection closed
     this.on('connection:closed', () => {
@@ -747,7 +747,7 @@ export class WebMQClient extends EventEmitter {
       try {
         const message: ServerMessage = JSON.parse(data);
 
-        switch (message.type) {
+        switch (message.action) {
           case 'message': {
             const dataMessage = message as IncomingDataMessage;
             const callbacks = this.subscriptionManager.getCallbacks(dataMessage.bindingKey);
@@ -773,7 +773,7 @@ export class WebMQClient extends EventEmitter {
             break;
           }
           default: {
-            this.logger.warn('Unknown message type received:', (message as any).type);
+            this.logger.warn('Unknown message action received:', (message as any).action);
             break;
           }
         }

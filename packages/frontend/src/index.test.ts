@@ -94,7 +94,7 @@ describe('WebMQClient (Singleton)', () => {
       await promise;
       await client.listen('another.key', callback2);
 
-      const message = { type: 'message', bindingKey: 'test.key', payload: { data: 'hello' } };
+      const message = { action: 'message', bindingKey: 'test.key', payload: { data: 'hello' } };
       triggerEvent('message', JSON.stringify(message));
 
       expect(callback1).toHaveBeenCalledWith({ data: 'hello' });
@@ -137,7 +137,7 @@ describe('WebMQClient (Singleton)', () => {
       // Acknowledge the message
       const sentMessage = JSON.parse(mockSend.mock.calls[0][0]);
       triggerEvent('message', JSON.stringify({
-        type: 'ack',
+        action: 'ack',
         messageId: sentMessage.messageId,
         status: 'success'
       }));
@@ -571,12 +571,12 @@ describe('WebMQClient (Singleton)', () => {
         const message2 = JSON.parse(mockSend.mock.calls[1][0]);
 
         triggerEvent('message', JSON.stringify({
-          type: 'ack',
+          action: 'ack',
           messageId: message1.messageId,
           status: 'success'
         }));
         triggerEvent('message', JSON.stringify({
-          type: 'ack',
+          action: 'ack',
           messageId: message2.messageId,
           status: 'success'
         }));
@@ -612,7 +612,7 @@ describe('WebMQClient (Singleton)', () => {
         // Acknowledge the message
         const sentMessage = JSON.parse(mockSend.mock.calls[0][0]);
         triggerEvent('message', JSON.stringify({
-          type: 'ack',
+          action: 'ack',
           messageId: sentMessage.messageId,
           status: 'success'
         }));
@@ -648,12 +648,12 @@ describe('WebMQClient (Singleton)', () => {
         const message3 = JSON.parse(mockSend.mock.calls[1][0]);
 
         triggerEvent('message', JSON.stringify({
-          type: 'ack',
+          action: 'ack',
           messageId: message2.messageId,
           status: 'success'
         }));
         triggerEvent('message', JSON.stringify({
-          type: 'ack',
+          action: 'ack',
           messageId: message3.messageId,
           status: 'success'
         }));
@@ -721,7 +721,7 @@ describe('WebMQClient (Singleton)', () => {
         // Simulate server acknowledgment
         const sentMessage = JSON.parse(mockSend.mock.calls[0][0]);
         triggerEvent('message', JSON.stringify({
-          type: 'ack',
+          action: 'ack',
           messageId: sentMessage.messageId,
           status: 'success'
         }));
@@ -742,7 +742,7 @@ describe('WebMQClient (Singleton)', () => {
         // Simulate server rejection
         const sentMessage = JSON.parse(mockSend.mock.calls[0][0]);
         triggerEvent('message', JSON.stringify({
-          type: 'nack',
+          action: 'nack',
           messageId: sentMessage.messageId,
           error: 'Validation failed'
         }));
@@ -805,12 +805,12 @@ describe('WebMQClient (Singleton)', () => {
 
         // Ack both messages
         triggerEvent('message', JSON.stringify({
-          type: 'ack',
+          action: 'ack',
           messageId: message1.messageId,
           status: 'success'
         }));
         triggerEvent('message', JSON.stringify({
-          type: 'ack',
+          action: 'ack',
           messageId: message2.messageId,
           status: 'success'
         }));
@@ -833,12 +833,12 @@ describe('WebMQClient (Singleton)', () => {
         const message2 = JSON.parse(mockSend.mock.calls[1][0]);
 
         triggerEvent('message', JSON.stringify({
-          type: 'ack',
+          action: 'ack',
           messageId: message1.messageId,
           status: 'success'
         }));
         triggerEvent('message', JSON.stringify({
-          type: 'ack',
+          action: 'ack',
           messageId: message2.messageId,
           status: 'success'
         }));
@@ -884,12 +884,12 @@ describe('WebMQClient (Singleton)', () => {
         const message3 = JSON.parse(mockSend.mock.calls[1][0]);
 
         triggerEvent('message', JSON.stringify({
-          type: 'ack',
+          action: 'ack',
           messageId: message2.messageId,
           status: 'success'
         }));
         triggerEvent('message', JSON.stringify({
-          type: 'ack',
+          action: 'ack',
           messageId: message3.messageId,
           status: 'success'
         }));
@@ -932,7 +932,7 @@ describe('WebMQClient (Singleton)', () => {
           const message = JSON.parse(call[0]);
           if (message.messageId) {
             triggerEvent('message', JSON.stringify({
-              type: 'ack',
+              action: 'ack',
               messageId: message.messageId,
               status: 'success'
             }));
@@ -966,7 +966,7 @@ describe('WebMQClient (Singleton)', () => {
           // Acknowledge the message
           const sentMessage = JSON.parse(mockSend.mock.calls[0][0]);
           triggerEvent('message', JSON.stringify({
-            type: 'ack',
+            action: 'ack',
             messageId: sentMessage.messageId,
             status: 'success'
           }));
@@ -1043,7 +1043,7 @@ describe('WebMQClient (Singleton)', () => {
 
           const sentMessage = JSON.parse(mockSend.mock.calls[0][0]);
           triggerEvent('message', JSON.stringify({
-            type: 'ack',
+            action: 'ack',
             messageId: sentMessage.messageId,
             status: 'success'
           }));
@@ -1123,7 +1123,7 @@ describe('WebMQClient (Singleton)', () => {
           await promise;
 
           triggerEvent('message', JSON.stringify({
-            type: 'message',
+            action: 'message',
             bindingKey: 'test.key',
             payload: { data: 'test' }
           }));
@@ -1160,7 +1160,7 @@ describe('WebMQClient (Singleton)', () => {
           await promise;
 
           triggerEvent('message', JSON.stringify({
-            type: 'message',
+            action: 'message',
             bindingKey: 'test.key',
             payload: { original: true }
           }));
@@ -1185,7 +1185,7 @@ describe('WebMQClient (Singleton)', () => {
           await promise;
 
           triggerEvent('message', JSON.stringify({
-            type: 'message',
+            action: 'message',
             bindingKey: 'test.key',
             payload: { data: 'test' }
           }));
@@ -1220,7 +1220,7 @@ describe('WebMQClient (Singleton)', () => {
 
           const sentMessage = JSON.parse(mockSend.mock.calls[0][0]);
           triggerEvent('message', JSON.stringify({
-            type: 'ack',
+            action: 'ack',
             messageId: sentMessage.messageId,
             status: 'success'
           }));
@@ -1252,7 +1252,7 @@ describe('WebMQClient (Singleton)', () => {
 
           const sentMessage = JSON.parse(mockSend.mock.calls[0][0]);
           triggerEvent('message', JSON.stringify({
-            type: 'ack',
+            action: 'ack',
             messageId: sentMessage.messageId,
             status: 'success'
           }));
@@ -1283,7 +1283,7 @@ describe('WebMQClient (Singleton)', () => {
 
           const sentMessage1 = JSON.parse(mockSend.mock.calls[0][0]);
           triggerEvent('message', JSON.stringify({
-            type: 'ack',
+            action: 'ack',
             messageId: sentMessage1.messageId,
             status: 'success'
           }));
