@@ -1,10 +1,11 @@
-import { RabbitMQContainer, StartedRabbitMQContainer } from '@testcontainers/rabbitmq';
 import { WebMQServer, SubscriptionManager } from 'webmq-backend';
 import { WebMQClient } from 'webmq-frontend';
+import { getRabbitMQConnection } from './rabbitmq-utils';
 import amqplib from 'amqplib';
 import net from 'net';
 
-let rabbitmq: StartedRabbitMQContainer;
+let rabbitmqCleanup: () => Promise<void>;
+let rabbitmqUrl: string;
 let webmqServer: WebMQServer;
 let webmqClient: WebMQClient;
 let serverPort: number;
@@ -28,16 +29,19 @@ async function findFreePort(startPort: number = 8080): Promise<number> {
 beforeAll(async () => {
   serverPort = await findFreePort(8080 + Math.floor(Math.random() * 1000));
 
-  rabbitmq = await new RabbitMQContainer('rabbitmq:3.11').start();
+  // Get RabbitMQ connection (reuses existing or creates new)
+  const rabbitmqConnection = await getRabbitMQConnection();
+  rabbitmqUrl = rabbitmqConnection.url;
+  rabbitmqCleanup = rabbitmqConnection.cleanup;
 
   // Set up worker connection and subscription manager
-  workerConnection = await amqplib.connect(rabbitmq.getAmqpUrl());
+  workerConnection = await amqplib.connect(rabbitmqUrl);
   const channel = await workerConnection.createChannel();
   await channel.assertExchange('e2e_exchange', 'topic', { durable: false });
   subscriptionManager = new SubscriptionManager(channel, 'e2e_exchange');
 
   webmqServer = new WebMQServer({
-    rabbitmqUrl: rabbitmq.getAmqpUrl(),
+    rabbitmqUrl: rabbitmqUrl,
     exchangeName: 'e2e_exchange',
   });
   webmqServer.setLogLevel('silent');
@@ -54,7 +58,7 @@ afterAll(async () => {
   webmqClient.disconnect({ onActiveListeners: 'clear' });
   await workerConnection.close();
   await webmqServer.stop();
-  await rabbitmq.stop();
+  await rabbitmqCleanup(); // Only stops if we created the container
 }, 30000); // 30 second timeout for cleanup
 
 it('worker receives message', async () => {
