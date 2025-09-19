@@ -1,11 +1,13 @@
 import {
   WebMQServer,
-  ClientMessage,
-  Hook,
   WebSocketManager,
   RabbitMQManager,
-  WebSocketConnectionData,
 } from './index';
+import {
+  ClientMessage,
+  Hook,
+  WebSocketConnectionData,
+} from './interfaces';
 import { WebSocket, WebSocketServer } from 'ws'; // Import WebSocket and WebSocketServer
 import amqplib from 'amqplib';
 
