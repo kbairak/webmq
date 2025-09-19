@@ -1,23 +1,49 @@
 import { EventEmitter } from 'events';
 import { v4 as uuidv4 } from 'uuid';
+import { Logger, LogLevel } from './common/logger';
 
-// --- Logger Configuration ---
+// --- Message Type Hierarchy ---
 
-type LogLevel = 'silent' | 'error' | 'warn' | 'info' | 'debug';
-
-// --- Type Definitions ---
+/**
+ * Message Type Hierarchy:
+ *
+ * Message (base)
+ * ├── OutgoingMessage (client → server)
+ * │   ├── ListenMessage (establish listener)
+ * │   ├── UnlistenMessage (remove listener)
+ * │   ├── EmitMessage (publish data)
+ * │   └── IdentifyMessage (client identification)
+ * └── IncomingMessage (server → client)
+ *     ├── DataMessage (routed message data)
+ *     ├── AckMessage (acknowledgment)
+ *     └── NackMessage (negative acknowledgment)
+ */
 
 /**
  * Base interface for all WebMQ messages
  */
-export interface WebMQMessage {
+export interface Message {
+  action: string;
+}
+
+/**
+ * Base interface for all client-to-server messages
+ */
+export interface OutgoingMessage extends Message {
+  action: string;
+}
+
+/**
+ * Base interface for all server-to-client messages
+ */
+export interface IncomingMessage extends Message {
   action: string;
 }
 
 /**
  * Message sent to establish a listener for a specific routing pattern
  */
-export interface ListenMessage extends WebMQMessage {
+export interface ListenMessage extends OutgoingMessage {
   action: 'listen';
   bindingKey: string;
 }
@@ -25,7 +51,7 @@ export interface ListenMessage extends WebMQMessage {
 /**
  * Message sent to remove a listener for a specific routing pattern
  */
-export interface UnlistenMessage extends WebMQMessage {
+export interface UnlistenMessage extends OutgoingMessage {
   action: 'unlisten';
   bindingKey: string;
 }
@@ -33,7 +59,7 @@ export interface UnlistenMessage extends WebMQMessage {
 /**
  * Message sent to identify client for persistent sessions
  */
-export interface IdentifyMessage extends WebMQMessage {
+export interface IdentifyMessage extends OutgoingMessage {
   action: 'identify';
   sessionId: string;
 }
@@ -41,22 +67,17 @@ export interface IdentifyMessage extends WebMQMessage {
 /**
  * Message sent to publish data to a routing key
  */
-export interface EmitMessage extends WebMQMessage {
+export interface EmitMessage extends OutgoingMessage {
   action: 'publish';
   routingKey: string;
   payload: any;
   messageId: string;
 }
 
-// All messages now consistently use 'action' instead of mixed 'type'/'action'
-// TODO: Hierarchy: Message <- OutgoingMessage <- [ListenMessage, UnlistenMessage, EmitMessage, IdentifyMessage]
-//                          <- IncomingMesage <- [DataMessage, AckMessage, NackMessage]
-// TODO: Maybe this is too many types, the backend has just one Client message for everything
-// TODO: Also, write a comment with this hierarchy
 /**
  * Message received from server containing routed data
  */
-export interface IncomingDataMessage {
+export interface DataMessage extends IncomingMessage {
   action: 'message';
   bindingKey: string;
   payload: any;
@@ -66,7 +87,7 @@ export interface IncomingDataMessage {
 /**
  * Acknowledgment message received from server
  */
-export interface AckMessage {
+export interface AckMessage extends IncomingMessage {
   action: 'ack';
   messageId: string;
   status: 'success' | 'error';
@@ -76,7 +97,7 @@ export interface AckMessage {
 /**
  * Negative acknowledgment message received from server
  */
-export interface NackMessage {
+export interface NackMessage extends IncomingMessage {
   action: 'nack';
   messageId: string;
   error: string;
@@ -90,7 +111,7 @@ export type ClientMessage = ListenMessage | UnlistenMessage | EmitMessage | Iden
 /**
  * Union type for all server-to-client messages
  */
-export type ServerMessage = IncomingDataMessage | AckMessage | NackMessage;
+export type ServerMessage = DataMessage | AckMessage | NackMessage;
 
 /**
  * Context object passed to client-side hooks (persistent across actions)
@@ -182,10 +203,10 @@ class ConnectionManager {
   private maxReconnectAttempts = 5;
   private reconnectTimeout: number | null = null;
   private url: string | null = null;
-  private logger: any;
+  private logger: Logger;
   private eventEmitter: EventEmitter;
 
-  constructor(eventEmitter: EventEmitter, logger: any) {
+  constructor(eventEmitter: EventEmitter, logger: Logger) {
     this.eventEmitter = eventEmitter;
     this.logger = logger;
   }
@@ -300,10 +321,10 @@ class ConnectionManager {
 class SessionManager {
   private sessionId: string | null = null;
   private sessionIdentified = false;
-  private logger: any;
+  private logger: Logger;
   private connectionManager: ConnectionManager;
 
-  constructor(connectionManager: ConnectionManager, logger: any) {
+  constructor(connectionManager: ConnectionManager, logger: Logger) {
     this.connectionManager = connectionManager;
     this.logger = logger;
     this.initializeSessionId();
@@ -362,9 +383,9 @@ class SessionManager {
 class ActionExecutor {
   private hooks: Required<ClientHooks>;
   private hookContext: ClientHookContext;
-  private logger: any;
+  private logger: Logger;
 
-  constructor(client: WebMQClient, logger: any) {
+  constructor(client: WebMQClient, logger: Logger) {
     this.hooks = {
       pre: [],
       onPublish: [],
@@ -471,9 +492,9 @@ class MessagePublisher {
   private maxQueueSize = 100;
   private messageTimeout = 10000;
   private connectionManager: ConnectionManager;
-  private logger: any;
+  private logger: Logger;
 
-  constructor(connectionManager: ConnectionManager, logger: any) {
+  constructor(connectionManager: ConnectionManager, logger: Logger) {
     this.connectionManager = connectionManager;
     this.logger = logger;
   }
@@ -592,9 +613,9 @@ class MessagePublisher {
 class SubscriptionManager {
   private messageListeners: Map<string, MessageCallback[]> = new Map();
   private connectionManager: ConnectionManager;
-  private logger: any;
+  private logger: Logger;
 
-  constructor(connectionManager: ConnectionManager, logger: any) {
+  constructor(connectionManager: ConnectionManager, logger: Logger) {
     this.connectionManager = connectionManager;
     this.logger = logger;
   }
@@ -679,23 +700,21 @@ export class WebMQClient extends EventEmitter {
   private subscriptionManager: SubscriptionManager;
 
   // Logger instance - default to silent in test environments
-  private logger = {
-    error: typeof process !== 'undefined' && process.env.NODE_ENV === 'test' ?
-      (...args: any[]) => { } : console.error.bind(console),
-    warn: (...args: any[]) => { },    // disabled by default
-    info: (...args: any[]) => { },    // disabled by default
-    debug: (...args: any[]) => { }    // disabled by default
-  };
+  private logger: Logger;
 
   constructor(url: string = '', options: WebMQClientOptions = {}) {
     super();
 
+    // Initialize logger - default to silent in test environments
+    const initialLevel = typeof process !== 'undefined' && process.env.NODE_ENV === 'test' ? 'silent' : 'error';
+    this.logger = new Logger(initialLevel, 'WebMQClient');
+
     // Initialize components
-    this.connectionManager = new ConnectionManager(this, this.logger);
-    this.sessionManager = new SessionManager(this.connectionManager, this.logger);
-    this.actionExecutor = new ActionExecutor(this, this.logger);
-    this.messagePublisher = new MessagePublisher(this.connectionManager, this.logger);
-    this.subscriptionManager = new SubscriptionManager(this.connectionManager, this.logger);
+    this.connectionManager = new ConnectionManager(this, this.logger.child('ConnectionManager'));
+    this.sessionManager = new SessionManager(this.connectionManager, this.logger.child('SessionManager'));
+    this.actionExecutor = new ActionExecutor(this, this.logger.child('ActionExecutor'));
+    this.messagePublisher = new MessagePublisher(this.connectionManager, this.logger.child('MessagePublisher'));
+    this.subscriptionManager = new SubscriptionManager(this.connectionManager, this.logger.child('SubscriptionManager'));
 
     // Set up event handlers
     this.setupEventHandlers();
@@ -749,7 +768,7 @@ export class WebMQClient extends EventEmitter {
 
         switch (message.action) {
           case 'message': {
-            const dataMessage = message as IncomingDataMessage;
+            const dataMessage = message as DataMessage;
             const callbacks = this.subscriptionManager.getCallbacks(dataMessage.bindingKey);
             if (callbacks) {
               await this.actionExecutor.executeMessage(dataMessage.bindingKey, dataMessage.payload, callbacks);
@@ -788,10 +807,14 @@ export class WebMQClient extends EventEmitter {
    * @param level The log level to set ('silent', 'error', 'warn', 'info', 'debug')
    */
   public setLogLevel(level: LogLevel): void {
-    this.logger.error = level === 'silent' ? (...args: any[]) => { } : console.error.bind(console);
-    this.logger.warn = ['warn', 'info', 'debug'].includes(level) ? console.warn.bind(console) : (...args: any[]) => { };
-    this.logger.info = ['info', 'debug'].includes(level) ? console.log.bind(console) : (...args: any[]) => { };
-    this.logger.debug = level === 'debug' ? console.log.bind(console) : (...args: any[]) => { };
+    this.logger.setLogLevel(level);
+
+    // Update child loggers
+    this.connectionManager = new ConnectionManager(this, this.logger.child('ConnectionManager'));
+    this.sessionManager = new SessionManager(this.connectionManager, this.logger.child('SessionManager'));
+    this.actionExecutor = new ActionExecutor(this, this.logger.child('ActionExecutor'));
+    this.messagePublisher = new MessagePublisher(this.connectionManager, this.logger.child('MessagePublisher'));
+    this.subscriptionManager = new SubscriptionManager(this.connectionManager, this.logger.child('SubscriptionManager'));
   }
 
   /**

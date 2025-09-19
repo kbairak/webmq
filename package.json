@@ -12,7 +12,9 @@
     "start:chat": "npm start -w basic-chat",
     "test:backend": "npm run test -w webmq-backend",
     "test:frontend": "npm run test -w webmq-frontend",
-    "test": "npm run test --workspaces --if-present"
+    "test": "npm run test --workspaces --if-present",
+    "lint": "prettier --check .",
+    "lint:fix": "prettier --write ."
   },
   "keywords": [
     "rabbitmq",
@@ -26,5 +28,8 @@
     "packages/*",
     "examples/*",
     "e2e-tests"
-  ]
+  ],
+  "devDependencies": {
+    "prettier": "^3.6.2"
+  }
 }

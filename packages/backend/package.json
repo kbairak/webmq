@@ -5,9 +5,11 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
-    "build": "tsc",
-    "dev": "tsc -w",
-    "test": "jest"
+    "prebuild": "mkdir -p src/common && cp ../../common/logger.ts src/common/ && echo '// Auto-generated from /common - do not edit directly' | cat - src/common/logger.ts > temp && mv temp src/common/logger.ts",
+    "build": "npm run prebuild && tsc",
+    "dev": "npm run prebuild && tsc -w",
+    "test": "npm run prebuild && jest",
+    "clean": "rm -rf dist src/common"
   },
   "keywords": [],
   "author": "",

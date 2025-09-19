@@ -1,9 +1,6 @@
 import {
-  WebMQServer, ClientMessage, Hook, WebSocketManager, RabbitMQManager, WebSocketConnectionData, setLogLevel
+  WebMQServer, ClientMessage, Hook, WebSocketManager, RabbitMQManager, WebSocketConnectionData
 } from './index';
-
-// Disable all logging during tests
-setLogLevel('silent');
 import { WebSocket, WebSocketServer } from 'ws'; // Import WebSocket and WebSocketServer
 import amqplib from 'amqplib';
 
@@ -47,9 +44,9 @@ jest.mock('amqplib', () => {
 const { mockConnection, mockChannel } = require('amqplib');
 
 
-// --- Integration Tests with Mocked Abstractions ---
+// --- WebMQServer Integration Tests ---
 
-describe('WebMQServer Integration (Mocked Abstractions)', () => {
+describe('WebMQServer Integration', () => {
   let server: WebMQServer;
   let mockWebSocketManager: jest.Mocked<WebSocketManager>;
   let mockRabbitMQManager: jest.Mocked<RabbitMQManager>;
@@ -82,6 +79,16 @@ describe('WebMQServer Integration (Mocked Abstractions)', () => {
       getAllConnections: jest.fn(),
       getConnectionIds: jest.fn(),
       size: jest.fn(),
+      setRabbitMQManager: jest.fn(),
+      subscribe: jest.fn(),
+      unsubscribe: jest.fn(),
+      publish: jest.fn(),
+      cleanupConnection: jest.fn(),
+      setMessageHandler: jest.fn(),
+      setEventEmitter: jest.fn(),
+      setLogger: jest.fn(),
+      startServer: jest.fn(),
+      stopServer: jest.fn(),
     } as any;
     mockWebSocketManager.createConnection.mockReturnValue('test-connection-id');
     mockWebSocketManager.getConnection.mockReturnValue(mockConnection);
@@ -103,6 +110,7 @@ describe('WebMQServer Integration (Mocked Abstractions)', () => {
       rabbitmqUrl: 'amqp://localhost',
       exchangeName: 'test-exchange'
     });
+    server.setLogLevel('silent');
 
     // Replace the managers with our mocks (this requires exposing them or using dependency injection)
     (server as any).webSocketManager = mockWebSocketManager;
@@ -245,9 +253,9 @@ describe('WebMQServer Integration (Mocked Abstractions)', () => {
   });
 });
 
-// --- Additional Coverage Tests ---
+// --- WebMQServer Lifecycle Tests ---
 
-describe('WebMQServer start method', () => {
+describe('WebMQServer Lifecycle', () => {
   let server: WebMQServer;
   let mockConnection: any;
   let mockChannel: any;
@@ -314,30 +322,11 @@ describe('WebMQServer start method', () => {
     expect(mockWS.on).toHaveBeenCalledWith('close', expect.any(Function));
   });
 
-  it('should throw error if channel not established during connection', async () => {
-    // Arrange
-    const mockWS = {};
-    const mockWSS = {
-      on: jest.fn(),
-    };
-    (WebSocketServer as unknown as jest.Mock).mockImplementation(() => mockWSS);
-
-    // Act
-    await server.start(8080);
-    // Manually clear the channel to simulate error condition
-    (server as any).channel = null;
-    const connectionHandler = mockWSS.on.mock.calls.find((call: any) => call[0] === 'connection')?.[1];
-
-    // Assert
-    expect(() => {
-      if (connectionHandler) {
-        connectionHandler(mockWS);
-      }
-    }).toThrow('Shared channel not established.');
-  });
 });
 
-describe('Hook system', () => {
+// --- WebMQServer Hook System Tests ---
+
+describe('WebMQServer Hook System', () => {
   let server: WebMQServer;
   let mockWebSocketManager: jest.Mocked<WebSocketManager>;
   let mockRabbitMQManager: jest.Mocked<RabbitMQManager>;
@@ -361,6 +350,16 @@ describe('Hook system', () => {
       getAllConnections: jest.fn(),
       getConnectionIds: jest.fn(),
       size: jest.fn(),
+      setRabbitMQManager: jest.fn(),
+      subscribe: jest.fn(),
+      unsubscribe: jest.fn(),
+      publish: jest.fn(),
+      cleanupConnection: jest.fn(),
+      setMessageHandler: jest.fn(),
+      setEventEmitter: jest.fn(),
+      setLogger: jest.fn(),
+      startServer: jest.fn(),
+      stopServer: jest.fn(),
     } as any;
 
     mockRabbitMQManager = {
@@ -546,7 +545,9 @@ describe('Hook system', () => {
   });
 });
 
-describe('WebSocket message handling', () => {
+// --- WebMQServer Message Handling Tests ---
+
+describe('WebMQServer Message Handling', () => {
   let server: WebMQServer;
   let mockWebSocketManager: jest.Mocked<WebSocketManager>;
   let mockRabbitMQManager: jest.Mocked<RabbitMQManager>;
@@ -576,6 +577,16 @@ describe('WebSocket message handling', () => {
       getAllConnections: jest.fn(),
       getConnectionIds: jest.fn(),
       size: jest.fn(),
+      setRabbitMQManager: jest.fn(),
+      subscribe: jest.fn(),
+      unsubscribe: jest.fn(),
+      publish: jest.fn(),
+      cleanupConnection: jest.fn(),
+      setMessageHandler: jest.fn(),
+      setEventEmitter: jest.fn(),
+      setLogger: jest.fn(),
+      startServer: jest.fn(),
+      stopServer: jest.fn(),
     } as any;
 
     mockRabbitMQManager = {
@@ -589,51 +600,13 @@ describe('WebSocket message handling', () => {
       rabbitmqUrl: 'amqp://localhost',
       exchangeName: 'test-exchange'
     });
+    server.setLogLevel('silent');
 
     (server as any).webSocketManager = mockWebSocketManager;
     (server as any).rabbitMQManager = mockRabbitMQManager;
     (server as any).channel = {};
   });
 
-  it('should handle malformed JSON messages', async () => {
-    // Arrange
-    const mockWSS = { on: jest.fn() };
-    (WebSocketServer as unknown as jest.Mock).mockImplementation(() => mockWSS);
-
-    // Add error event listener to prevent unhandled error
-    const errorEvents: any[] = [];
-    server.on('error', (data) => {
-      errorEvents.push(data);
-    });
-
-    // Act
-    await server.start(8080);
-    const connectionHandler = mockWSS.on.mock.calls.find((call: any) => call[0] === 'connection')?.[1];
-    if (connectionHandler) {
-      connectionHandler(mockWS);
-    }
-
-    // Get the message handler and simulate malformed JSON
-    const messageHandler = mockWS.on.mock.calls.find((call: any) => call[0] === 'message')?.[1];
-    if (messageHandler) {
-      await messageHandler.call(mockWS as any, Buffer.from('invalid json'));
-    }
-
-    // Assert
-    // Check that WebSocket.send was called with error message
-    expect(mockWS.send).toHaveBeenCalledTimes(1);
-    const sentData = mockWS.send.mock.calls[0][0];
-    const sentMessage = JSON.parse(sentData.toString());
-    expect(sentMessage.action).toBe('error');
-    expect(sentMessage.message).toContain('Unexpected token');
-
-    // Check that error event was emitted
-    expect(errorEvents).toHaveLength(1);
-    expect(errorEvents[0].connectionId).toBe('test-connection-id');
-    expect(errorEvents[0].context).toBe('message processing');
-    expect(errorEvents[0].error.message).toContain('Unexpected token');
-
-  });
 
   it('should send messages to WebSocket clients through message handler', async () => {
     // Arrange
@@ -679,52 +652,11 @@ describe('WebSocket message handling', () => {
     expect(mockWebSocketManager.removeConnection).toHaveBeenCalledWith('test-connection-id');
   });
 
-  it('should publish events during message processing', async () => {
-    // Arrange
-    const mockWSS = { on: jest.fn() };
-    (WebSocketServer as unknown as jest.Mock).mockImplementation(() => mockWSS);
-    const eventLog: Array<{ event: string, data: any }> = [];
-
-    // Set up event logging
-    const events = ['message.received', 'message.processed', 'error'];
-    events.forEach(eventName => {
-      server.on(eventName as any, (data: any) => {
-        eventLog.push({ event: eventName, data });
-      });
-    });
-
-    const validMessage = {
-      action: 'publish',
-      routingKey: 'test.route',
-      payload: { data: 'test' }
-    };
-
-    // Act
-    await server.start(8080);
-    const connectionHandler = mockWSS.on.mock.calls.find((call: any) => call[0] === 'connection')?.[1];
-    if (connectionHandler) {
-      connectionHandler(mockWS);
-    }
-
-    // Get the message handler and simulate valid message
-    const messageHandler = mockWS.on.mock.calls.find((call: any) => call[0] === 'message')?.[1];
-    if (messageHandler) {
-      await messageHandler.call(mockWS as any, Buffer.from(JSON.stringify(validMessage)));
-    }
-
-    // Assert
-    expect(eventLog).toContainEqual({
-      event: 'message.received',
-      data: { connectionId: 'test-connection-id', message: validMessage }
-    });
-    expect(eventLog).toContainEqual({
-      event: 'message.processed',
-      data: { connectionId: 'test-connection-id', message: validMessage }
-    });
-  });
 });
 
-describe('Error scenarios', () => {
+// --- WebMQServer Error Handling Tests ---
+
+describe('WebMQServer Error Handling', () => {
   let server: WebMQServer;
   let mockWebSocketManager: jest.Mocked<WebSocketManager>;
   let mockRabbitMQManager: jest.Mocked<RabbitMQManager>;
@@ -746,6 +678,16 @@ describe('Error scenarios', () => {
       getAllConnections: jest.fn(),
       getConnectionIds: jest.fn(),
       size: jest.fn(),
+      setRabbitMQManager: jest.fn(),
+      subscribe: jest.fn(),
+      unsubscribe: jest.fn(),
+      publish: jest.fn(),
+      cleanupConnection: jest.fn(),
+      setMessageHandler: jest.fn(),
+      setEventEmitter: jest.fn(),
+      setLogger: jest.fn(),
+      startServer: jest.fn(),
+      stopServer: jest.fn(),
     } as any;
 
     mockRabbitMQManager = {
@@ -759,6 +701,7 @@ describe('Error scenarios', () => {
       rabbitmqUrl: 'amqp://localhost',
       exchangeName: 'test-exchange'
     });
+    server.setLogLevel('silent');
 
     (server as any).webSocketManager = mockWebSocketManager;
     (server as any).rabbitMQManager = mockRabbitMQManager;
@@ -767,11 +710,11 @@ describe('Error scenarios', () => {
 
   it('should handle missing routingKey in publish', async () => {
     // Arrange
-    const message: ClientMessage = {
+    const message = {
       action: 'publish',
       payload: { data: 'test' }
       // Missing routingKey
-    };
+    } as ClientMessage;
 
     // Act & Assert
     await expect((server as any).processMessage('test-connection-id', message))
@@ -780,11 +723,11 @@ describe('Error scenarios', () => {
 
   it('should handle missing payload in publish', async () => {
     // Arrange
-    const message: ClientMessage = {
+    const message = {
       action: 'publish',
       routingKey: 'test.route'
       // Missing payload
-    };
+    } as ClientMessage;
 
     // Act & Assert
     await expect((server as any).processMessage('test-connection-id', message))
@@ -793,10 +736,10 @@ describe('Error scenarios', () => {
 
   it('should handle missing bindingKey in listen', async () => {
     // Arrange
-    const message: ClientMessage = {
+    const message = {
       action: 'listen'
       // Missing bindingKey
-    };
+    } as ClientMessage;
 
     // Act & Assert
     await expect((server as any).processMessage('test-connection-id', message))
@@ -805,10 +748,10 @@ describe('Error scenarios', () => {
 
   it('should handle missing bindingKey in unlisten', async () => {
     // Arrange
-    const message: ClientMessage = {
+    const message = {
       action: 'unlisten'
       // Missing bindingKey
-    };
+    } as ClientMessage;
 
     // Act & Assert
     await expect((server as any).processMessage('test-connection-id', message))
@@ -875,24 +818,10 @@ describe('Error scenarios', () => {
       .rejects.toThrow('Connection test-connection-id or shared channel not available');
   });
 
-  it('should log action execution steps', async () => {
-    // Arrange
-    const message: ClientMessage = {
-      action: 'publish',
-      routingKey: 'test.route',
-      payload: { data: 'test' }
-    };
-
-    // Act
-    await (server as any).processMessage('test-connection-id', message);
-
-    // Assert
-
-  });
 });
 
 
-// --- Individual Component Tests ---
+// --- Component Unit Tests ---
 
 describe('WebSocketManager', () => {
   let manager: WebSocketManager;

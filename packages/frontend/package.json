@@ -6,9 +6,11 @@
   "module": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
-    "build": "tsc --emitDeclarationOnly && esbuild src/index.ts --bundle --platform=browser --outfile=dist/index.js --format=esm && esbuild src/index.ts --bundle --platform=node --outfile=dist/index.cjs --format=cjs",
-    "dev": "esbuild src/index.ts --bundle --platform=browser --outfile=dist/index.js --format=esm --watch",
-    "test": "jest"
+    "prebuild": "mkdir -p src/common && cp ../../common/logger.ts src/common/ && echo '// Auto-generated from /common - do not edit directly' | cat - src/common/logger.ts > temp && mv temp src/common/logger.ts",
+    "build": "npm run prebuild && tsc --emitDeclarationOnly && esbuild src/index.ts --bundle --platform=browser --outfile=dist/index.js --format=esm && esbuild src/index.ts --bundle --platform=node --outfile=dist/index.cjs --format=cjs",
+    "dev": "npm run prebuild && esbuild src/index.ts --bundle --platform=browser --outfile=dist/index.js --format=esm --watch",
+    "test": "npm run prebuild && jest",
+    "clean": "rm -rf dist src/common"
   },
   "keywords": [],
   "author": "",

@@ -38,6 +38,9 @@ npm run build -w webmq-frontend   # Alternative syntax
 npm run test -w webmq-backend
 npm run test -w webmq-frontend
 
+# Run end-to-end tests
+cd e2e-tests && npm test
+
 # Development builds with watch mode
 npm run dev -w webmq-backend     # TypeScript watch mode
 npm run dev -w webmq-frontend    # ESBuild watch mode
@@ -61,16 +64,45 @@ npm run start:frontend -w basic-chat # Vite dev server
 - **`packages/backend/`**: Node.js WebSocket server library that connects to RabbitMQ
 - **`packages/frontend/`**: Framework-agnostic client library providing `setup()`, `emit()`, `listen()`, `unlisten()` API
 - **`examples/basic-chat/`**: Demo chat application showing real-time communication
+- **`e2e-tests/`**: End-to-end integration tests using real WebSocket and RabbitMQ connections
+
+### Recent Architectural Improvements (2024)
+
+**Enhanced Backend Architecture**:
+
+- **WebSocketManager**: Centralized WebSocket connection lifecycle management with built-in RabbitMQ integration
+- **RabbitMQManager**: Dedicated AMQP operations handler with subscription management
+- **Streamlined Message Processing**: Replaced strategy pattern with direct switch/case logic for better maintainability
+- **Always-Durable Exchanges**: RabbitMQ exchanges are now always durable for better reliability
+
+**Type-Safe Message Hierarchy**:
+
+```typescript
+Message (base)
+├── OutgoingMessage (client → server)
+│   ├── ListenMessage, UnlistenMessage, EmitMessage, IdentifyMessage
+└── IncomingMessage (server → client)
+    ├── DataMessage, AckMessage, NackMessage, ErrorMessage
+```
+
+**Complete Acknowledgment System**:
+
+- Frontend generates unique messageIds and returns promises
+- Backend sends ack/nack responses for all publish operations
+- Full integration with message queuing and reconnection logic
+- Comprehensive error handling with proper acknowledgments
 
 ### Key Design Patterns
 
-**Frontend API**: Singleton pattern with topic-based pub/sub
+**Frontend API**: Singleton pattern with topic-based pub/sub and promise-based acknowledgments
 
 ```javascript
 import { setup, listen, emit } from 'webmq-frontend';
 setup('ws://localhost:8080');
 listen('chat.room.1', callback);
-emit('chat.room.1', data);
+
+// Promise-based publishing with acknowledgments
+const result = await emit('chat.room.1', data);
 ```
 
 **Backend Hooks System**: Middleware-style hooks for authentication, validation, and logging:
@@ -79,27 +111,30 @@ emit('chat.room.1', data);
 - `onListen`, `onPublish`, `onUnlisten`: Action-specific hooks
 - Context object persists user data across hooks
 
-**Authentication Pattern**: Since WebSockets don't use HTTP headers, auth is handled via an initial `auth` message with tokens, then context is populated for subsequent requests.
+**Authentication Pattern**: Since WebSockets don't use HTTP headers, auth is handled via an initial `identify` message with session tokens, then context is populated for subsequent requests.
 
 ### RabbitMQ Integration
 
-- Uses topic exchange by default for flexible routing
-- WebSocket messages map to AMQP routing keys
+- Uses durable topic exchanges for reliable message routing
+- WebSocket messages map to AMQP routing keys with wildcard support
 - Backend manages WebSocket ↔ RabbitMQ message translation
+- Automatic subscription cleanup on client disconnect
 
-## Known Issues
+## Development Notes
 
-**Channel Error Handling**: The backend currently uses a shared RabbitMQ channel for all WebSocket connections without error recovery. In production, we need to implement:
+- RabbitMQ management UI available at <http://localhost:15672> (guest/guest)
+- Frontend uses ESBuild, backend uses TypeScript compiler
+- All packages support Jest testing framework with 104 total tests
+- Examples use Vite for frontend development server
+- E2E tests use optimized RabbitMQ container reuse for faster testing
+
+## Production Considerations
+
+**Channel Error Handling**: The backend uses a shared RabbitMQ channel for all WebSocket connections. For production, consider implementing:
 
 - Channel error handling and automatic recreation
 - Connection recovery with exponential backoff
 - Graceful degradation when RabbitMQ is unavailable
 - Health checks and monitoring
 
-## Development Notes
-
-- RabbitMQ management UI available at <http://localhost:15672> (guest/guest)
-- Frontend uses ESBuild, backend uses TypeScript compiler
-- All packages support Jest testing framework
-- Examples use Vite for frontend development server
-
+**Scaling**: The current architecture supports horizontal scaling with proper session management and RabbitMQ clustering.
