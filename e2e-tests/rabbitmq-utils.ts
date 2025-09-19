@@ -1,4 +1,7 @@
-import { RabbitMQContainer, StartedRabbitMQContainer } from '@testcontainers/rabbitmq';
+import {
+  RabbitMQContainer,
+  StartedRabbitMQContainer,
+} from '@testcontainers/rabbitmq';
 import Docker from 'dockerode';
 
 interface RabbitMQConnection {
@@ -17,13 +20,16 @@ export async function getRabbitMQConnection(): Promise<RabbitMQConnection> {
   const existingContainer = await findExistingRabbitMQContainer();
 
   if (existingContainer) {
-    console.log('♻️  Reusing existing RabbitMQ container:', existingContainer.name);
+    console.log(
+      '♻️  Reusing existing RabbitMQ container:',
+      existingContainer.name
+    );
     return {
       url: `amqp://guest:guest@localhost:${existingContainer.port}`,
       cleanup: async () => {
         // No cleanup needed for existing containers - we didn't create them
         console.log('♻️  Skipping cleanup for existing container');
-      }
+      },
     };
   }
 
@@ -40,14 +46,17 @@ export async function getRabbitMQConnection(): Promise<RabbitMQConnection> {
         await createdContainer.stop();
         createdContainer = null;
       }
-    }
+    },
   };
 }
 
 /**
  * Finds an existing RabbitMQ container that's already running
  */
-async function findExistingRabbitMQContainer(): Promise<{ name: string; port: number } | null> {
+async function findExistingRabbitMQContainer(): Promise<{
+  name: string;
+  port: number;
+} | null> {
   try {
     const docker = new Docker();
     const containers = await docker.listContainers({ all: false }); // Only running containers
@@ -60,15 +69,20 @@ async function findExistingRabbitMQContainer(): Promise<{ name: string; port: nu
           // Verify the container is actually responding
           if (await isRabbitMQHealthy(amqpPort)) {
             return {
-              name: containerInfo.Names[0]?.replace('/', '') || containerInfo.Id.slice(0, 12),
-              port: amqpPort
+              name:
+                containerInfo.Names[0]?.replace('/', '') ||
+                containerInfo.Id.slice(0, 12),
+              port: amqpPort,
             };
           }
         }
       }
     }
   } catch (error: any) {
-    console.warn('⚠️  Could not check for existing RabbitMQ containers:', error.message);
+    console.warn(
+      '⚠️  Could not check for existing RabbitMQ containers:',
+      error.message
+    );
   }
 
   return null;
@@ -109,7 +123,9 @@ function extractAMQPPort(containerInfo: any): number | null {
 async function isRabbitMQHealthy(port: number): Promise<boolean> {
   try {
     const amqplib = await import('amqplib');
-    const connection = await amqplib.connect(`amqp://guest:guest@localhost:${port}`);
+    const connection = await amqplib.connect(
+      `amqp://guest:guest@localhost:${port}`
+    );
     await connection.close();
     return true;
   } catch {
@@ -122,7 +138,9 @@ async function isRabbitMQHealthy(port: number): Promise<boolean> {
  */
 export async function cleanupRabbitMQ(): Promise<void> {
   if (createdContainer) {
-    console.log('🧹 Global cleanup: Stopping created RabbitMQ testcontainer...');
+    console.log(
+      '🧹 Global cleanup: Stopping created RabbitMQ testcontainer...'
+    );
     await createdContainer.stop();
     createdContainer = null;
   }

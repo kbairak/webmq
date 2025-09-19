@@ -119,12 +119,20 @@ export interface ErrorMessage extends IncomingMessage {
 /**
  * Union type for all client-to-server messages
  */
-export type ClientMessage = ListenMessage | UnlistenMessage | EmitMessage | IdentifyMessage;
+export type ClientMessage =
+  | ListenMessage
+  | UnlistenMessage
+  | EmitMessage
+  | IdentifyMessage;
 
 /**
  * Union type for all server-to-client messages
  */
-export type ServerMessage = DataMessage | AckMessage | NackMessage | ErrorMessage;
+export type ServerMessage =
+  | DataMessage
+  | AckMessage
+  | NackMessage
+  | ErrorMessage;
 
 // Backend-specific types (when used in backend context)
 

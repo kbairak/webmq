@@ -1,5 +1,10 @@
 import {
-  WebMQServer, ClientMessage, Hook, WebSocketManager, RabbitMQManager, WebSocketConnectionData
+  WebMQServer,
+  ClientMessage,
+  Hook,
+  WebSocketManager,
+  RabbitMQManager,
+  WebSocketConnectionData,
 } from './index';
 import { WebSocket, WebSocketServer } from 'ws'; // Import WebSocket and WebSocketServer
 import amqplib from 'amqplib';
@@ -43,7 +48,6 @@ jest.mock('amqplib', () => {
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { mockConnection, mockChannel } = require('amqplib');
 
-
 // --- WebMQServer Integration Tests ---
 
 describe('WebMQServer Integration', () => {
@@ -52,7 +56,7 @@ describe('WebMQServer Integration', () => {
   let mockRabbitMQManager: jest.Mocked<RabbitMQManager>;
   let mockWS: jest.Mocked<WebSocket>;
   let mockConnection: WebSocketConnectionData;
-  let eventLog: Array<{ event: string, data: any }>;
+  let eventLog: Array<{ event: string; data: any }>;
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -68,7 +72,7 @@ describe('WebMQServer Integration', () => {
     mockConnection = {
       ws: mockWS,
       subscriptions: new Map(),
-      context: { ws: mockWS, id: 'test-connection-id' }
+      context: { ws: mockWS, id: 'test-connection-id' },
     };
 
     // Set up standard mock returns
@@ -102,13 +106,13 @@ describe('WebMQServer Integration', () => {
     } as any;
     mockRabbitMQManager.subscribe.mockResolvedValue({
       queue: 'test-queue',
-      consumerTag: 'test-consumer'
+      consumerTag: 'test-consumer',
     });
 
     // Mock the backend to use our mocked managers
     server = new WebMQServer({
       rabbitmqUrl: 'amqp://localhost',
-      exchangeName: 'test-exchange'
+      exchangeName: 'test-exchange',
     });
     server.setLogLevel('silent');
 
@@ -118,8 +122,16 @@ describe('WebMQServer Integration', () => {
     (server as any).channel = {}; // Mock channel exists
 
     // Set up event logging
-    const events = ['client.connected', 'client.disconnected', 'message.received', 'message.processed', 'subscription.created', 'subscription.removed', 'error'];
-    events.forEach(eventName => {
+    const events = [
+      'client.connected',
+      'client.disconnected',
+      'message.received',
+      'message.processed',
+      'subscription.created',
+      'subscription.removed',
+      'error',
+    ];
+    events.forEach((eventName) => {
       server.on(eventName as any, (data: any) => {
         eventLog.push({ event: eventName, data });
       });
@@ -132,34 +144,45 @@ describe('WebMQServer Integration', () => {
       const emitMessage: ClientMessage = {
         action: 'publish',
         routingKey: 'test.route',
-        payload: { data: 'test' }
+        payload: { data: 'test' },
       };
 
       // Act
       await (server as any).processMessage('test-connection-id', emitMessage);
 
       // Assert
-      expect(mockWebSocketManager.getConnection).toHaveBeenCalledWith('test-connection-id');
-      expect(mockRabbitMQManager.publish).toHaveBeenCalledWith('test.route', { data: 'test' });
+      expect(mockWebSocketManager.getConnection).toHaveBeenCalledWith(
+        'test-connection-id'
+      );
+      expect(mockRabbitMQManager.publish).toHaveBeenCalledWith('test.route', {
+        data: 'test',
+      });
     });
 
     it('should handle listen message with mocked abstractions', async () => {
       // Arrange
       const listenMessage: ClientMessage = {
         action: 'listen',
-        bindingKey: 'test.topic'
+        bindingKey: 'test.topic',
       };
 
       // Act
       await (server as any).processMessage('test-connection-id', listenMessage);
 
       // Assert
-      expect(mockWebSocketManager.getConnection).toHaveBeenCalledWith('test-connection-id');
-      expect(mockRabbitMQManager.subscribe).toHaveBeenCalledWith('test.topic', expect.any(Function));
+      expect(mockWebSocketManager.getConnection).toHaveBeenCalledWith(
+        'test-connection-id'
+      );
+      expect(mockRabbitMQManager.subscribe).toHaveBeenCalledWith(
+        'test.topic',
+        expect.any(Function)
+      );
       expect(mockConnection.subscriptions.has('test.topic')).toBe(true);
 
       // Check subscription.created event (this is emitted from executeAction)
-      const subscriptionEvent = eventLog.find(e => e.event === 'subscription.created');
+      const subscriptionEvent = eventLog.find(
+        (e) => e.event === 'subscription.created'
+      );
       expect(subscriptionEvent).toBeDefined();
       expect(subscriptionEvent!.data.connectionId).toBe('test-connection-id');
       expect(subscriptionEvent!.data.bindingKey).toBe('test.topic');
@@ -168,26 +191,41 @@ describe('WebMQServer Integration', () => {
 
     it('should handle unlisten message with mocked abstractions', async () => {
       // Arrange
-      const subscription = { queue: 'test-queue', consumerTag: 'test-consumer' };
+      const subscription = {
+        queue: 'test-queue',
+        consumerTag: 'test-consumer',
+      };
       mockConnection.subscriptions.set('test.topic', subscription);
 
       const unlistenMessage: ClientMessage = {
         action: 'unlisten',
-        bindingKey: 'test.topic'
+        bindingKey: 'test.topic',
       };
 
       // Act
-      await (server as any).processMessage('test-connection-id', unlistenMessage);
+      await (server as any).processMessage(
+        'test-connection-id',
+        unlistenMessage
+      );
 
       // Assert
-      expect(mockWebSocketManager.getConnection).toHaveBeenCalledWith('test-connection-id');
-      expect(mockRabbitMQManager.unsubscribe).toHaveBeenCalledWith(subscription, 'test.topic');
+      expect(mockWebSocketManager.getConnection).toHaveBeenCalledWith(
+        'test-connection-id'
+      );
+      expect(mockRabbitMQManager.unsubscribe).toHaveBeenCalledWith(
+        subscription,
+        'test.topic'
+      );
       expect(mockConnection.subscriptions.has('test.topic')).toBe(false);
 
       // Check subscription.removed event (this is emitted from executeAction)
-      const subscriptionRemovedEvent = eventLog.find(e => e.event === 'subscription.removed');
+      const subscriptionRemovedEvent = eventLog.find(
+        (e) => e.event === 'subscription.removed'
+      );
       expect(subscriptionRemovedEvent).toBeDefined();
-      expect(subscriptionRemovedEvent!.data.connectionId).toBe('test-connection-id');
+      expect(subscriptionRemovedEvent!.data.connectionId).toBe(
+        'test-connection-id'
+      );
       expect(subscriptionRemovedEvent!.data.bindingKey).toBe('test.topic');
     });
   });
@@ -195,19 +233,30 @@ describe('WebMQServer Integration', () => {
   describe('connection lifecycle with mocked abstractions', () => {
     it('should handle connection cleanup', async () => {
       // Arrange
-      const subscription = { queue: 'test-queue', consumerTag: 'test-consumer' };
+      const subscription = {
+        queue: 'test-queue',
+        consumerTag: 'test-consumer',
+      };
       mockConnection.subscriptions.set('test.topic', subscription);
 
       // Act
       await (server as any).cleanup('test-connection-id');
 
       // Assert
-      expect(mockWebSocketManager.getConnection).toHaveBeenCalledWith('test-connection-id');
-      expect(mockRabbitMQManager.cleanupSubscriptions).toHaveBeenCalledWith(mockConnection.subscriptions);
-      expect(mockWebSocketManager.removeConnection).toHaveBeenCalledWith('test-connection-id');
+      expect(mockWebSocketManager.getConnection).toHaveBeenCalledWith(
+        'test-connection-id'
+      );
+      expect(mockRabbitMQManager.cleanupSubscriptions).toHaveBeenCalledWith(
+        mockConnection.subscriptions
+      );
+      expect(mockWebSocketManager.removeConnection).toHaveBeenCalledWith(
+        'test-connection-id'
+      );
 
       // Check client.disconnected event
-      const disconnectedEvent = eventLog.find(e => e.event === 'client.disconnected');
+      const disconnectedEvent = eventLog.find(
+        (e) => e.event === 'client.disconnected'
+      );
       expect(disconnectedEvent).toBeDefined();
       expect(disconnectedEvent!.data.connectionId).toBe('test-connection-id');
     });
@@ -228,27 +277,40 @@ describe('WebMQServer Integration', () => {
     it('should handle missing connection during message processing', async () => {
       // Arrange
       mockWebSocketManager.getConnection.mockReturnValue(undefined);
-      const message: ClientMessage = { action: 'publish', routingKey: 'test', payload: {} };
+      const message: ClientMessage = {
+        action: 'publish',
+        routingKey: 'test',
+        payload: {},
+      };
 
       // Act & Assert
-      await expect((server as any).processMessage('invalid-id', message))
-        .rejects.toThrow('Connection invalid-id not found');
+      await expect(
+        (server as any).processMessage('invalid-id', message)
+      ).rejects.toThrow('Connection invalid-id not found');
     });
 
     it('should handle subscription manager errors', async () => {
       // Arrange
       const listenMessage: ClientMessage = {
         action: 'listen',
-        bindingKey: 'test.topic'
+        bindingKey: 'test.topic',
       };
-      mockRabbitMQManager.subscribe.mockRejectedValue(new Error('RabbitMQSubscription failed'));
+      mockRabbitMQManager.subscribe.mockRejectedValue(
+        new Error('RabbitMQSubscription failed')
+      );
 
       // Act & Assert
-      await expect((server as any).processMessage('test-connection-id', listenMessage))
-        .rejects.toThrow('RabbitMQSubscription failed');
+      await expect(
+        (server as any).processMessage('test-connection-id', listenMessage)
+      ).rejects.toThrow('RabbitMQSubscription failed');
 
-      expect(mockWebSocketManager.getConnection).toHaveBeenCalledWith('test-connection-id');
-      expect(mockRabbitMQManager.subscribe).toHaveBeenCalledWith('test.topic', expect.any(Function));
+      expect(mockWebSocketManager.getConnection).toHaveBeenCalledWith(
+        'test-connection-id'
+      );
+      expect(mockRabbitMQManager.subscribe).toHaveBeenCalledWith(
+        'test.topic',
+        expect.any(Function)
+      );
     });
   });
 });
@@ -296,7 +358,11 @@ describe('WebMQServer Lifecycle', () => {
     // Assert
     expect(amqplib.connect).toHaveBeenCalledWith('amqp://localhost');
     expect(mockConnection.createChannel).toHaveBeenCalled();
-    expect(mockChannel.assertExchange).toHaveBeenCalledWith('test-exchange', 'topic', { durable: true });
+    expect(mockChannel.assertExchange).toHaveBeenCalledWith(
+      'test-exchange',
+      'topic',
+      { durable: true }
+    );
     expect(WebSocketServer).toHaveBeenCalledWith({ port: 8080 });
     expect(mockWSS.on).toHaveBeenCalledWith('connection', expect.any(Function));
   });
@@ -312,7 +378,9 @@ describe('WebMQServer Lifecycle', () => {
     (WebSocketServer as unknown as jest.Mock).mockImplementation(() => mockWSS);
     // Act
     await server.start(8080);
-    const connectionHandler = mockWSS.on.mock.calls.find((call: any) => call[0] === 'connection')?.[1];
+    const connectionHandler = mockWSS.on.mock.calls.find(
+      (call: any) => call[0] === 'connection'
+    )?.[1];
     if (connectionHandler) {
       connectionHandler(mockWS);
     }
@@ -321,7 +389,6 @@ describe('WebMQServer Lifecycle', () => {
     expect(mockWS.on).toHaveBeenCalledWith('message', expect.any(Function));
     expect(mockWS.on).toHaveBeenCalledWith('close', expect.any(Function));
   });
-
 });
 
 // --- WebMQServer Hook System Tests ---
@@ -340,7 +407,7 @@ describe('WebMQServer Hook System', () => {
     mockConnection = {
       ws: {} as any,
       subscriptions: new Map(),
-      context: { ws: {} as any, id: 'test-connection-id' }
+      context: { ws: {} as any, id: 'test-connection-id' },
     };
 
     mockWebSocketManager = {
@@ -363,7 +430,10 @@ describe('WebMQServer Hook System', () => {
     } as any;
 
     mockRabbitMQManager = {
-      subscribe: jest.fn().mockResolvedValue({ queue: 'test-queue', consumerTag: 'test-consumer' }),
+      subscribe: jest.fn().mockResolvedValue({
+        queue: 'test-queue',
+        consumerTag: 'test-consumer',
+      }),
       unsubscribe: jest.fn().mockResolvedValue(undefined),
       cleanupSubscriptions: jest.fn().mockResolvedValue(undefined),
       publish: jest.fn().mockResolvedValue(undefined),
@@ -387,7 +457,7 @@ describe('WebMQServer Hook System', () => {
       hooks: {
         pre: [preHook],
         onListen: [listenHook],
-      }
+      },
     });
 
     (server as any).webSocketManager = mockWebSocketManager;
@@ -396,7 +466,7 @@ describe('WebMQServer Hook System', () => {
 
     const message: ClientMessage = {
       action: 'listen',
-      bindingKey: 'test.topic'
+      bindingKey: 'test.topic',
     };
 
     // Act
@@ -404,8 +474,16 @@ describe('WebMQServer Hook System', () => {
 
     // Assert
     expect(hookExecutionLog).toEqual(['pre', 'listen']);
-    expect(preHook).toHaveBeenCalledWith(mockConnection.context, message, expect.any(Function));
-    expect(listenHook).toHaveBeenCalledWith(mockConnection.context, message, expect.any(Function));
+    expect(preHook).toHaveBeenCalledWith(
+      mockConnection.context,
+      message,
+      expect.any(Function)
+    );
+    expect(listenHook).toHaveBeenCalledWith(
+      mockConnection.context,
+      message,
+      expect.any(Function)
+    );
   });
 
   it('should execute hooks in correct order for publish action', async () => {
@@ -425,7 +503,7 @@ describe('WebMQServer Hook System', () => {
       hooks: {
         pre: [preHook],
         onPublish: [emitHook],
-      }
+      },
     });
 
     (server as any).webSocketManager = mockWebSocketManager;
@@ -435,7 +513,7 @@ describe('WebMQServer Hook System', () => {
     const message: ClientMessage = {
       action: 'publish',
       routingKey: 'test.route',
-      payload: { data: 'test' }
+      payload: { data: 'test' },
     };
 
     // Act
@@ -462,7 +540,7 @@ describe('WebMQServer Hook System', () => {
       hooks: {
         pre: [preHook],
         onUnlisten: [unlistenHook],
-      }
+      },
     });
 
     (server as any).webSocketManager = mockWebSocketManager;
@@ -470,11 +548,14 @@ describe('WebMQServer Hook System', () => {
     (server as any).channel = {};
 
     // Set up existing subscription
-    mockConnection.subscriptions.set('test.topic', { queue: 'test-queue', consumerTag: 'test-consumer' });
+    mockConnection.subscriptions.set('test.topic', {
+      queue: 'test-queue',
+      consumerTag: 'test-consumer',
+    });
 
     const message: ClientMessage = {
       action: 'unlisten',
-      bindingKey: 'test.topic'
+      bindingKey: 'test.topic',
     };
 
     // Act
@@ -497,7 +578,7 @@ describe('WebMQServer Hook System', () => {
       exchangeName: 'test-exchange',
       hooks: {
         pre: [contextModifyingHook],
-      }
+      },
     });
 
     (server as any).webSocketManager = mockWebSocketManager;
@@ -507,7 +588,7 @@ describe('WebMQServer Hook System', () => {
     const message: ClientMessage = {
       action: 'publish',
       routingKey: 'test.route',
-      payload: { data: 'test' }
+      payload: { data: 'test' },
     };
 
     // Act
@@ -530,7 +611,7 @@ describe('WebMQServer Hook System', () => {
       exchangeName: 'test-exchange',
       hooks: {
         pre: [preHook],
-      }
+      },
     });
 
     (server as any).webSocketManager = mockWebSocketManager;
@@ -567,7 +648,7 @@ describe('WebMQServer Message Handling', () => {
     mockConnection = {
       ws: mockWS,
       subscriptions: new Map(),
-      context: { ws: mockWS, id: 'test-connection-id' }
+      context: { ws: mockWS, id: 'test-connection-id' },
     };
 
     mockWebSocketManager = {
@@ -590,7 +671,10 @@ describe('WebMQServer Message Handling', () => {
     } as any;
 
     mockRabbitMQManager = {
-      subscribe: jest.fn().mockResolvedValue({ queue: 'test-queue', consumerTag: 'test-consumer' }),
+      subscribe: jest.fn().mockResolvedValue({
+        queue: 'test-queue',
+        consumerTag: 'test-consumer',
+      }),
       unsubscribe: jest.fn().mockResolvedValue(undefined),
       cleanupSubscriptions: jest.fn().mockResolvedValue(undefined),
       publish: jest.fn().mockResolvedValue(undefined),
@@ -598,7 +682,7 @@ describe('WebMQServer Message Handling', () => {
 
     server = new WebMQServer({
       rabbitmqUrl: 'amqp://localhost',
-      exchangeName: 'test-exchange'
+      exchangeName: 'test-exchange',
     });
     server.setLogLevel('silent');
 
@@ -607,21 +691,22 @@ describe('WebMQServer Message Handling', () => {
     (server as any).channel = {};
   });
 
-
   it('should send messages to WebSocket clients through message handler', async () => {
     // Arrange
     const testPayload = { user: 'john', message: 'hello world' };
     let messageHandlerCallback: ((msg: any) => void) | undefined;
 
     // Capture the message handler callback when subscribe is called
-    mockRabbitMQManager.subscribe.mockImplementation(async (bindingKey, handler) => {
-      messageHandlerCallback = handler;
-      return { queue: 'test-queue', consumerTag: 'test-consumer' };
-    });
+    mockRabbitMQManager.subscribe.mockImplementation(
+      async (bindingKey, handler) => {
+        messageHandlerCallback = handler;
+        return { queue: 'test-queue', consumerTag: 'test-consumer' };
+      }
+    );
 
     const message: ClientMessage = {
       action: 'listen',
-      bindingKey: 'chat.room.1'
+      bindingKey: 'chat.room.1',
     };
 
     // Act
@@ -629,16 +714,18 @@ describe('WebMQServer Message Handling', () => {
 
     // Simulate a RabbitMQ message being received
     const mockRabbitMsg = {
-      content: Buffer.from(JSON.stringify(testPayload))
+      content: Buffer.from(JSON.stringify(testPayload)),
     };
     messageHandlerCallback!(mockRabbitMsg);
 
     // Assert
-    expect(mockWS.send).toHaveBeenCalledWith(JSON.stringify({
-      action: 'message',
-      bindingKey: 'chat.room.1',
-      payload: testPayload,
-    }));
+    expect(mockWS.send).toHaveBeenCalledWith(
+      JSON.stringify({
+        action: 'message',
+        bindingKey: 'chat.room.1',
+        payload: testPayload,
+      })
+    );
   });
 
   it('should handle WebSocket close events', async () => {
@@ -647,11 +734,16 @@ describe('WebMQServer Message Handling', () => {
     await (server as any).cleanup('test-connection-id');
 
     // Assert
-    expect(mockWebSocketManager.getConnection).toHaveBeenCalledWith('test-connection-id');
-    expect(mockRabbitMQManager.cleanupSubscriptions).toHaveBeenCalledWith(mockConnection.subscriptions);
-    expect(mockWebSocketManager.removeConnection).toHaveBeenCalledWith('test-connection-id');
+    expect(mockWebSocketManager.getConnection).toHaveBeenCalledWith(
+      'test-connection-id'
+    );
+    expect(mockRabbitMQManager.cleanupSubscriptions).toHaveBeenCalledWith(
+      mockConnection.subscriptions
+    );
+    expect(mockWebSocketManager.removeConnection).toHaveBeenCalledWith(
+      'test-connection-id'
+    );
   });
-
 });
 
 // --- WebMQServer Error Handling Tests ---
@@ -668,7 +760,7 @@ describe('WebMQServer Error Handling', () => {
     mockConnection = {
       ws: {} as any,
       subscriptions: new Map(),
-      context: { ws: {} as any, id: 'test-connection-id' }
+      context: { ws: {} as any, id: 'test-connection-id' },
     };
 
     mockWebSocketManager = {
@@ -691,7 +783,10 @@ describe('WebMQServer Error Handling', () => {
     } as any;
 
     mockRabbitMQManager = {
-      subscribe: jest.fn().mockResolvedValue({ queue: 'test-queue', consumerTag: 'test-consumer' }),
+      subscribe: jest.fn().mockResolvedValue({
+        queue: 'test-queue',
+        consumerTag: 'test-consumer',
+      }),
       unsubscribe: jest.fn().mockResolvedValue(undefined),
       cleanupSubscriptions: jest.fn().mockResolvedValue(undefined),
       publish: jest.fn().mockResolvedValue(undefined),
@@ -699,7 +794,7 @@ describe('WebMQServer Error Handling', () => {
 
     server = new WebMQServer({
       rabbitmqUrl: 'amqp://localhost',
-      exchangeName: 'test-exchange'
+      exchangeName: 'test-exchange',
     });
     server.setLogLevel('silent');
 
@@ -712,70 +807,78 @@ describe('WebMQServer Error Handling', () => {
     // Arrange
     const message = {
       action: 'publish',
-      payload: { data: 'test' }
+      payload: { data: 'test' },
       // Missing routingKey
     } as ClientMessage;
 
     // Act & Assert
-    await expect((server as any).processMessage('test-connection-id', message))
-      .rejects.toThrow('publish requires routingKey and payload');
+    await expect(
+      (server as any).processMessage('test-connection-id', message)
+    ).rejects.toThrow('publish requires routingKey and payload');
   });
 
   it('should handle missing payload in publish', async () => {
     // Arrange
     const message = {
       action: 'publish',
-      routingKey: 'test.route'
+      routingKey: 'test.route',
       // Missing payload
     } as ClientMessage;
 
     // Act & Assert
-    await expect((server as any).processMessage('test-connection-id', message))
-      .rejects.toThrow('publish requires routingKey and payload');
+    await expect(
+      (server as any).processMessage('test-connection-id', message)
+    ).rejects.toThrow('publish requires routingKey and payload');
   });
 
   it('should handle missing bindingKey in listen', async () => {
     // Arrange
     const message = {
-      action: 'listen'
+      action: 'listen',
       // Missing bindingKey
     } as ClientMessage;
 
     // Act & Assert
-    await expect((server as any).processMessage('test-connection-id', message))
-      .rejects.toThrow('listen requires a bindingKey');
+    await expect(
+      (server as any).processMessage('test-connection-id', message)
+    ).rejects.toThrow('listen requires a bindingKey');
   });
 
   it('should handle missing bindingKey in unlisten', async () => {
     // Arrange
     const message = {
-      action: 'unlisten'
+      action: 'unlisten',
       // Missing bindingKey
     } as ClientMessage;
 
     // Act & Assert
-    await expect((server as any).processMessage('test-connection-id', message))
-      .rejects.toThrow('unlisten requires a bindingKey');
+    await expect(
+      (server as any).processMessage('test-connection-id', message)
+    ).rejects.toThrow('unlisten requires a bindingKey');
   });
 
   it('should handle unknown action types', async () => {
     // Arrange
     const message = {
-      action: 'unknown-action'
+      action: 'unknown-action',
     } as any;
 
     // Act & Assert
-    await expect((server as any).processMessage('test-connection-id', message))
-      .rejects.toThrow('Unknown action: unknown-action');
+    await expect(
+      (server as any).processMessage('test-connection-id', message)
+    ).rejects.toThrow('Unknown action: unknown-action');
   });
 
   it('should handle already existing subscriptions in listen', async () => {
     // Arrange
-    mockConnection.subscriptions.set('test.topic', { queue: 'existing-queue', consumerTag: 'existing-consumer' });
+    mockConnection.subscriptions.set('test.topic', {
+      queue: 'existing-queue',
+      consumerTag: 'existing-consumer',
+    });
 
     const message: ClientMessage = {
       action: 'listen',
-      bindingKey: 'test.topic'
+      bindingKey: 'test.topic',
     };
 
     // Act
@@ -783,7 +886,6 @@ describe('WebMQServer Error Handling', () => {
 
     // Assert
     expect(mockRabbitMQManager.subscribe).not.toHaveBeenCalled();
-
   });
 
   it('should handle non-existent subscription in unlisten', async () => {
@@ -791,7 +893,7 @@ describe('WebMQServer Error Handling', () => {
 
     const message: ClientMessage = {
       action: 'unlisten',
-      bindingKey: 'non-existent-topic'
+      bindingKey: 'non-existent-topic',
     };
 
     // Act
@@ -799,7 +901,6 @@ describe('WebMQServer Error Handling', () => {
 
     // Assert
     expect(mockRabbitMQManager.unsubscribe).not.toHaveBeenCalled();
-
   });
 
   it('should handle missing connection or channel in executeAction', async () => {
@@ -807,19 +908,20 @@ describe('WebMQServer Error Handling', () => {
     const message: ClientMessage = {
       action: 'publish',
       routingKey: 'test.route',
-      payload: { data: 'test' }
+      payload: { data: 'test' },
     };
 
     // Test with missing subscription manager
     (server as any).rabbitMQManager = null;
 
     // Act & Assert
-    await expect((server as any).processMessage('test-connection-id', message))
-      .rejects.toThrow('Connection test-connection-id or shared channel not available');
+    await expect(
+      (server as any).processMessage('test-connection-id', message)
+    ).rejects.toThrow(
+      'Connection test-connection-id or shared channel not available'
+    );
   });
-
 });
-
 
 // --- Component Unit Tests ---
 
@@ -921,7 +1023,9 @@ describe('WebSocketManager', () => {
 
       // Assert
       expect(connections).toHaveLength(2);
-      expect(connections.map(c => c.context.id)).toEqual(expect.arrayContaining([id1, id2]));
+      expect(connections.map((c) => c.context.id)).toEqual(
+        expect.arrayContaining([id1, id2])
+      );
     });
 
     it('should return connection IDs', () => {
@@ -979,7 +1083,10 @@ describe('RabbitMQManager', () => {
     it('should create a subscription correctly', async () => {
       // Act
       const messageHandler = jest.fn();
-      const subscription = await manager.subscribe('test.topic', messageHandler);
+      const subscription = await manager.subscribe(
+        'test.topic',
+        messageHandler
+      );
 
       // Assert
       expect(subscription.queue).toBe('test-queue-123');
@@ -987,43 +1094,66 @@ describe('RabbitMQManager', () => {
 
       expect(mockChannel.assertQueue).toHaveBeenCalledWith('', {
         exclusive: true,
-        autoDelete: true
+        autoDelete: true,
       });
-      expect(mockChannel.bindQueue).toHaveBeenCalledWith('test-queue-123', 'test-exchange', 'test.topic');
-      expect(mockChannel.consume).toHaveBeenCalledWith('test-queue-123', expect.any(Function));
+      expect(mockChannel.bindQueue).toHaveBeenCalledWith(
+        'test-queue-123',
+        'test-exchange',
+        'test.topic'
+      );
+      expect(mockChannel.consume).toHaveBeenCalledWith(
+        'test-queue-123',
+        expect.any(Function)
+      );
     });
 
     it('should handle RabbitMQ errors during subscription', async () => {
       // Arrange
-      mockChannel.assertQueue.mockRejectedValue(new Error('Queue creation failed'));
+      mockChannel.assertQueue.mockRejectedValue(
+        new Error('Queue creation failed')
+      );
 
       // Act & Assert
       const messageHandler = jest.fn();
-      await expect(manager.subscribe('test.topic', messageHandler)).rejects.toThrow('Queue creation failed');
+      await expect(
+        manager.subscribe('test.topic', messageHandler)
+      ).rejects.toThrow('Queue creation failed');
     });
   });
 
   describe('unsubscribe', () => {
     it('should clean up subscription correctly', async () => {
       // Arrange
-      const subscription = { queue: 'test-queue', consumerTag: 'test-consumer' };
+      const subscription = {
+        queue: 'test-queue',
+        consumerTag: 'test-consumer',
+      };
 
       // Act
       await manager.unsubscribe(subscription, 'test.topic');
 
       // Assert
       expect(mockChannel.cancel).toHaveBeenCalledWith('test-consumer');
-      expect(mockChannel.unbindQueue).toHaveBeenCalledWith('test-queue', 'test-exchange', 'test.topic');
+      expect(mockChannel.unbindQueue).toHaveBeenCalledWith(
+        'test-queue',
+        'test-exchange',
+        'test.topic'
+      );
       // Note: deleteQueue is not called because we rely on autoDelete behavior
     });
 
     it('should handle errors during cleanup gracefully', async () => {
       // Arrange
       mockChannel.cancel.mockRejectedValue(new Error('Cancel failed'));
-      const subscription = { queue: 'test-queue', consumerTag: 'test-consumer' };
+      const subscription = {
+        queue: 'test-queue',
+        consumerTag: 'test-consumer',
+      };
 
       // Act & Assert
-      await expect(manager.unsubscribe(subscription, 'test.topic')).rejects.toThrow('Cancel failed');
+      await expect(
+        manager.unsubscribe(subscription, 'test.topic')
+      ).rejects.toThrow('Cancel failed');
     });
   });
 
@@ -1062,14 +1192,12 @@ describe('RabbitMQManager', () => {
         return Promise.resolve();
       });
 
-
       // Act
       await manager.cleanupSubscriptions(subscriptions);
 
       // Assert
       // Should still try to clean up the second subscription
       expect(mockChannel.cancel).toHaveBeenCalledWith('consumer2');
-
     });
   });
 
@@ -1096,7 +1224,7 @@ describe('RabbitMQManager', () => {
         user: 'john',
         timestamp: new Date().toISOString(),
         data: { nested: { values: [1, 2, 3] } },
-        metadata: null
+        metadata: null,
       };
 
       // Act
@@ -1117,9 +1245,9 @@ describe('RabbitMQManager', () => {
       });
 
       // Act & Assert
-      await expect(manager.publish('test.topic', { msg: 'test' }))
-        .rejects.toThrow('Channel publish failed');
+      await expect(
+        manager.publish('test.topic', { msg: 'test' })
+      ).rejects.toThrow('Channel publish failed');
     });
   });
-
 });

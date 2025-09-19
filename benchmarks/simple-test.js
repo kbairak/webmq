@@ -22,8 +22,7 @@ async function simpleTest() {
     console.log('✅ Message sent successfully');
 
     // Wait a bit
-    await new Promise(resolve => setTimeout(resolve, 1000));
-
+    await new Promise((resolve) => setTimeout(resolve, 1000));
   } catch (error) {
     console.error('❌ Test failed:', error.message);
   } finally {

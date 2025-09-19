@@ -72,12 +72,20 @@ export interface ErrorMessage {
 /**
  * Union type for all client-to-server messages
  */
-export type ClientMessage = PublishMessage | ListenMessage | UnlistenMessage | IdentifyMessage;
+export type ClientMessage =
+  | PublishMessage
+  | ListenMessage
+  | UnlistenMessage
+  | IdentifyMessage;
 
 /**
  * Union type for all server-to-client messages
  */
-export type ServerMessage = DataMessage | AckMessage | NackMessage | ErrorMessage;
+export type ServerMessage =
+  | DataMessage
+  | AckMessage
+  | NackMessage
+  | ErrorMessage;
 
 /** A RabbitMQ subscription with queue and consumer information. */
 export interface RabbitMQSubscription {
@@ -91,7 +99,6 @@ export interface WebSocketConnectionData {
   subscriptions: Map<string, RabbitMQSubscription>;
   context: WebSocketConnectionContext;
 }
-
 
 /** A hook function to intercept and process messages. */
 export type Hook = (
@@ -117,7 +124,9 @@ export class WebSocketManager {
   private connections = new Map<string, WebSocketConnectionData>();
   private rabbitMQManager: RabbitMQManager | null = null;
   private wss: WebSocketServer | null = null;
-  private messageHandler: ((connectionId: string, message: ClientMessage) => Promise<void>) | null = null;
+  private messageHandler:
+    | ((connectionId: string, message: ClientMessage) => Promise<void>)
+    | null = null;
   private eventEmitter: EventEmitter | null = null;
   private logger: Logger | null = null;
 
@@ -125,7 +134,9 @@ export class WebSocketManager {
     this.rabbitMQManager = rabbitMQManager;
   }
 
-  setMessageHandler(handler: (connectionId: string, message: ClientMessage) => Promise<void>): void {
+  setMessageHandler(
+    handler: (connectionId: string, message: ClientMessage) => Promise<void>
+  ): void {
     this.messageHandler = handler;
   }
 
@@ -180,15 +191,20 @@ export class WebSocketManager {
     const messageHandler = (msg: any) => {
       if (connection.ws.readyState === WebSocket.OPEN) {
         const payload = JSON.parse(msg.content.toString());
-        connection.ws.send(JSON.stringify({
-          action: 'message',
-          routingKey: msg.fields.routingKey,
-          payload
-        }));
+        connection.ws.send(
+          JSON.stringify({
+            action: 'message',
+            routingKey: msg.fields.routingKey,
+            payload,
+          })
+        );
       }
     };
 
-    const subscription = await this.rabbitMQManager.subscribe(bindingKey, messageHandler);
+    const subscription = await this.rabbitMQManager.subscribe(
+      bindingKey,
+      messageHandler
+    );
     connection.subscriptions.set(bindingKey, subscription);
   }
 
@@ -266,7 +282,11 @@ export class WebSocketManager {
     });
   }
 
-  private async handleMessage(connectionId: string, ws: WebSocket, data: WebSocket.RawData): Promise<void> {
+  private async handleMessage(
+    connectionId: string,
+    ws: WebSocket,
+    data: WebSocket.RawData
+  ): Promise<void> {
     try {
       const message: ClientMessage = JSON.parse(data.toString());
 
@@ -283,24 +303,35 @@ export class WebSocketManager {
       }
     } catch (error: any) {
       if (this.logger) {
-        this.logger.error(`[${connectionId}] Error processing message:`, error.message);
+        this.logger.error(
+          `[${connectionId}] Error processing message:`,
+          error.message
+        );
       }
 
       if (this.eventEmitter) {
-        this.eventEmitter.emit('error', { connectionId, error, context: 'message processing' });
+        this.eventEmitter.emit('error', {
+          connectionId,
+          error,
+          context: 'message processing',
+        });
       }
 
       // Send nack for failed message
       try {
         const message: ClientMessage = JSON.parse(data.toString());
         if (message.action === 'publish' && message.messageId) {
-          ws.send(JSON.stringify({
-            action: 'nack',
-            messageId: message.messageId,
-            error: error.message
-          }));
+          ws.send(
+            JSON.stringify({
+              action: 'nack',
+              messageId: message.messageId,
+              error: error.message,
+            })
+          );
           if (this.logger) {
-            this.logger.debug(`[${connectionId}] Sent nack for message ${message.messageId}`);
+            this.logger.debug(
+              `[${connectionId}] Sent nack for message ${message.messageId}`
+            );
           }
         } else {
           ws.send(JSON.stringify({ action: 'error', message: error.message }));
@@ -333,19 +364,22 @@ export class RabbitMQManager {
     private channel: Channel,
     private exchangeName: string,
     private logger?: Logger
-  ) { }
+  ) {}
 
-  async subscribe(bindingKey: string, messageHandler: (msg: any) => void): Promise<RabbitMQSubscription> {
+  async subscribe(
+    bindingKey: string,
+    messageHandler: (msg: any) => void
+  ): Promise<RabbitMQSubscription> {
     const { queue } = await this.channel.assertQueue('', {
       exclusive: true,
-      autoDelete: true
+      autoDelete: true,
     });
 
     await this.channel.bindQueue(queue, this.exchangeName, bindingKey);
 
     const { consumerTag } = await this.channel.consume(queue, (msg) => {
       if (msg) {
-        messageHandler(msg)
+        messageHandler(msg);
         this.channel.ack(msg);
       }
     });
@@ -353,16 +387,26 @@ export class RabbitMQManager {
     return { queue, consumerTag };
   }
 
-  async subscribeJSON(bindingKey: string, messageHandler: (payload: any) => void): Promise<RabbitMQSubscription> {
+  async subscribeJSON(
+    bindingKey: string,
+    messageHandler: (payload: any) => void
+  ): Promise<RabbitMQSubscription> {
     return this.subscribe(bindingKey, (msg) => {
       const payload = JSON.parse(msg.content.toString());
       messageHandler(payload);
     });
   }
 
-  async unsubscribe(subscription: RabbitMQSubscription, bindingKey: string): Promise<void> {
+  async unsubscribe(
+    subscription: RabbitMQSubscription,
+    bindingKey: string
+  ): Promise<void> {
     // Check if channel is still open before attempting cleanup
-    if (!this.channel || (this.channel as any).closing || (this.channel as any).closed) {
+    if (
+      !this.channel ||
+      (this.channel as any).closing ||
+      (this.channel as any).closed
+    ) {
       return; // Channel is already closed, nothing to clean up
     }
 
@@ -370,13 +414,19 @@ export class RabbitMQManager {
       // Cancel consumer first - this will trigger autoDelete for the queue
       await this.channel.cancel(subscription.consumerTag);
       // Unbind queue from exchange for clean shutdown
-      await this.channel.unbindQueue(subscription.queue, this.exchangeName, bindingKey);
+      await this.channel.unbindQueue(
+        subscription.queue,
+        this.exchangeName,
+        bindingKey
+      );
       // Note: Queue deletion is handled automatically by autoDelete when last consumer is removed
     } catch (error: any) {
       // If channel was closed during cleanup, ignore the error
-      if (error.message?.includes('Channel closed') ||
+      if (
+        error.message?.includes('Channel closed') ||
         error.message?.includes('Channel closing') ||
-        error.message?.includes('IllegalOperationError')) {
+        error.message?.includes('IllegalOperationError')
+      ) {
         return;
       }
       throw error; // Re-throw other errors
@@ -391,14 +441,19 @@ export class RabbitMQManager {
     );
   }
 
-  async cleanupSubscriptions(subscriptions: Map<string, RabbitMQSubscription>): Promise<void> {
+  async cleanupSubscriptions(
+    subscriptions: Map<string, RabbitMQSubscription>
+  ): Promise<void> {
     for (const [bindingKey, subscription] of subscriptions.entries()) {
       try {
         await this.unsubscribe(subscription, bindingKey);
       } catch (err) {
         // Log cleanup errors - these are usually harmless during shutdown
         if (this.logger) {
-          this.logger.debug(`Error cleaning up subscription for ${bindingKey}:`, err);
+          this.logger.debug(
+            `Error cleaning up subscription for ${bindingKey}:`,
+            err
+          );
         }
       }
     }
@@ -421,10 +476,15 @@ interface ActionResult {
 }
 
 class MessageProcessor {
-  constructor(private logger: Logger) { }
+  constructor(private logger: Logger) {}
 
-  async executeAction(context: ActionContext, message: ClientMessage): Promise<void> {
-    this.logger.debug(`[${context.connectionId}] Executing ${message.action} action`);
+  async executeAction(
+    context: ActionContext,
+    message: ClientMessage
+  ): Promise<void> {
+    this.logger.debug(
+      `[${context.connectionId}] Executing ${message.action} action`
+    );
 
     let result: ActionResult;
 
@@ -453,10 +513,15 @@ class MessageProcessor {
         throw new Error(`Unknown action: ${(message as any).action}`);
     }
 
-    this.logger.debug(`[${context.connectionId}] Action ${message.action} completed successfully`);
+    this.logger.debug(
+      `[${context.connectionId}] Action ${message.action} completed successfully`
+    );
   }
 
-  private async handlePublish(context: ActionContext, message: ClientMessage): Promise<ActionResult> {
+  private async handlePublish(
+    context: ActionContext,
+    message: ClientMessage
+  ): Promise<ActionResult> {
     if (message.action !== 'publish') {
       throw new Error('Expected publish message');
     }
@@ -466,23 +531,37 @@ class MessageProcessor {
     }
 
     try {
-      await context.subscriptionManager.publish(message.routingKey, message.payload);
-      this.logger.debug(`[${context.connectionId}] Message published successfully`);
+      await context.subscriptionManager.publish(
+        message.routingKey,
+        message.payload
+      );
+      this.logger.debug(
+        `[${context.connectionId}] Message published successfully`
+      );
       return { success: true };
     } catch (error: any) {
-      this.logger.error(`[${context.connectionId}] Error publishing message:`, error.message);
+      this.logger.error(
+        `[${context.connectionId}] Error publishing message:`,
+        error.message
+      );
       return { success: false, error: error.message };
     }
   }
 
-  private async respondToPublish(context: ActionContext, message: ClientMessage, result: ActionResult): Promise<void> {
+  private async respondToPublish(
+    context: ActionContext,
+    message: ClientMessage,
+    result: ActionResult
+  ): Promise<void> {
     if (message.action === 'publish' && message.messageId) {
       const response = result.success
         ? { action: 'ack', messageId: message.messageId, status: 'success' }
         : { action: 'nack', messageId: message.messageId, error: result.error };
 
       context.connection.ws.send(JSON.stringify(response));
-      this.logger.debug(`[${context.connectionId}] Sent ${result.success ? 'ack' : 'nack'} for message ${message.messageId}`);
+      this.logger.debug(
+        `[${context.connectionId}] Sent ${result.success ? 'ack' : 'nack'} for message ${message.messageId}`
+      );
     }
 
     if (!result.success) {
@@ -490,7 +569,10 @@ class MessageProcessor {
     }
   }
 
-  private async handleListen(context: ActionContext, message: ClientMessage): Promise<ActionResult> {
+  private async handleListen(
+    context: ActionContext,
+    message: ClientMessage
+  ): Promise<ActionResult> {
     if (message.action !== 'listen') {
       throw new Error('Expected listen message');
     }
@@ -500,37 +582,62 @@ class MessageProcessor {
     }
 
     if (context.connection.subscriptions.has(message.bindingKey)) {
-      this.logger.debug(`[${context.connectionId}] Already listening to ${message.bindingKey}`);
+      this.logger.debug(
+        `[${context.connectionId}] Already listening to ${message.bindingKey}`
+      );
       return { success: true, data: 'already_subscribed' };
     }
 
-    const subscription = await context.subscriptionManager.subscribe(message.bindingKey, (msg) => {
-      this.logger.debug(`[${context.connectionId}] Received message from RabbitMQ:`, msg.content.toString());
-      context.connection.ws.send(JSON.stringify({
-        action: 'message',
-        bindingKey: message.bindingKey,
-        payload: JSON.parse(msg.content.toString()),
-      }));
-    });
+    const subscription = await context.subscriptionManager.subscribe(
+      message.bindingKey,
+      (msg) => {
+        this.logger.debug(
+          `[${context.connectionId}] Received message from RabbitMQ:`,
+          msg.content.toString()
+        );
+        context.connection.ws.send(
+          JSON.stringify({
+            action: 'message',
+            bindingKey: message.bindingKey,
+            payload: JSON.parse(msg.content.toString()),
+          })
+        );
+      }
+    );
 
-    this.logger.debug(`[${context.connectionId}] Queue created: ${subscription.queue}`);
+    this.logger.debug(
+      `[${context.connectionId}] Queue created: ${subscription.queue}`
+    );
     context.connection.subscriptions.set(message.bindingKey, subscription);
-    this.logger.debug(`[${context.connectionId}] Consumer set up with tag: ${subscription.consumerTag}`);
+    this.logger.debug(
+      `[${context.connectionId}] Consumer set up with tag: ${subscription.consumerTag}`
+    );
 
     return { success: true, data: subscription };
   }
 
-  private async respondToListen(context: ActionContext, message: ClientMessage, result: ActionResult): Promise<void> {
-    if (message.action === 'listen' && result.success && result.data !== 'already_subscribed') {
+  private async respondToListen(
+    context: ActionContext,
+    message: ClientMessage,
+    result: ActionResult
+  ): Promise<void> {
+    if (
+      message.action === 'listen' &&
+      result.success &&
+      result.data !== 'already_subscribed'
+    ) {
       context.serverEmitter.emit('subscription.created', {
         connectionId: context.connectionId,
         bindingKey: message.bindingKey,
-        queue: result.data.queue
+        queue: result.data.queue,
       });
     }
   }
 
-  private async handleUnlisten(context: ActionContext, message: ClientMessage): Promise<ActionResult> {
+  private async handleUnlisten(
+    context: ActionContext,
+    message: ClientMessage
+  ): Promise<ActionResult> {
     if (message.action !== 'unlisten') {
       throw new Error('Expected unlisten message');
     }
@@ -539,28 +646,48 @@ class MessageProcessor {
       throw new Error('unlisten requires a bindingKey');
     }
 
-    const subscription = context.connection.subscriptions.get(message.bindingKey);
+    const subscription = context.connection.subscriptions.get(
+      message.bindingKey
+    );
     if (subscription) {
-      await context.subscriptionManager.unsubscribe(subscription, message.bindingKey);
+      await context.subscriptionManager.unsubscribe(
+        subscription,
+        message.bindingKey
+      );
       context.connection.subscriptions.delete(message.bindingKey);
-      this.logger.debug(`[${context.connectionId}] Unsubscribed from ${message.bindingKey}`);
+      this.logger.debug(
+        `[${context.connectionId}] Unsubscribed from ${message.bindingKey}`
+      );
       return { success: true, data: subscription };
     } else {
-      this.logger.debug(`[${context.connectionId}] No subscription found for ${message.bindingKey}`);
+      this.logger.debug(
+        `[${context.connectionId}] No subscription found for ${message.bindingKey}`
+      );
       return { success: true, data: 'not_found' };
     }
   }
 
-  private async respondToUnlisten(context: ActionContext, message: ClientMessage, result: ActionResult): Promise<void> {
-    if (message.action === 'unlisten' && result.success && result.data !== 'not_found') {
+  private async respondToUnlisten(
+    context: ActionContext,
+    message: ClientMessage,
+    result: ActionResult
+  ): Promise<void> {
+    if (
+      message.action === 'unlisten' &&
+      result.success &&
+      result.data !== 'not_found'
+    ) {
       context.serverEmitter.emit('subscription.removed', {
         connectionId: context.connectionId,
-        bindingKey: message.bindingKey
+        bindingKey: message.bindingKey,
       });
     }
   }
 
-  private async handleIdentify(context: ActionContext, message: ClientMessage): Promise<ActionResult> {
+  private async handleIdentify(
+    context: ActionContext,
+    message: ClientMessage
+  ): Promise<ActionResult> {
     if (message.action !== 'identify') {
       throw new Error('Expected identify message');
     }
@@ -572,15 +699,21 @@ class MessageProcessor {
     // Store sessionId in connection context for potential future use
     context.connection.context.sessionId = message.sessionId;
 
-    this.logger.debug(`[${context.connectionId}] Client identified with session ID: ${message.sessionId}`);
+    this.logger.debug(
+      `[${context.connectionId}] Client identified with session ID: ${message.sessionId}`
+    );
     return { success: true, data: { sessionId: message.sessionId } };
   }
 
-  private async respondToIdentify(context: ActionContext, message: ClientMessage, result: ActionResult): Promise<void> {
+  private async respondToIdentify(
+    context: ActionContext,
+    message: ClientMessage,
+    result: ActionResult
+  ): Promise<void> {
     if (message.action === 'identify' && result.success) {
       context.serverEmitter.emit('client.identified', {
         connectionId: context.connectionId,
-        sessionId: message.sessionId
+        sessionId: message.sessionId,
       });
     }
   }
@@ -640,7 +773,9 @@ export class WebMQServer extends EventEmitter {
     this.logger = new Logger('error', 'WebMQServer');
 
     // Initialize message processor with logger
-    this.messageProcessor = new MessageProcessor(this.logger.child('MessageProcessor'));
+    this.messageProcessor = new MessageProcessor(
+      this.logger.child('MessageProcessor')
+    );
   }
 
   /**
@@ -652,7 +787,9 @@ export class WebMQServer extends EventEmitter {
     this.logger.setLogLevel(level);
 
     // Update message processor logger
-    this.messageProcessor = new MessageProcessor(this.logger.child('MessageProcessor'));
+    this.messageProcessor = new MessageProcessor(
+      this.logger.child('MessageProcessor')
+    );
   }
 
   private wss: WebSocketServer | null = null;
@@ -663,12 +800,16 @@ export class WebMQServer extends EventEmitter {
     // Establish RabbitMQ connection and shared channel
     this.connection = await amqplib.connect(this.rabbitmqUrl);
     this.channel = await this.connection.createChannel();
-    await this.channel.assertExchange(
-      this.exchangeName, 'topic', { durable: true }
-    );
+    await this.channel.assertExchange(this.exchangeName, 'topic', {
+      durable: true,
+    });
 
     // Initialize RabbitMQ manager
-    this.rabbitMQManager = new RabbitMQManager(this.channel, this.exchangeName, this.logger.child('RabbitMQManager'));
+    this.rabbitMQManager = new RabbitMQManager(
+      this.channel,
+      this.exchangeName,
+      this.logger.child('RabbitMQManager')
+    );
 
     // Connect WebSocketManager with RabbitMQManager
     this.webSocketManager.setRabbitMQManager(this.rabbitMQManager);
@@ -712,22 +853,32 @@ export class WebMQServer extends EventEmitter {
     this.logger.info('WebMQ Backend stopped');
   }
 
-  private async processMessage(connectionId: string, message: ClientMessage): Promise<void> {
+  private async processMessage(
+    connectionId: string,
+    message: ClientMessage
+  ): Promise<void> {
     const connection = this.webSocketManager.getConnection(connectionId);
     if (!connection) {
       throw new Error(`Connection ${connectionId} not found`);
     }
 
-    this.logger.debug(`[${connectionId}] Processing message:`, JSON.stringify(message));
+    this.logger.debug(
+      `[${connectionId}] Processing message:`,
+      JSON.stringify(message)
+    );
 
     const hooks = this.getHooksForAction(message.action);
 
     const run = async (index: number): Promise<void> => {
       if (index >= hooks.length) {
-        this.logger.debug(`[${connectionId}] Executing action: ${message.action}`);
+        this.logger.debug(
+          `[${connectionId}] Executing action: ${message.action}`
+        );
         return this.executeAction(connectionId, message);
       }
-      this.logger.debug(`[${connectionId}] Running hook ${index}/${hooks.length}`);
+      this.logger.debug(
+        `[${connectionId}] Running hook ${index}/${hooks.length}`
+      );
       await hooks[index](connection.context, message, () => run(index + 1));
     };
 
@@ -735,29 +886,40 @@ export class WebMQServer extends EventEmitter {
       await run(0);
       this.logger.debug(`[${connectionId}] Message processed successfully`);
     } catch (error: any) {
-      this.logger.error(`[${connectionId}] Error in processMessage:`, error.message);
+      this.logger.error(
+        `[${connectionId}] Error in processMessage:`,
+        error.message
+      );
       this.logger.error(`[${connectionId}] Stack trace:`, error.stack);
       throw error;
     }
   }
 
-  private async executeAction(connectionId: string, message: ClientMessage): Promise<void> {
+  private async executeAction(
+    connectionId: string,
+    message: ClientMessage
+  ): Promise<void> {
     const connection = this.webSocketManager.getConnection(connectionId);
     if (!connection || !this.channel || !this.rabbitMQManager) {
-      throw new Error(`Connection ${connectionId} or shared channel not available`);
+      throw new Error(
+        `Connection ${connectionId} or shared channel not available`
+      );
     }
 
     const context: ActionContext = {
       connectionId,
       connection,
       subscriptionManager: this.rabbitMQManager,
-      serverEmitter: this
+      serverEmitter: this,
     };
 
     try {
       await this.messageProcessor.executeAction(context, message);
     } catch (error: any) {
-      this.logger.error(`[${connectionId}] Error in executeAction(${message.action}):`, error.message);
+      this.logger.error(
+        `[${connectionId}] Error in executeAction(${message.action}):`,
+        error.message
+      );
       this.logger.error(`[${connectionId}] Stack trace:`, error.stack);
       throw error;
     }
@@ -770,7 +932,9 @@ export class WebMQServer extends EventEmitter {
       return;
     }
 
-    this.logger.info(`Client ${connectionId} disconnected. Cleaning up resources.`);
+    this.logger.info(
+      `Client ${connectionId} disconnected. Cleaning up resources.`
+    );
 
     if (this.rabbitMQManager) {
       await this.rabbitMQManager.cleanupSubscriptions(connection.subscriptions);
@@ -793,4 +957,3 @@ export class WebMQServer extends EventEmitter {
     }
   }
 }
-

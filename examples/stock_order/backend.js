@@ -2,7 +2,9 @@ import { WebMQServer, RabbitMQManager } from 'webmq-backend';
 import { RabbitMQContainer } from '@testcontainers/rabbitmq';
 import amqplib from 'amqplib';
 
-const rabbitmq = await new RabbitMQContainer('rabbitmq:3.11-management').start();
+const rabbitmq = await new RabbitMQContainer(
+  'rabbitmq:3.11-management'
+).start();
 
 const server = new WebMQServer({
   rabbitmqUrl: rabbitmq.getAmqpUrl(),
@@ -14,7 +16,9 @@ await server.start(8080);
 // Use RabbitMQManager for cleaner AMQP handling
 const connection = await amqplib.connect(rabbitmq.getAmqpUrl());
 const channel = await connection.createChannel();
-await channel.assertExchange('stock_order_exchange', 'topic', { durable: false });
+await channel.assertExchange('stock_order_exchange', 'topic', {
+  durable: false,
+});
 
 const rabbitMQManager = new RabbitMQManager(channel, 'stock_order_exchange');
 

@@ -8,18 +8,18 @@ class Metrics {
       messagesReceived: 0,
       messagesSent: 0,
       startTime: Date.now(),
-      intervals: []
+      intervals: [],
     };
     this.errors = {
       connectionFailures: 0,
       messageFailures: 0,
-      timeouts: 0
+      timeouts: 0,
     };
     this.connections = {
       active: 0,
       peak: 0,
       established: 0,
-      failed: 0
+      failed: 0,
     };
   }
 
@@ -42,7 +42,10 @@ class Metrics {
   recordConnection() {
     this.connections.active++;
     this.connections.established++;
-    this.connections.peak = Math.max(this.connections.peak, this.connections.active);
+    this.connections.peak = Math.max(
+      this.connections.peak,
+      this.connections.active
+    );
   }
 
   // Record connection closed
@@ -66,7 +69,7 @@ class Metrics {
       elapsed,
       messagesPerSecond: this.throughput.messagesReceived / elapsed,
       sentPerSecond: this.throughput.messagesSent / elapsed,
-      activeConnections: this.connections.active
+      activeConnections: this.connections.active,
     };
     this.throughput.intervals.push(snapshot);
     return snapshot;
@@ -79,7 +82,7 @@ class Metrics {
     const sorted = [...values].sort((a, b) => a - b);
     const result = {};
 
-    percentiles.forEach(p => {
+    percentiles.forEach((p) => {
       const index = Math.ceil((p / 100) * sorted.length) - 1;
       result[`p${p}`] = sorted[Math.max(0, index)];
     });
@@ -101,12 +104,12 @@ class Metrics {
         rss: Math.round(usage.rss / 1024 / 1024), // MB
         heapUsed: Math.round(usage.heapUsed / 1024 / 1024), // MB
         heapTotal: Math.round(usage.heapTotal / 1024 / 1024), // MB
-        external: Math.round(usage.external / 1024 / 1024) // MB
+        external: Math.round(usage.external / 1024 / 1024), // MB
       },
       cpu: {
         user: cpu.user,
-        system: cpu.system
-      }
+        system: cpu.system,
+      },
     };
   }
 
@@ -123,20 +126,23 @@ class Metrics {
         messagesPerSecond: this.throughput.messagesReceived / totalTime,
         totalReceived: this.throughput.messagesReceived,
         totalSent: this.throughput.messagesSent,
-        intervals: this.throughput.intervals
+        intervals: this.throughput.intervals,
       },
       latency: {
         count: this.latencies.length,
-        ...latencyStats
+        ...latencyStats,
       },
       connections: {
-        ...this.connections
+        ...this.connections,
       },
       errors: {
         ...this.errors,
-        total: Object.values(this.errors).reduce((sum, count) => sum + count, 0)
+        total: Object.values(this.errors).reduce(
+          (sum, count) => sum + count,
+          0
+        ),
       },
-      resources
+      resources,
     };
   }
 
@@ -147,18 +153,18 @@ class Metrics {
       messagesReceived: 0,
       messagesSent: 0,
       startTime: Date.now(),
-      intervals: []
+      intervals: [],
     };
     this.errors = {
       connectionFailures: 0,
       messageFailures: 0,
-      timeouts: 0
+      timeouts: 0,
     };
     this.connections = {
       active: 0,
       peak: 0,
       established: 0,
-      failed: 0
+      failed: 0,
     };
   }
 
@@ -167,19 +173,27 @@ class Metrics {
     const report = this.generateReport();
     console.log('\n📊 Benchmark Summary:');
     console.log(`Duration: ${report.duration.toFixed(2)}s`);
-    console.log(`Messages/sec: ${report.throughput.messagesPerSecond.toFixed(2)}`);
+    console.log(
+      `Messages/sec: ${report.throughput.messagesPerSecond.toFixed(2)}`
+    );
     console.log(`Total messages: ${report.throughput.totalReceived}`);
-    console.log(`Connections: ${report.connections.established} established, ${report.connections.peak} peak`);
+    console.log(
+      `Connections: ${report.connections.established} established, ${report.connections.peak} peak`
+    );
 
     if (report.latency.count > 0) {
-      console.log(`Latency: p50=${report.latency.p50}ms p95=${report.latency.p95}ms p99=${report.latency.p99}ms`);
+      console.log(
+        `Latency: p50=${report.latency.p50}ms p95=${report.latency.p95}ms p99=${report.latency.p99}ms`
+      );
     }
 
     if (report.errors.total > 0) {
       console.log(`Errors: ${report.errors.total} total`);
     }
 
-    console.log(`Memory: ${report.resources.memory.heapUsed}MB heap, ${report.resources.memory.rss}MB RSS`);
+    console.log(
+      `Memory: ${report.resources.memory.heapUsed}MB heap, ${report.resources.memory.rss}MB RSS`
+    );
   }
 }
 

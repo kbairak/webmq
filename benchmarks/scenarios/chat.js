@@ -2,17 +2,17 @@
  * Chat room benchmark scenario
  * Simulates multiple users in a chat room sending and receiving messages
  */
-import { WebMQClient } from "../utils/client.js";
-import { Metrics } from "../utils/metrics.js";
+import { WebMQClient } from '../utils/client.js';
+import { Metrics } from '../utils/metrics.js';
 
 class ChatBenchmark {
   constructor(options = {}) {
     this.options = {
-      url: "ws://localhost:8080",
+      url: 'ws://localhost:8080',
       userCount: 10,
       messageInterval: 2000, // ms between messages per user
       duration: 30000, // total benchmark duration in ms
-      chatRoom: "chat.room.benchmark",
+      chatRoom: 'chat.room.benchmark',
       ...options,
     };
 
@@ -25,7 +25,7 @@ class ChatBenchmark {
 
   async setup() {
     console.log(
-      `🚀 Setting up chat benchmark with ${this.options.userCount} users...`,
+      `🚀 Setting up chat benchmark with ${this.options.userCount} users...`
     );
 
     // Create client connection promises
@@ -34,16 +34,16 @@ class ChatBenchmark {
       async (_, i) => {
         const client = new WebMQClient(this.options.url);
 
-        client.on("connected", () => {
+        client.on('connected', () => {
           this.metrics.recordConnection();
         });
 
-        client.on("disconnected", () => {
+        client.on('disconnected', () => {
           this.metrics.recordDisconnection();
         });
 
-        client.on("error", (error) => {
-          this.metrics.recordError("connectionFailures");
+        client.on('error', (error) => {
+          this.metrics.recordError('connectionFailures');
           console.error(`Client ${i} error:`, error.message);
         });
 
@@ -66,11 +66,11 @@ class ChatBenchmark {
 
           return client;
         } catch (error) {
-          this.metrics.recordError("connectionFailures");
+          this.metrics.recordError('connectionFailures');
           console.error(`❌ Failed to connect user ${i + 1}:`, error.message);
           return null;
         }
-      },
+      }
     );
 
     // Connect all clients in parallel
@@ -80,22 +80,22 @@ class ChatBenchmark {
     this.clients = results.filter((client) => client !== null);
 
     console.log(
-      `📡 ${this.clients.length} users connected and listening to ${this.options.chatRoom}`,
+      `📡 ${this.clients.length} users connected and listening to ${this.options.chatRoom}`
     );
   }
 
   generateChatMessage(userId) {
     const messages = [
-      "Hello everyone!",
-      "How is everyone doing?",
-      "Great to be here!",
-      "Anyone want to chat?",
-      "This is a test message",
-      "WebMQ is pretty cool!",
-      "Real-time messaging rocks",
-      "Hope you all are having a great day",
-      "Testing the chat functionality",
-      "Message broadcasting works well",
+      'Hello everyone!',
+      'How is everyone doing?',
+      'Great to be here!',
+      'Anyone want to chat?',
+      'This is a test message',
+      'WebMQ is pretty cool!',
+      'Real-time messaging rocks',
+      'Hope you all are having a great day',
+      'Testing the chat functionality',
+      'Message broadcasting works well',
     ];
 
     const randomMessage = messages[Math.floor(Math.random() * messages.length)];
@@ -110,7 +110,7 @@ class ChatBenchmark {
 
   async startMessageSending() {
     console.log(
-      `💬 Starting message sending (${this.options.messageInterval}ms interval per user)...`,
+      `💬 Starting message sending (${this.options.messageInterval}ms interval per user)...`
     );
 
     this.clients.forEach((client, userId) => {
@@ -125,14 +125,14 @@ class ChatBenchmark {
             await client.emitWithTracking(this.options.chatRoom, message);
             this.metrics.recordMessageSent();
           } catch (error) {
-            this.metrics.recordError("messageFailures");
+            this.metrics.recordError('messageFailures');
             console.error(
               `Failed to send message from user ${userId}:`,
-              error.message,
+              error.message
             );
           }
         },
-        this.options.messageInterval + Math.random() * 1000,
+        this.options.messageInterval + Math.random() * 1000
       ); // Add some jitter
 
       this.messageIntervals.push(interval);
@@ -144,7 +144,7 @@ class ChatBenchmark {
     this.snapshotInterval = setInterval(() => {
       const snapshot = this.metrics.takeSnapshot();
       console.log(
-        `📈 ${snapshot.elapsed.toFixed(1)}s - ${snapshot.messagesPerSecond.toFixed(1)} msg/s - ${snapshot.activeConnections} connections`,
+        `📈 ${snapshot.elapsed.toFixed(1)}s - ${snapshot.messagesPerSecond.toFixed(1)} msg/s - ${snapshot.activeConnections} connections`
       );
     }, 5000);
   }
@@ -161,7 +161,7 @@ class ChatBenchmark {
       await this.setup();
 
       if (this.clients.length === 0) {
-        throw new Error("No clients connected successfully");
+        throw new Error('No clients connected successfully');
       }
 
       // Start benchmark
@@ -170,12 +170,12 @@ class ChatBenchmark {
       await this.startMessageSending();
 
       console.log(
-        `⏱️  Running benchmark for ${this.options.duration / 1000} seconds...\n`,
+        `⏱️  Running benchmark for ${this.options.duration / 1000} seconds...\n`
       );
 
       // Wait for benchmark duration
       await new Promise((resolve) =>
-        setTimeout(resolve, this.options.duration),
+        setTimeout(resolve, this.options.duration)
       );
 
       // Stop benchmark
@@ -188,7 +188,7 @@ class ChatBenchmark {
 
       return report;
     } catch (error) {
-      console.error("❌ Benchmark failed:", error.message);
+      console.error('❌ Benchmark failed:', error.message);
       this.stop();
       throw error;
     }
@@ -213,23 +213,23 @@ class ChatBenchmark {
       }
     });
 
-    console.log("\n🛑 Benchmark stopped");
+    console.log('\n🛑 Benchmark stopped');
   }
 
   displayResults(report) {
-    console.log("\n" + "=".repeat(60));
-    console.log("📊 CHAT BENCHMARK RESULTS");
-    console.log("=".repeat(60));
+    console.log('\n' + '='.repeat(60));
+    console.log('📊 CHAT BENCHMARK RESULTS');
+    console.log('='.repeat(60));
 
     console.log(`\n📋 Summary:`);
     console.log(`  Duration: ${report.duration.toFixed(2)}s`);
     console.log(`  Users: ${this.options.userCount}`);
     console.log(`  Total messages sent: ${report.throughput.totalSent}`);
     console.log(
-      `  Total messages received: ${report.throughput.totalReceived}`,
+      `  Total messages received: ${report.throughput.totalReceived}`
     );
     console.log(
-      `  Messages per second: ${report.throughput.messagesPerSecond.toFixed(2)}`,
+      `  Messages per second: ${report.throughput.messagesPerSecond.toFixed(2)}`
     );
 
     console.log(`\n🔗 Connections:`);
@@ -260,7 +260,7 @@ class ChatBenchmark {
     console.log(`  RSS: ${report.resources.memory.rss}MB`);
     console.log(`  Heap total: ${report.resources.memory.heapTotal}MB`);
 
-    console.log("\n" + "=".repeat(60));
+    console.log('\n' + '='.repeat(60));
   }
 }
 
@@ -271,21 +271,21 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 
   // Parse command line arguments
   for (let i = 0; i < args.length; i += 2) {
-    const key = args[i].replace(/^--/, "");
+    const key = args[i].replace(/^--/, '');
     const value = args[i + 1];
 
-    if (key === "users") options.userCount = parseInt(value);
-    else if (key === "duration") options.duration = parseInt(value) * 1000;
-    else if (key === "interval") options.messageInterval = parseInt(value);
-    else if (key === "url") options.url = value;
-    else if (key === "room") options.chatRoom = value;
+    if (key === 'users') options.userCount = parseInt(value);
+    else if (key === 'duration') options.duration = parseInt(value) * 1000;
+    else if (key === 'interval') options.messageInterval = parseInt(value);
+    else if (key === 'url') options.url = value;
+    else if (key === 'room') options.chatRoom = value;
   }
 
   const benchmark = new ChatBenchmark(options);
 
   // Handle graceful shutdown
-  process.on("SIGINT", () => {
-    console.log("\n\n⚠️  Received SIGINT, stopping benchmark...");
+  process.on('SIGINT', () => {
+    console.log('\n\n⚠️  Received SIGINT, stopping benchmark...');
     benchmark.stop();
     process.exit(0);
   });
@@ -293,14 +293,13 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   benchmark
     .run()
     .then(() => {
-      console.log("\n✅ Benchmark completed successfully");
+      console.log('\n✅ Benchmark completed successfully');
       process.exit(0);
     })
     .catch((error) => {
-      console.error("\n❌ Benchmark failed:", error.message);
+      console.error('\n❌ Benchmark failed:', error.message);
       process.exit(1);
     });
 }
 
 export { ChatBenchmark };
-

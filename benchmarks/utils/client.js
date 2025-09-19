@@ -59,7 +59,7 @@ class WebMQClient extends EventEmitter {
       const { bindingKey, payload } = message;
       const callbacks = this.listeners.get(bindingKey);
       if (callbacks) {
-        callbacks.forEach(callback => {
+        callbacks.forEach((callback) => {
           try {
             callback(payload);
           } catch (error) {
@@ -87,7 +87,7 @@ class WebMQClient extends EventEmitter {
     // Send listen message to server
     const message = {
       action: 'listen',
-      bindingKey: topic
+      bindingKey: topic,
     };
 
     this.ws.send(JSON.stringify(message));
@@ -118,7 +118,7 @@ class WebMQClient extends EventEmitter {
   sendUnlisten(topic) {
     const message = {
       action: 'unlisten',
-      bindingKey: topic
+      bindingKey: topic,
     };
     this.ws.send(JSON.stringify(message));
   }
@@ -131,7 +131,7 @@ class WebMQClient extends EventEmitter {
     const message = {
       action: 'emit',
       routingKey: topic,
-      payload
+      payload,
     };
 
     this.ws.send(JSON.stringify(message));
@@ -146,7 +146,7 @@ class WebMQClient extends EventEmitter {
     const trackingPayload = {
       ...payload,
       _messageId: messageId,
-      _timestamp: timestamp
+      _timestamp: timestamp,
     };
 
     await this.emit(topic, trackingPayload);
@@ -167,7 +167,7 @@ class WebMQClient extends EventEmitter {
 
   getListenerCount() {
     let total = 0;
-    this.listeners.forEach(callbacks => {
+    this.listeners.forEach((callbacks) => {
       total += callbacks.size;
     });
     return total;

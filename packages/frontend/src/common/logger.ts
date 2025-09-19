@@ -41,7 +41,9 @@ export class Logger implements LoggerInterface {
     const currentIndex = levels.indexOf(this.currentLevel);
     const messageIndex = levels.indexOf(level);
 
-    return currentIndex !== 0 && messageIndex <= currentIndex && messageIndex > 0;
+    return (
+      currentIndex !== 0 && messageIndex <= currentIndex && messageIndex > 0
+    );
   }
 
   private formatMessage(...args: any[]): any[] {
@@ -92,7 +94,9 @@ export class Logger implements LoggerInterface {
    * Create a child logger with a specific prefix
    */
   child(prefix: string): Logger {
-    const childPrefix = this.prefix ? `${this.prefix.slice(1, -2)}:${prefix}` : prefix;
+    const childPrefix = this.prefix
+      ? `${this.prefix.slice(1, -2)}:${prefix}`
+      : prefix;
     const childLogger = new Logger(this.currentLevel, childPrefix);
     return childLogger;
   }

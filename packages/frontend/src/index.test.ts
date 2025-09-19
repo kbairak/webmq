@@ -36,7 +36,9 @@ const MockWebSocket = jest.fn().mockImplementation((url) => {
     }),
     removeEventListener: jest.fn((event: string, callback: Function) => {
       if (mockEventListeners[event]) {
-        mockEventListeners[event] = mockEventListeners[event].filter(cb => cb !== callback);
+        mockEventListeners[event] = mockEventListeners[event].filter(
+          (cb) => cb !== callback
+        );
       }
     }),
   };
@@ -64,23 +66,25 @@ describe('WebMQClient (Singleton)', () => {
     });
 
     it('should connect and send a listen message on first listen', async () => {
-      const promise = client.listen('test.key', () => { });
+      const promise = client.listen('test.key', () => {});
       // Give some time for the WebSocket to be created and event listeners attached
-      await new Promise(resolve => setTimeout(resolve, 0));
+      await new Promise((resolve) => setTimeout(resolve, 0));
       // Simulate server connection
       triggerEvent('open');
       await promise;
 
       expect(MockWebSocket).toHaveBeenCalledWith('ws://localhost:8080');
-      expect(mockSend).toHaveBeenCalledWith(JSON.stringify({ action: 'listen', bindingKey: 'test.key' }));
+      expect(mockSend).toHaveBeenCalledWith(
+        JSON.stringify({ action: 'listen', bindingKey: 'test.key' })
+      );
     });
 
     it('should only send one listen message for multiple listeners on the same key', async () => {
-      const promise = client.listen('test.key', () => { });
+      const promise = client.listen('test.key', () => {});
       triggerEvent('open');
       await promise;
 
-      await client.listen('test.key', () => { });
+      await client.listen('test.key', () => {});
 
       expect(mockSend).toHaveBeenCalledTimes(1);
     });
@@ -94,7 +98,11 @@ describe('WebMQClient (Singleton)', () => {
       await promise;
       await client.listen('another.key', callback2);
 
-      const message = { action: 'message', bindingKey: 'test.key', payload: { data: 'hello' } };
+      const message = {
+        action: 'message',
+        bindingKey: 'test.key',
+        payload: { data: 'hello' },
+      };
       triggerEvent('message', JSON.stringify(message));
 
       expect(callback1).toHaveBeenCalledWith({ data: 'hello' });
@@ -102,21 +110,23 @@ describe('WebMQClient (Singleton)', () => {
     });
 
     it('should send unlisten message when the last callback is removed', async () => {
-      const callback = () => { };
+      const callback = () => {};
       const promise = client.listen('test.key', callback);
-      await new Promise(resolve => setTimeout(resolve, 0));
+      await new Promise((resolve) => setTimeout(resolve, 0));
       triggerEvent('open');
       await promise;
 
       // Now unlisten
       await client.unlisten('test.key', callback);
 
-      expect(mockSend).toHaveBeenCalledWith(JSON.stringify({ action: 'unlisten', bindingKey: 'test.key' }));
+      expect(mockSend).toHaveBeenCalledWith(
+        JSON.stringify({ action: 'unlisten', bindingKey: 'test.key' })
+      );
     });
 
     it('should NOT send unlisten message if other callbacks still exist', async () => {
-      const callback1 = () => { };
-      const callback2 = () => { };
+      const callback1 = () => {};
+      const callback2 = () => {};
       const promise = client.listen('test.key', callback1);
       triggerEvent('open');
       await promise;
@@ -136,18 +146,21 @@ describe('WebMQClient (Singleton)', () => {
 
       // Acknowledge the message
       const sentMessage = JSON.parse(mockSend.mock.calls[0][0]);
-      triggerEvent('message', JSON.stringify({
-        action: 'ack',
-        messageId: sentMessage.messageId,
-        status: 'success'
-      }));
+      triggerEvent(
+        'message',
+        JSON.stringify({
+          action: 'ack',
+          messageId: sentMessage.messageId,
+          status: 'success',
+        })
+      );
 
       await promise;
 
       expect(sentMessage).toMatchObject({
         action: 'publish',
         routingKey: 'test.route',
-        payload: { data: 123 }
+        payload: { data: 123 },
       });
       expect(sentMessage.messageId).toBeDefined();
     });
@@ -163,7 +176,7 @@ describe('WebMQClient (Singleton)', () => {
       });
 
       it('should ignore disconnect by default when listeners exist', async () => {
-        const callback = () => { };
+        const callback = () => {};
         const promise = client.listen('test.key', callback);
         triggerEvent('open');
         await promise;
@@ -174,7 +187,7 @@ describe('WebMQClient (Singleton)', () => {
       });
 
       it('should ignore disconnect explicitly when listeners exist', async () => {
-        const callback = () => { };
+        const callback = () => {};
         const promise = client.listen('test.key', callback);
         triggerEvent('open');
         await promise;
@@ -185,7 +198,7 @@ describe('WebMQClient (Singleton)', () => {
       });
 
       it('should throw error when listeners exist and onActiveListeners is "throw"', async () => {
-        const callback = () => { };
+        const callback = () => {};
         const promise = client.listen('test.key', callback);
         triggerEvent('open');
         await promise;
@@ -196,7 +209,7 @@ describe('WebMQClient (Singleton)', () => {
       });
 
       it('should clear listeners and disconnect when onActiveListeners is "clear"', async () => {
-        const callback = () => { };
+        const callback = () => {};
         const promise = client.listen('test.key', callback);
         triggerEvent('open');
         await promise;
@@ -570,16 +583,22 @@ describe('WebMQClient (Singleton)', () => {
         const message1 = JSON.parse(mockSend.mock.calls[0][0]);
         const message2 = JSON.parse(mockSend.mock.calls[1][0]);
 
-        triggerEvent('message', JSON.stringify({
-          action: 'ack',
-          messageId: message1.messageId,
-          status: 'success'
-        }));
-        triggerEvent('message', JSON.stringify({
-          action: 'ack',
-          messageId: message2.messageId,
-          status: 'success'
-        }));
+        triggerEvent(
+          'message',
+          JSON.stringify({
+            action: 'ack',
+            messageId: message1.messageId,
+            status: 'success',
+          })
+        );
+        triggerEvent(
+          'message',
+          JSON.stringify({
+            action: 'ack',
+            messageId: message2.messageId,
+            status: 'success',
+          })
+        );
 
         await sendPromise1;
         await sendPromise2;
@@ -589,12 +608,12 @@ describe('WebMQClient (Singleton)', () => {
         expect(message1).toMatchObject({
           action: 'publish',
           routingKey: 'test.route1',
-          payload: { data: 1 }
+          payload: { data: 1 },
         });
         expect(message2).toMatchObject({
           action: 'publish',
           routingKey: 'test.route2',
-          payload: { data: 2 }
+          payload: { data: 2 },
         });
       });
 
@@ -611,11 +630,14 @@ describe('WebMQClient (Singleton)', () => {
 
         // Acknowledge the message
         const sentMessage = JSON.parse(mockSend.mock.calls[0][0]);
-        triggerEvent('message', JSON.stringify({
-          action: 'ack',
-          messageId: sentMessage.messageId,
-          status: 'success'
-        }));
+        triggerEvent(
+          'message',
+          JSON.stringify({
+            action: 'ack',
+            messageId: sentMessage.messageId,
+            status: 'success',
+          })
+        );
 
         await sendPromise;
 
@@ -624,7 +646,7 @@ describe('WebMQClient (Singleton)', () => {
         expect(sentMessage).toMatchObject({
           action: 'publish',
           routingKey: 'test.route',
-          payload: { data: 123 }
+          payload: { data: 123 },
         });
       });
 
@@ -639,7 +661,9 @@ describe('WebMQClient (Singleton)', () => {
         expect(client.getQueueSize()).toBe(2);
 
         // First message should be rejected immediately
-        await expect(sendPromise1).rejects.toThrow('Message dropped: queue full');
+        await expect(sendPromise1).rejects.toThrow(
+          'Message dropped: queue full'
+        );
 
         // Connect and verify only last 2 messages are sent
         triggerEvent('open');
@@ -647,16 +671,22 @@ describe('WebMQClient (Singleton)', () => {
         const message2 = JSON.parse(mockSend.mock.calls[0][0]);
         const message3 = JSON.parse(mockSend.mock.calls[1][0]);
 
-        triggerEvent('message', JSON.stringify({
-          action: 'ack',
-          messageId: message2.messageId,
-          status: 'success'
-        }));
-        triggerEvent('message', JSON.stringify({
-          action: 'ack',
-          messageId: message3.messageId,
-          status: 'success'
-        }));
+        triggerEvent(
+          'message',
+          JSON.stringify({
+            action: 'ack',
+            messageId: message2.messageId,
+            status: 'success',
+          })
+        );
+        triggerEvent(
+          'message',
+          JSON.stringify({
+            action: 'ack',
+            messageId: message3.messageId,
+            status: 'success',
+          })
+        );
 
         await Promise.all([sendPromise2, sendPromise3]);
 
@@ -664,12 +694,12 @@ describe('WebMQClient (Singleton)', () => {
         expect(message2).toMatchObject({
           action: 'publish',
           routingKey: 'test.route2',
-          payload: { data: 2 }
+          payload: { data: 2 },
         });
         expect(message3).toMatchObject({
           action: 'publish',
           routingKey: 'test.route3',
-          payload: { data: 3 }
+          payload: { data: 3 },
         });
       });
 
@@ -685,8 +715,12 @@ describe('WebMQClient (Singleton)', () => {
         expect(client.getQueueSize()).toBe(0);
 
         // Messages should be rejected
-        await expect(sendPromise1).rejects.toThrow('Message cleared from queue');
-        await expect(sendPromise2).rejects.toThrow('Message cleared from queue');
+        await expect(sendPromise1).rejects.toThrow(
+          'Message cleared from queue'
+        );
+        await expect(sendPromise2).rejects.toThrow(
+          'Message cleared from queue'
+        );
 
         // Connect - no messages should be sent
         triggerEvent('open');
@@ -720,11 +754,14 @@ describe('WebMQClient (Singleton)', () => {
 
         // Simulate server acknowledgment
         const sentMessage = JSON.parse(mockSend.mock.calls[0][0]);
-        triggerEvent('message', JSON.stringify({
-          action: 'ack',
-          messageId: sentMessage.messageId,
-          status: 'success'
-        }));
+        triggerEvent(
+          'message',
+          JSON.stringify({
+            action: 'ack',
+            messageId: sentMessage.messageId,
+            status: 'success',
+          })
+        );
 
         // Promise should resolve
         await expect(sendPromise).resolves.toBeUndefined();
@@ -741,11 +778,14 @@ describe('WebMQClient (Singleton)', () => {
 
         // Simulate server rejection
         const sentMessage = JSON.parse(mockSend.mock.calls[0][0]);
-        triggerEvent('message', JSON.stringify({
-          action: 'nack',
-          messageId: sentMessage.messageId,
-          error: 'Validation failed'
-        }));
+        triggerEvent(
+          'message',
+          JSON.stringify({
+            action: 'nack',
+            messageId: sentMessage.messageId,
+            error: 'Validation failed',
+          })
+        );
 
         // Promise should reject
         await expect(sendPromise).rejects.toThrow('Validation failed');
@@ -766,7 +806,9 @@ describe('WebMQClient (Singleton)', () => {
         jest.advanceTimersByTime(1001);
 
         // Promise should reject with timeout error
-        await expect(sendPromise).rejects.toThrow('Message timeout after 1000ms');
+        await expect(sendPromise).rejects.toThrow(
+          'Message timeout after 1000ms'
+        );
       });
 
       it('should publish messages with unique messageId', async () => {
@@ -790,30 +832,38 @@ describe('WebMQClient (Singleton)', () => {
         expect(message1).toMatchObject({
           action: 'publish',
           routingKey: 'test.route1',
-          payload: { data: 1 }
+          payload: { data: 1 },
         });
         expect(message1.messageId).toBeDefined();
-        expect(message1.messageId).toMatch(/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/); // UUID v4 format
+        expect(message1.messageId).toMatch(
+          /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/
+        ); // UUID v4 format
 
         expect(message2).toMatchObject({
           action: 'publish',
           routingKey: 'test.route2',
-          payload: { data: 2 }
+          payload: { data: 2 },
         });
         expect(message2.messageId).toBeDefined();
         expect(message2.messageId).not.toBe(message1.messageId);
 
         // Ack both messages
-        triggerEvent('message', JSON.stringify({
-          action: 'ack',
-          messageId: message1.messageId,
-          status: 'success'
-        }));
-        triggerEvent('message', JSON.stringify({
-          action: 'ack',
-          messageId: message2.messageId,
-          status: 'success'
-        }));
+        triggerEvent(
+          'message',
+          JSON.stringify({
+            action: 'ack',
+            messageId: message1.messageId,
+            status: 'success',
+          })
+        );
+        triggerEvent(
+          'message',
+          JSON.stringify({
+            action: 'ack',
+            messageId: message2.messageId,
+            status: 'success',
+          })
+        );
 
         await Promise.all([sendPromise1, sendPromise2]);
       });
@@ -832,16 +882,22 @@ describe('WebMQClient (Singleton)', () => {
         const message1 = JSON.parse(mockSend.mock.calls[0][0]);
         const message2 = JSON.parse(mockSend.mock.calls[1][0]);
 
-        triggerEvent('message', JSON.stringify({
-          action: 'ack',
-          messageId: message1.messageId,
-          status: 'success'
-        }));
-        triggerEvent('message', JSON.stringify({
-          action: 'ack',
-          messageId: message2.messageId,
-          status: 'success'
-        }));
+        triggerEvent(
+          'message',
+          JSON.stringify({
+            action: 'ack',
+            messageId: message1.messageId,
+            status: 'success',
+          })
+        );
+        triggerEvent(
+          'message',
+          JSON.stringify({
+            action: 'ack',
+            messageId: message2.messageId,
+            status: 'success',
+          })
+        );
 
         await Promise.all([sendPromise1, sendPromise2]);
         expect(client.getQueueSize()).toBe(0);
@@ -857,8 +913,12 @@ describe('WebMQClient (Singleton)', () => {
         // Clear queue - should reject promises
         client.clearQueue();
 
-        await expect(sendPromise1).rejects.toThrow('Message cleared from queue');
-        await expect(sendPromise2).rejects.toThrow('Message cleared from queue');
+        await expect(sendPromise1).rejects.toThrow(
+          'Message cleared from queue'
+        );
+        await expect(sendPromise2).rejects.toThrow(
+          'Message cleared from queue'
+        );
         expect(client.getQueueSize()).toBe(0);
       });
 
@@ -875,7 +935,9 @@ describe('WebMQClient (Singleton)', () => {
         expect(client.getQueueSize()).toBe(2);
 
         // First message should be rejected
-        await expect(sendPromise1).rejects.toThrow('Message dropped: queue full');
+        await expect(sendPromise1).rejects.toThrow(
+          'Message dropped: queue full'
+        );
 
         // Connect and ack remaining messages
         triggerEvent('open');
@@ -883,16 +945,22 @@ describe('WebMQClient (Singleton)', () => {
         const message2 = JSON.parse(mockSend.mock.calls[0][0]);
         const message3 = JSON.parse(mockSend.mock.calls[1][0]);
 
-        triggerEvent('message', JSON.stringify({
-          action: 'ack',
-          messageId: message2.messageId,
-          status: 'success'
-        }));
-        triggerEvent('message', JSON.stringify({
-          action: 'ack',
-          messageId: message3.messageId,
-          status: 'success'
-        }));
+        triggerEvent(
+          'message',
+          JSON.stringify({
+            action: 'ack',
+            messageId: message2.messageId,
+            status: 'success',
+          })
+        );
+        triggerEvent(
+          'message',
+          JSON.stringify({
+            action: 'ack',
+            messageId: message3.messageId,
+            status: 'success',
+          })
+        );
 
         await Promise.all([sendPromise2, sendPromise3]);
       });
@@ -928,14 +996,17 @@ describe('WebMQClient (Singleton)', () => {
 
         // Acknowledge the queued messages
         const calls = mockSend.mock.calls;
-        calls.forEach(call => {
+        calls.forEach((call) => {
           const message = JSON.parse(call[0]);
           if (message.messageId) {
-            triggerEvent('message', JSON.stringify({
-              action: 'ack',
-              messageId: message.messageId,
-              status: 'success'
-            }));
+            triggerEvent(
+              'message',
+              JSON.stringify({
+                action: 'ack',
+                messageId: message.messageId,
+                status: 'success',
+              })
+            );
           }
         });
 
@@ -944,43 +1015,51 @@ describe('WebMQClient (Singleton)', () => {
         expect(client.getQueueSize()).toBe(0);
 
         // Verify resubscription happened
-        expect(mockSend).toHaveBeenCalledWith(JSON.stringify({
-          action: 'listen', bindingKey: 'test.key'
-        }));
+        expect(mockSend).toHaveBeenCalledWith(
+          JSON.stringify({
+            action: 'listen',
+            bindingKey: 'test.key',
+          })
+        );
       });
     });
 
     describe('client-side hooks', () => {
       describe('onPublish hooks', () => {
         it('should execute onPublish hooks before sending messages', async () => {
-          const hookSpy = jest.fn(async (context, message, next) => await next());
+          const hookSpy = jest.fn(
+            async (context, message, next) => await next()
+          );
           client.setup('ws://localhost:8080', {
-            hooks: { onPublish: [hookSpy] }
+            hooks: { onPublish: [hookSpy] },
           });
 
           const promise = client.publish('test.key', { data: 'test' });
           // Small delay for async hook execution
-          await new Promise(resolve => setTimeout(resolve, 0));
+          await new Promise((resolve) => setTimeout(resolve, 0));
           triggerEvent('open');
 
           // Acknowledge the message
           const sentMessage = JSON.parse(mockSend.mock.calls[0][0]);
-          triggerEvent('message', JSON.stringify({
-            action: 'ack',
-            messageId: sentMessage.messageId,
-            status: 'success'
-          }));
+          triggerEvent(
+            'message',
+            JSON.stringify({
+              action: 'ack',
+              messageId: sentMessage.messageId,
+              status: 'success',
+            })
+          );
 
           await promise;
 
           expect(hookSpy).toHaveBeenCalledWith(
             expect.objectContaining({
-              client
+              client,
             }),
             expect.objectContaining({
               action: 'publish',
               routingKey: 'test.key',
-              payload: { data: 'test' }
+              payload: { data: 'test' },
             }),
             expect.any(Function)
           );
@@ -993,11 +1072,11 @@ describe('WebMQClient (Singleton)', () => {
             await next();
           });
           client.setup('ws://localhost:8080', {
-            hooks: { onPublish: [modifyHook] }
+            hooks: { onPublish: [modifyHook] },
           });
 
           const promise = client.publish('original.key', { original: true });
-          await new Promise(resolve => setTimeout(resolve, 0));
+          await new Promise((resolve) => setTimeout(resolve, 0));
           triggerEvent('open');
 
           const sentMessage = JSON.parse(mockSend.mock.calls[0][0]);
@@ -1005,7 +1084,7 @@ describe('WebMQClient (Singleton)', () => {
             action: 'publish',
             routingKey: 'modified.key',
             payload: { modified: true },
-            messageId: expect.any(String)
+            messageId: expect.any(String),
           });
         });
 
@@ -1014,11 +1093,12 @@ describe('WebMQClient (Singleton)', () => {
             throw new Error('Hook failed');
           });
           client.setup('ws://localhost:8080', {
-            hooks: { onPublish: [failingHook] }
+            hooks: { onPublish: [failingHook] },
           });
 
-          await expect(client.publish('test.key', { data: 'test' }))
-            .rejects.toThrow('Hook failed');
+          await expect(
+            client.publish('test.key', { data: 'test' })
+          ).rejects.toThrow('Hook failed');
         });
 
         it('should execute multiple onPublish hooks in order', async () => {
@@ -1034,19 +1114,22 @@ describe('WebMQClient (Singleton)', () => {
             order.push(3);
           });
           client.setup('ws://localhost:8080', {
-            hooks: { onPublish: [hook1, hook2] }
+            hooks: { onPublish: [hook1, hook2] },
           });
 
           const promise = client.publish('test.key', { data: 'test' });
-          await new Promise(resolve => setTimeout(resolve, 0));
+          await new Promise((resolve) => setTimeout(resolve, 0));
           triggerEvent('open');
 
           const sentMessage = JSON.parse(mockSend.mock.calls[0][0]);
-          triggerEvent('message', JSON.stringify({
-            action: 'ack',
-            messageId: sentMessage.messageId,
-            status: 'success'
-          }));
+          triggerEvent(
+            'message',
+            JSON.stringify({
+              action: 'ack',
+              messageId: sentMessage.messageId,
+              status: 'success',
+            })
+          );
 
           await promise;
 
@@ -1056,21 +1139,23 @@ describe('WebMQClient (Singleton)', () => {
 
       describe('onListen hooks', () => {
         it('should execute onListen hooks before setting up listeners', async () => {
-          const hookSpy = jest.fn(async (context, message, next) => await next());
+          const hookSpy = jest.fn(
+            async (context, message, next) => await next()
+          );
           client.setup('ws://localhost:8080', {
-            hooks: { onListen: [hookSpy] }
+            hooks: { onListen: [hookSpy] },
           });
 
           await client.listen('test.key', () => {});
 
           expect(hookSpy).toHaveBeenCalledWith(
             expect.objectContaining({
-              client
+              client,
             }),
             expect.objectContaining({
               action: 'listen',
               bindingKey: 'test.key',
-              callback: expect.any(Function)
+              callback: expect.any(Function),
             }),
             expect.any(Function)
           );
@@ -1082,18 +1167,20 @@ describe('WebMQClient (Singleton)', () => {
             await next();
           });
           client.setup('ws://localhost:8080', {
-            hooks: { onListen: [modifyHook] }
+            hooks: { onListen: [modifyHook] },
           });
 
           const promise = client.listen('original.key', () => {});
-          await new Promise(resolve => setTimeout(resolve, 0));
+          await new Promise((resolve) => setTimeout(resolve, 0));
           triggerEvent('open');
           await promise;
 
-          expect(mockSend).toHaveBeenCalledWith(JSON.stringify({
-            action: 'listen',
-            bindingKey: 'modified.key'
-          }));
+          expect(mockSend).toHaveBeenCalledWith(
+            JSON.stringify({
+              action: 'listen',
+              bindingKey: 'modified.key',
+            })
+          );
         });
 
         it('should throw error if onListen hook fails', async () => {
@@ -1101,43 +1188,49 @@ describe('WebMQClient (Singleton)', () => {
             throw new Error('Hook failed');
           });
           client.setup('ws://localhost:8080', {
-            hooks: { onListen: [failingHook] }
+            hooks: { onListen: [failingHook] },
           });
 
-          await expect(client.listen('test.key', () => {}))
-            .rejects.toThrow('Hook failed');
+          await expect(client.listen('test.key', () => {})).rejects.toThrow(
+            'Hook failed'
+          );
         });
       });
 
       describe('onMessage hooks', () => {
         it('should execute onMessage hooks when receiving messages', async () => {
-          const hookSpy = jest.fn(async (context, message, next) => await next());
+          const hookSpy = jest.fn(
+            async (context, message, next) => await next()
+          );
           client.setup('ws://localhost:8080', {
-            hooks: { onMessage: [hookSpy] }
+            hooks: { onMessage: [hookSpy] },
           });
 
           const callback = jest.fn();
           const promise = client.listen('test.key', callback);
-          await new Promise(resolve => setTimeout(resolve, 0));
+          await new Promise((resolve) => setTimeout(resolve, 0));
           triggerEvent('open');
           await promise;
 
-          triggerEvent('message', JSON.stringify({
-            action: 'message',
-            bindingKey: 'test.key',
-            payload: { data: 'test' }
-          }));
+          triggerEvent(
+            'message',
+            JSON.stringify({
+              action: 'message',
+              bindingKey: 'test.key',
+              payload: { data: 'test' },
+            })
+          );
 
-          await new Promise(resolve => setTimeout(resolve, 0));
+          await new Promise((resolve) => setTimeout(resolve, 0));
 
           expect(hookSpy).toHaveBeenCalledWith(
             expect.objectContaining({
-              client
+              client,
             }),
             expect.objectContaining({
               action: 'message',
               bindingKey: 'test.key',
-              payload: { data: 'test' }
+              payload: { data: 'test' },
             }),
             expect.any(Function)
           );
@@ -1150,22 +1243,25 @@ describe('WebMQClient (Singleton)', () => {
             await next();
           });
           client.setup('ws://localhost:8080', {
-            hooks: { onMessage: [modifyHook] }
+            hooks: { onMessage: [modifyHook] },
           });
 
           const callback = jest.fn();
           const promise = client.listen('test.key', callback);
-          await new Promise(resolve => setTimeout(resolve, 0));
+          await new Promise((resolve) => setTimeout(resolve, 0));
           triggerEvent('open');
           await promise;
 
-          triggerEvent('message', JSON.stringify({
-            action: 'message',
-            bindingKey: 'test.key',
-            payload: { original: true }
-          }));
+          triggerEvent(
+            'message',
+            JSON.stringify({
+              action: 'message',
+              bindingKey: 'test.key',
+              payload: { original: true },
+            })
+          );
 
-          await new Promise(resolve => setTimeout(resolve, 0));
+          await new Promise((resolve) => setTimeout(resolve, 0));
 
           expect(callback).toHaveBeenCalledWith({ modified: true });
         });
@@ -1175,22 +1271,25 @@ describe('WebMQClient (Singleton)', () => {
             throw new Error('Hook failed');
           });
           client.setup('ws://localhost:8080', {
-            hooks: { onMessage: [failingHook] }
+            hooks: { onMessage: [failingHook] },
           });
 
           const callback = jest.fn();
           const promise = client.listen('test.key', callback);
-          await new Promise(resolve => setTimeout(resolve, 0));
+          await new Promise((resolve) => setTimeout(resolve, 0));
           triggerEvent('open');
           await promise;
 
-          triggerEvent('message', JSON.stringify({
-            action: 'message',
-            bindingKey: 'test.key',
-            payload: { data: 'test' }
-          }));
+          triggerEvent(
+            'message',
+            JSON.stringify({
+              action: 'message',
+              bindingKey: 'test.key',
+              payload: { data: 'test' },
+            })
+          );
 
-          await new Promise(resolve => setTimeout(resolve, 0));
+          await new Promise((resolve) => setTimeout(resolve, 0));
 
           expect(callback).not.toHaveBeenCalled();
         });
@@ -1210,20 +1309,23 @@ describe('WebMQClient (Singleton)', () => {
           client.setup('ws://localhost:8080', {
             hooks: {
               pre: [preHook],
-              onPublish: [publishHook]
-            }
+              onPublish: [publishHook],
+            },
           });
 
           const promise = client.publish('test.key', { data: 'test' });
-          await new Promise(resolve => setTimeout(resolve, 0));
+          await new Promise((resolve) => setTimeout(resolve, 0));
           triggerEvent('open');
 
           const sentMessage = JSON.parse(mockSend.mock.calls[0][0]);
-          triggerEvent('message', JSON.stringify({
-            action: 'ack',
-            messageId: sentMessage.messageId,
-            status: 'success'
-          }));
+          triggerEvent(
+            'message',
+            JSON.stringify({
+              action: 'ack',
+              messageId: sentMessage.messageId,
+              status: 'success',
+            })
+          );
 
           await promise;
 
@@ -1231,10 +1333,12 @@ describe('WebMQClient (Singleton)', () => {
         });
 
         it('should allow pre hooks to modify context for all actions', async () => {
-          const contextEnhancingHook = jest.fn(async (context, message, next) => {
-            context.enhanced = true;
-            await next();
-          });
+          const contextEnhancingHook = jest.fn(
+            async (context, message, next) => {
+              context.enhanced = true;
+              await next();
+            }
+          );
           const publishHook = jest.fn(async (context, message, next) => {
             expect(context.enhanced).toBe(true);
             await next();
@@ -1242,20 +1346,23 @@ describe('WebMQClient (Singleton)', () => {
           client.setup('ws://localhost:8080', {
             hooks: {
               pre: [contextEnhancingHook],
-              onPublish: [publishHook]
-            }
+              onPublish: [publishHook],
+            },
           });
 
           const promise = client.publish('test.key', { data: 'test' });
-          await new Promise(resolve => setTimeout(resolve, 0));
+          await new Promise((resolve) => setTimeout(resolve, 0));
           triggerEvent('open');
 
           const sentMessage = JSON.parse(mockSend.mock.calls[0][0]);
-          triggerEvent('message', JSON.stringify({
-            action: 'ack',
-            messageId: sentMessage.messageId,
-            status: 'success'
-          }));
+          triggerEvent(
+            'message',
+            JSON.stringify({
+              action: 'ack',
+              messageId: sentMessage.messageId,
+              status: 'success',
+            })
+          );
 
           await promise;
 
@@ -1273,20 +1380,23 @@ describe('WebMQClient (Singleton)', () => {
             await next();
           });
           client.setup('ws://localhost:8080', {
-            hooks: { pre: [preHook] }
+            hooks: { pre: [preHook] },
           });
 
           // First action
           const promise1 = client.publish('test.key1', { data: 1 });
-          await new Promise(resolve => setTimeout(resolve, 0));
+          await new Promise((resolve) => setTimeout(resolve, 0));
           triggerEvent('open');
 
           const sentMessage1 = JSON.parse(mockSend.mock.calls[0][0]);
-          triggerEvent('message', JSON.stringify({
-            action: 'ack',
-            messageId: sentMessage1.messageId,
-            status: 'success'
-          }));
+          triggerEvent(
+            'message',
+            JSON.stringify({
+              action: 'ack',
+              messageId: sentMessage1.messageId,
+              status: 'success',
+            })
+          );
 
           await promise1;
 

@@ -2,8 +2,8 @@ services:
   rabbitmq:
     image: rabbitmq:3.11-management
     ports:
-      - "5672:5672" # AMQP port
-      - "15672:15672" # Management UI
+      - '5672:5672' # AMQP port
+      - '15672:15672' # Management UI
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
     environment:
