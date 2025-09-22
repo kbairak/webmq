@@ -28,136 +28,7 @@ import {
 
 // --- Core Components ---
 
-/**
- * Manages WebSocket connection lifecycle and reconnection logic
- */
-class ConnectionManager {
-  private ws: WebSocket | null = null;
-  private connectionPromise: Promise<void> | null = null;
-  private isConnected = false;
-  private reconnectAttempts = 0;
-  private maxReconnectAttempts = 5;
-  private reconnectTimeout: number | null = null;
-  private url: string | null = null;
-  private logger: Logger;
-  private eventEmitter: EventEmitter;
-
-  constructor(eventEmitter: EventEmitter, logger: Logger) {
-    this.eventEmitter = eventEmitter;
-    this.logger = logger;
-  }
-
-  setUrl(url: string): void {
-    this.url = url;
-  }
-
-  setMaxReconnectAttempts(attempts: number): void {
-    this.maxReconnectAttempts = attempts;
-  }
-
-  getConnection(): WebSocket | null {
-    return this.ws;
-  }
-
-  isReady(): boolean {
-    return this.isConnected;
-  }
-
-  connect(): Promise<void> {
-    if (!this.connectionPromise) {
-      if (!this.url) {
-        return Promise.reject(new Error('URL not set. Call setup(url) first.'));
-      }
-
-      this.connectionPromise = new Promise((resolve, reject) => {
-        this.ws = new WebSocket(this.url!);
-
-        this.ws.addEventListener('open', () => {
-          this.logger.info('WebMQ client connected.');
-          const wasReconnection = this.reconnectAttempts > 0;
-          this.isConnected = true;
-          this.reconnectAttempts = 0;
-          if (this.reconnectTimeout) {
-            clearTimeout(this.reconnectTimeout);
-            this.reconnectTimeout = null;
-          }
-
-          this.eventEmitter.emit('connection:ready', { wasReconnection });
-          resolve();
-        });
-
-        this.ws.addEventListener('message', (event) => {
-          this.eventEmitter.emit('message:received', event.data);
-        });
-
-        this.ws.addEventListener('error', (err) => {
-          this.logger.error('WebMQ client error:', err);
-          const wasConnected = this.isConnected;
-          this.isConnected = false;
-          this.eventEmitter.emit('connection:error', { err, wasConnected });
-          if (!wasConnected) {
-            reject(new Error('WebSocket connection failed.'));
-          }
-        });
-
-        this.ws.addEventListener('close', () => {
-          this.logger.info('WebMQ client disconnected.');
-          this.isConnected = false;
-          this.ws = null;
-          this.connectionPromise = null;
-          this.eventEmitter.emit('connection:closed');
-        });
-      });
-    }
-    return this.connectionPromise;
-  }
-
-  scheduleReconnect(): void {
-    this.reconnectAttempts++;
-    const delay = Math.min(
-      1000 * Math.pow(2, this.reconnectAttempts - 1),
-      30000
-    );
-    this.logger.info(
-      `WebMQ client attempting reconnection ${this.reconnectAttempts}/${this.maxReconnectAttempts} in ${delay}ms...`
-    );
-
-    this.reconnectTimeout = setTimeout(() => {
-      this.connect().catch(() => {
-        // Connection failed, scheduleReconnect will be called again from close event
-      });
-    }, delay) as any;
-  }
-
-  shouldReconnect(hasListeners: boolean, hasQueuedMessages: boolean): boolean {
-    return (
-      (hasListeners || hasQueuedMessages) &&
-      this.reconnectAttempts < this.maxReconnectAttempts
-    );
-  }
-
-  hasExceededMaxAttempts(): boolean {
-    return this.reconnectAttempts >= this.maxReconnectAttempts;
-  }
-
-  send(data: string): void {
-    this.ws?.send(data);
-  }
-
-  close(): void {
-    if (this.reconnectTimeout) {
-      clearTimeout(this.reconnectTimeout);
-      this.reconnectTimeout = null;
-    }
-    this.reconnectAttempts = 0;
-    if (this.ws) {
-      this.ws.close();
-    }
-    this.ws = null;
-    this.connectionPromise = null;
-    this.isConnected = false;
-  }
-}
+// ConnectionManager removed - logic inlined into WebMQClient with closures
 
 /**
  * Manages session identity for persistent queues
@@ -166,10 +37,10 @@ class SessionManager {
   private sessionId: string | null = null;
   private sessionIdentified = false;
   private logger: Logger;
-  private connectionManager: ConnectionManager;
+  private connectionOps: { getConnection: () => WebSocket | null; isReady: () => boolean; send: (data: string) => void };
 
-  constructor(connectionManager: ConnectionManager, logger: Logger) {
-    this.connectionManager = connectionManager;
+  constructor(connectionOps: { getConnection: () => WebSocket | null; isReady: () => boolean; send: (data: string) => void }, logger: Logger) {
+    this.connectionOps = connectionOps;
     this.logger = logger;
     this.initializeSessionId();
   }
@@ -202,7 +73,7 @@ class SessionManager {
 
     if (
       this.sessionId &&
-      this.connectionManager.getConnection() &&
+      this.connectionOps.getConnection() &&
       !this.sessionIdentified
     ) {
       const identifyMessage: IdentifyMessage = {
@@ -210,7 +81,7 @@ class SessionManager {
         sessionId: this.sessionId,
       };
       // TODO: Should we wait for an ack on this? Until then, further published messages could be queued
-      this.connectionManager.send(JSON.stringify(identifyMessage));
+      this.connectionOps.send(JSON.stringify(identifyMessage));
       this.sessionIdentified = true;
       this.logger.debug(`Sent session identification: ${this.sessionId}`);
     }
@@ -356,11 +227,11 @@ class MessagePublisher {
   private messageQueue: QueuedMessage[] = [];
   private maxQueueSize = 100;
   private messageTimeout = 10000;
-  private connectionManager: ConnectionManager;
+  private connectionOps: { getConnection: () => WebSocket | null; isReady: () => boolean; send: (data: string) => void };
   private logger: Logger;
 
-  constructor(connectionManager: ConnectionManager, logger: Logger) {
-    this.connectionManager = connectionManager;
+  constructor(connectionOps: { getConnection: () => WebSocket | null; isReady: () => boolean; send: (data: string) => void }, logger: Logger) {
+    this.connectionOps = connectionOps;
     this.logger = logger;
   }
 
@@ -376,7 +247,7 @@ class MessagePublisher {
     const messageId = uuidv4();
 
     return new Promise<void>((resolve, reject) => {
-      if (this.connectionManager.isReady()) {
+      if (this.connectionOps.isReady()) {
         this.sendWithAck(routingKey, payload, messageId, resolve, reject);
       } else {
         this.queueMessage(routingKey, payload, messageId, resolve, reject);
@@ -408,7 +279,7 @@ class MessagePublisher {
       payload,
       messageId,
     };
-    this.connectionManager.send(JSON.stringify(emitMessage));
+    this.connectionOps.send(JSON.stringify(emitMessage));
   }
 
   private queueMessage(
@@ -443,7 +314,7 @@ class MessagePublisher {
     this.messageQueue = [];
 
     for (const message of queuedMessages) {
-      if (this.connectionManager.getConnection()) {
+      if (this.connectionOps.getConnection()) {
         this.sendWithAck(
           message.routingKey,
           message.payload,
@@ -507,11 +378,11 @@ class MessagePublisher {
  */
 class SubscriptionManager {
   private messageListeners: Map<string, MessageCallback[]> = new Map();
-  private connectionManager: ConnectionManager;
+  private connectionOps: { getConnection: () => WebSocket | null; isReady: () => boolean; send: (data: string) => void };
   private logger: Logger;
 
-  constructor(connectionManager: ConnectionManager, logger: Logger) {
-    this.connectionManager = connectionManager;
+  constructor(connectionOps: { getConnection: () => WebSocket | null; isReady: () => boolean; send: (data: string) => void }, logger: Logger) {
+    this.connectionOps = connectionOps;
     this.logger = logger;
   }
 
@@ -525,9 +396,9 @@ class SubscriptionManager {
     }
 
     // Send listen message for the first listener on this key
-    if (this.connectionManager.isReady()) {
+    if (this.connectionOps.isReady()) {
       const listenMessage: ListenMessage = { action: 'listen', bindingKey };
-      this.connectionManager.send(JSON.stringify(listenMessage));
+      this.connectionOps.send(JSON.stringify(listenMessage));
     }
   }
 
@@ -541,12 +412,12 @@ class SubscriptionManager {
       this.messageListeners.set(bindingKey, filteredCallbacks);
     } else {
       this.messageListeners.delete(bindingKey);
-      if (this.connectionManager.isReady()) {
+      if (this.connectionOps.isReady()) {
         const unlistenMessage: UnlistenMessage = {
           action: 'unlisten',
           bindingKey,
         };
-        this.connectionManager.send(JSON.stringify(unlistenMessage));
+        this.connectionOps.send(JSON.stringify(unlistenMessage));
       }
     }
   }
@@ -554,7 +425,7 @@ class SubscriptionManager {
   restoreAllListeners(): void {
     for (const bindingKey of Array.from(this.messageListeners.keys())) {
       const listenMessage: ListenMessage = { action: 'listen', bindingKey };
-      this.connectionManager.send(JSON.stringify(listenMessage));
+      this.connectionOps.send(JSON.stringify(listenMessage));
     }
   }
 
@@ -590,8 +461,16 @@ class SubscriptionManager {
  * ```
  */
 export class WebMQClient extends EventEmitter {
-  // Core components
-  private connectionManager: ConnectionManager;
+  // Inlined connection state (was ConnectionManager)
+  private ws: WebSocket | null = null;
+  private connectionPromise: Promise<void> | null = null;
+  private isConnected = false;
+  private reconnectAttempts = 0;
+  private maxReconnectAttempts = 5;
+  private reconnectTimeout: number | null = null;
+  private url: string | null = null;
+
+  // Core components (remaining abstractions)
   private sessionManager: SessionManager;
   private actionExecutor: ActionExecutor;
   private messagePublisher: MessagePublisher;
@@ -610,13 +489,15 @@ export class WebMQClient extends EventEmitter {
         : 'error';
     this.logger = new Logger(initialLevel, 'WebMQClient');
 
-    // Initialize components
-    this.connectionManager = new ConnectionManager(
-      this,
-      this.logger.child('ConnectionManager')
-    );
+    // Initialize components (pass connection operations as closures)
+    const connectionOps = {
+      getConnection: () => this.ws,
+      isReady: () => this.isConnected,
+      send: (data: string) => this.ws?.send(data)
+    };
+
     this.sessionManager = new SessionManager(
-      this.connectionManager,
+      connectionOps,
       this.logger.child('SessionManager')
     );
     this.actionExecutor = new ActionExecutor(
@@ -624,11 +505,11 @@ export class WebMQClient extends EventEmitter {
       this.logger.child('ActionExecutor')
     );
     this.messagePublisher = new MessagePublisher(
-      this.connectionManager,
+      connectionOps,
       this.logger.child('MessagePublisher')
     );
     this.subscriptionManager = new SubscriptionManager(
-      this.connectionManager,
+      connectionOps,
       this.logger.child('SubscriptionManager')
     );
 
@@ -637,6 +518,8 @@ export class WebMQClient extends EventEmitter {
 
     this.setup(url, options);
   }
+
+// createConnectionOperations method removed - logic inlined directly
 
   /**
    * Set up internal event handlers to coordinate between components
@@ -663,15 +546,29 @@ export class WebMQClient extends EventEmitter {
       this.sessionManager.resetIdentification();
       super.emit('disconnect');
 
-      // Auto-reconnect logic
-      const shouldReconnect = this.connectionManager.shouldReconnect(
-        this.subscriptionManager.hasListeners(),
-        this.messagePublisher.hasQueuedMessages()
+      // Auto-reconnect logic (inlined from ConnectionManager)
+      const shouldReconnect = (
+        (this.subscriptionManager.hasListeners() || this.messagePublisher.hasQueuedMessages()) &&
+        this.reconnectAttempts < this.maxReconnectAttempts
       );
 
       if (shouldReconnect) {
-        this.connectionManager.scheduleReconnect();
-      } else if (this.connectionManager.hasExceededMaxAttempts()) {
+        // Schedule reconnect (inlined logic)
+        this.reconnectAttempts++;
+        const delay = Math.min(
+          1000 * Math.pow(2, this.reconnectAttempts - 1),
+          30000
+        );
+        this.logger.info(
+          `WebMQ client attempting reconnection ${this.reconnectAttempts}/${this.maxReconnectAttempts} in ${delay}ms...`
+        );
+
+        this.reconnectTimeout = setTimeout(() => {
+          this.connect().catch(() => {
+            // Connection failed, scheduleReconnect will be called again from close event
+          });
+        }, delay) as any;
+      } else if (this.reconnectAttempts >= this.maxReconnectAttempts) {
         this.logger.error(
           `WebMQ client failed to reconnect after maximum attempts.`
         );
@@ -740,13 +637,15 @@ export class WebMQClient extends EventEmitter {
   public setLogLevel(level: LogLevel): void {
     this.logger.setLogLevel(level);
 
-    // Update child loggers
-    this.connectionManager = new ConnectionManager(
-      this,
-      this.logger.child('ConnectionManager')
-    );
+    // Update child loggers (recreate components with new logger)
+    const connectionOps = {
+      getConnection: () => this.ws,
+      isReady: () => this.isConnected,
+      send: (data: string) => this.ws?.send(data)
+    };
+
     this.sessionManager = new SessionManager(
-      this.connectionManager,
+      connectionOps,
       this.logger.child('SessionManager')
     );
     this.actionExecutor = new ActionExecutor(
@@ -754,11 +653,11 @@ export class WebMQClient extends EventEmitter {
       this.logger.child('ActionExecutor')
     );
     this.messagePublisher = new MessagePublisher(
-      this.connectionManager,
+      connectionOps,
       this.logger.child('MessagePublisher')
     );
     this.subscriptionManager = new SubscriptionManager(
-      this.connectionManager,
+      connectionOps,
       this.logger.child('SubscriptionManager')
     );
   }
@@ -769,12 +668,10 @@ export class WebMQClient extends EventEmitter {
    * @param options Configuration options
    */
   public setup(url: string, options: WebMQClientOptions = {}) {
-    this.connectionManager.setUrl(url);
+    this.url = url; // Direct assignment (was connectionManager.setUrl)
 
     if (options.maxReconnectAttempts !== undefined) {
-      this.connectionManager.setMaxReconnectAttempts(
-        options.maxReconnectAttempts
-      );
+      this.maxReconnectAttempts = options.maxReconnectAttempts; // Direct assignment
     }
     if (options.maxQueueSize !== undefined) {
       this.messagePublisher.setMaxQueueSize(options.maxQueueSize);
@@ -792,13 +689,58 @@ export class WebMQClient extends EventEmitter {
    * Optional: If not called, connection is made on the first `publish` or `listen`.
    */
   public connect(): Promise<void> {
-    return this.connectionManager.connect();
+    if (!this.connectionPromise) {
+      if (!this.url) {
+        return Promise.reject(new Error('URL not set. Call setup(url) first.'));
+      }
+
+      this.connectionPromise = new Promise((resolve, reject) => {
+        this.ws = new WebSocket(this.url!);
+
+        this.ws.addEventListener('open', () => {
+          this.logger.info('WebMQ client connected.');
+          const wasReconnection = this.reconnectAttempts > 0;
+          this.isConnected = true;
+          this.reconnectAttempts = 0;
+          if (this.reconnectTimeout) {
+            clearTimeout(this.reconnectTimeout);
+            this.reconnectTimeout = null;
+          }
+
+          this.emit('connection:ready', { wasReconnection });
+          resolve();
+        });
+
+        this.ws.addEventListener('message', (event) => {
+          this.emit('message:received', event.data);
+        });
+
+        this.ws.addEventListener('error', (err) => {
+          this.logger.error('WebMQ client error:', err);
+          const wasConnected = this.isConnected;
+          this.isConnected = false;
+          this.emit('connection:error', { err, wasConnected });
+          if (!wasConnected) {
+            reject(new Error('WebSocket connection failed.'));
+          }
+        });
+
+        this.ws.addEventListener('close', () => {
+          this.logger.info('WebMQ client disconnected.');
+          this.isConnected = false;
+          this.ws = null;
+          this.connectionPromise = null;
+          this.emit('connection:closed');
+        });
+      });
+    }
+    return this.connectionPromise;
   }
 
   private async _ensureConnected(): Promise<void> {
-    if (!this.connectionManager.isReady()) {
+    if (!this.isConnected) {
       try {
-        await this.connectionManager.connect();
+        await this.connect();
       } catch (error) {
         // Don't re-throw the error since we're handling retries
         return;
@@ -817,7 +759,7 @@ export class WebMQClient extends EventEmitter {
       finalRoutingKey: string,
       finalPayload: any
     ): Promise<void> => {
-      if (this.connectionManager.isReady()) {
+      if (this.isConnected) {
         return this.messagePublisher.publish(finalRoutingKey, finalPayload);
       } else {
         // Queue message and try to connect
@@ -851,7 +793,7 @@ export class WebMQClient extends EventEmitter {
       await this.subscriptionManager.listen(finalBindingKey, finalCallback);
 
       // Trigger connection if not ready (don't wait for it)
-      if (!this.connectionManager.isReady()) {
+      if (!this.isConnected) {
         this._ensureConnected().catch(() => {
           // Connection failed, but listener is stored and will be sent on reconnect
         });
@@ -903,8 +845,18 @@ export class WebMQClient extends EventEmitter {
       }
     }
 
-    // Actually disconnect
-    this.connectionManager.close();
+    // Actually disconnect (inlined from ConnectionManager.close)
+    if (this.reconnectTimeout) {
+      clearTimeout(this.reconnectTimeout);
+      this.reconnectTimeout = null;
+    }
+    this.reconnectAttempts = 0;
+    if (this.ws) {
+      this.ws.close();
+    }
+    this.ws = null;
+    this.connectionPromise = null;
+    this.isConnected = false;
   }
 
   /**
@@ -933,12 +885,12 @@ export class WebMQClient extends EventEmitter {
 
   /** Get the underlying WebSocket connection (for testing) */
   public _getWebSocket(): WebSocket | null {
-    return this.connectionManager.getConnection();
+    return this.ws;
   }
 
   /** Get connection state (for testing) */
   public _getConnectionState(): { isConnected: boolean } {
-    return { isConnected: this.connectionManager.isReady() };
+    return { isConnected: this.isConnected };
   }
 
   /** Get number of listeners for a binding key (for testing) */
