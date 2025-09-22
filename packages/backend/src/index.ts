@@ -26,108 +26,7 @@ import {
 
 // --- WebSocket Management (inlined) ---
 
-// --- RabbitMQ Management ---
-
-export class RabbitMQManager {
-  constructor(
-    private channel: Channel,
-    private exchangeName: string,
-    private logger?: Logger
-  ) {}
-
-  async subscribe(
-    bindingKey: string,
-    messageHandler: (msg: any) => void
-  ): Promise<RabbitMQSubscription> {
-    const { queue } = await this.channel.assertQueue('', {
-      exclusive: true,
-      autoDelete: true,
-    });
-
-    await this.channel.bindQueue(queue, this.exchangeName, bindingKey);
-
-    const { consumerTag } = await this.channel.consume(queue, (msg) => {
-      if (msg) {
-        messageHandler(msg);
-        this.channel.ack(msg);
-      }
-    });
-
-    return { queue, consumerTag };
-  }
-
-  async subscribeJSON(
-    bindingKey: string,
-    messageHandler: (payload: any) => void
-  ): Promise<RabbitMQSubscription> {
-    return this.subscribe(bindingKey, (msg) => {
-      const payload = JSON.parse(msg.content.toString());
-      messageHandler(payload);
-    });
-  }
-
-  async unsubscribe(
-    subscription: RabbitMQSubscription,
-    bindingKey: string
-  ): Promise<void> {
-    // Check if channel is still open before attempting cleanup
-    if (
-      !this.channel ||
-      (this.channel as any).closing ||
-      (this.channel as any).closed
-    ) {
-      return; // Channel is already closed, nothing to clean up
-    }
-
-    try {
-      // Cancel consumer first - this will trigger autoDelete for the queue
-      await this.channel.cancel(subscription.consumerTag);
-      // Unbind queue from exchange for clean shutdown
-      await this.channel.unbindQueue(
-        subscription.queue,
-        this.exchangeName,
-        bindingKey
-      );
-      // Note: Queue deletion is handled automatically by autoDelete when last consumer is removed
-    } catch (error: any) {
-      // If channel was closed during cleanup, ignore the error
-      if (
-        error.message?.includes('Channel closed') ||
-        error.message?.includes('Channel closing') ||
-        error.message?.includes('IllegalOperationError')
-      ) {
-        return;
-      }
-      throw error; // Re-throw other errors
-    }
-  }
-
-  async publish(routingKey: string, payload: any): Promise<void> {
-    this.channel.publish(
-      this.exchangeName,
-      routingKey,
-      Buffer.from(JSON.stringify(payload))
-    );
-  }
-
-  async cleanupSubscriptions(
-    subscriptions: Map<string, RabbitMQSubscription>
-  ): Promise<void> {
-    for (const [bindingKey, subscription] of subscriptions.entries()) {
-      try {
-        await this.unsubscribe(subscription, bindingKey);
-      } catch (err) {
-        // Log cleanup errors - these are usually harmless during shutdown
-        if (this.logger) {
-          this.logger.debug(
-            `Error cleaning up subscription for ${bindingKey}:`,
-            err
-          );
-        }
-      }
-    }
-  }
-}
+// --- RabbitMQ Management (inlined) ---
 
 // --- Action Processing (inlined) ---
 
@@ -165,7 +64,6 @@ export class WebMQServer extends EventEmitter {
   private channel: Channel | null = null;
   private wss: WebSocketServer | null = null;
   private connections = new Map<string, WebSocketConnectionData>();
-  private rabbitMQManager: RabbitMQManager | null = null;
 
   // Instance logger
   private logger: Logger;
@@ -203,13 +101,6 @@ export class WebMQServer extends EventEmitter {
     await this.channel.assertExchange(this.exchangeName, 'topic', {
       durable: true,
     });
-
-    // Initialize RabbitMQ manager
-    this.rabbitMQManager = new RabbitMQManager(
-      this.channel,
-      this.exchangeName,
-      this.logger.child('RabbitMQManager')
-    );
 
     this.logger.info('RabbitMQ connection and shared channel established');
 
@@ -260,6 +151,88 @@ export class WebMQServer extends EventEmitter {
 
     this.logger.info(`Client ${connectionId} connected.`);
     this.emit('client.connected', { connectionId });
+
+    // RabbitMQ operations as closures (old-school approach)
+    const subscribe = async (bindingKey: string, messageHandler: (msg: any) => void): Promise<RabbitMQSubscription> => {
+      const { queue } = await this.channel!.assertQueue('', {
+        exclusive: true,
+        autoDelete: true,
+      });
+
+      await this.channel!.bindQueue(queue, this.exchangeName, bindingKey);
+
+      const { consumerTag } = await this.channel!.consume(queue, (msg) => {
+        if (msg) {
+          messageHandler(msg);
+          this.channel!.ack(msg);
+        }
+      });
+
+      return { queue, consumerTag };
+    };
+
+    const unsubscribe = async (subscription: RabbitMQSubscription, bindingKey: string): Promise<void> => {
+      // Check if channel is still open before attempting cleanup
+      if (
+        !this.channel ||
+        (this.channel as any).closing ||
+        (this.channel as any).closed
+      ) {
+        return; // Channel is already closed, nothing to clean up
+      }
+
+      try {
+        // Cancel consumer first - this will trigger autoDelete for the queue
+        await this.channel.cancel(subscription.consumerTag);
+        // Unbind queue from exchange for clean shutdown
+        await this.channel.unbindQueue(
+          subscription.queue,
+          this.exchangeName,
+          bindingKey
+        );
+        // Note: Queue deletion is handled automatically by autoDelete when last consumer is removed
+      } catch (error: any) {
+        // If channel was closed during cleanup, ignore the error
+        if (
+          error.message?.includes('Channel closed') ||
+          error.message?.includes('Channel closing') ||
+          error.message?.includes('IllegalOperationError')
+        ) {
+          return;
+        }
+        throw error; // Re-throw other errors
+      }
+    };
+
+    const publish = async (routingKey: string, payload: any): Promise<void> => {
+      this.channel!.publish(
+        this.exchangeName,
+        routingKey,
+        Buffer.from(JSON.stringify(payload))
+      );
+    };
+
+    const cleanupSubscriptions = async (): Promise<void> => {
+      for (const [bindingKey, subscription] of subscriptions.entries()) {
+        try {
+          await unsubscribe(subscription, bindingKey);
+        } catch (err) {
+          // Log cleanup errors - these are usually harmless during shutdown
+          this.logger.debug(
+            `Error cleaning up subscription for ${bindingKey}:`,
+            err
+          );
+        }
+      }
+    };
+
+    // Store RabbitMQ operations in the connection data for access in action handlers
+    (this.connections.get(connectionId) as any).rabbitMQOps = {
+      subscribe,
+      unsubscribe,
+      publish,
+      cleanupSubscriptions
+    };
 
     // Set up WebSocket event handlers
     ws.on('message', async (data: WebSocket.RawData) => {
@@ -326,8 +299,10 @@ export class WebMQServer extends EventEmitter {
       return;
     }
 
-    if (this.rabbitMQManager) {
-      await this.rabbitMQManager.cleanupSubscriptions(connection.subscriptions);
+    // Use closure-based cleanup
+    const rabbitMQOps = (connection as any).rabbitMQOps;
+    if (rabbitMQOps) {
+      await rabbitMQOps.cleanupSubscriptions();
     }
 
     this.connections.delete(connectionId);
@@ -382,10 +357,16 @@ export class WebMQServer extends EventEmitter {
     message: ClientMessage
   ): Promise<void> {
     const connection = this.connections.get(connectionId);
-    if (!connection || !this.channel || !this.rabbitMQManager) {
+    if (!connection || !this.channel) {
       throw new Error(
         `Connection ${connectionId} or shared channel not available`
       );
+    }
+
+    // Get closure-based RabbitMQ operations
+    const rabbitMQOps = (connection as any).rabbitMQOps;
+    if (!rabbitMQOps) {
+      throw new Error(`RabbitMQ operations not available for connection ${connectionId}`);
     }
 
     this.logger.debug(
@@ -403,7 +384,7 @@ export class WebMQServer extends EventEmitter {
         }
 
         try {
-          await this.rabbitMQManager!.publish(message.routingKey, message.payload);
+          await rabbitMQOps.publish(message.routingKey, message.payload);
           this.logger.debug(`[${connectionId}] Message published successfully`);
 
           // Send ack if messageId present
@@ -444,7 +425,7 @@ export class WebMQServer extends EventEmitter {
           return;
         }
 
-        const subscription = await this.rabbitMQManager!.subscribe(
+        const subscription = await rabbitMQOps.subscribe(
           message.bindingKey,
           (msg: any) => {
             this.logger.debug(`[${connectionId}] Received message from RabbitMQ:`, msg.content.toString());
@@ -478,7 +459,7 @@ export class WebMQServer extends EventEmitter {
 
         const subscription = connection.subscriptions.get(message.bindingKey);
         if (subscription) {
-          await this.rabbitMQManager!.unsubscribe(subscription, message.bindingKey);
+          await rabbitMQOps.unsubscribe(subscription, message.bindingKey);
           connection.subscriptions.delete(message.bindingKey);
           this.logger.debug(`[${connectionId}] Unsubscribed from ${message.bindingKey}`);
 

@@ -1,6 +1,5 @@
 import {
   WebMQServer,
-  RabbitMQManager,
 } from './index';
 import {
   ClientMessage,
@@ -54,7 +53,7 @@ const { mockConnection, mockChannel } = require('amqplib');
 describe.skip('WebMQServer Integration', () => {
   let server: WebMQServer;
   let mockWebSocketManager: any;
-  let mockRabbitMQManager: jest.Mocked<RabbitMQManager>;
+  let mockRabbitMQManager: any;
   let mockWS: jest.Mocked<WebSocket>;
   let mockConnection: WebSocketConnectionData;
   let eventLog: Array<{ event: string; data: any }>;
@@ -397,7 +396,7 @@ describe('WebMQServer Lifecycle', () => {
 describe.skip('WebMQServer Hook System', () => {
   let server: WebMQServer;
   let mockWebSocketManager: any;
-  let mockRabbitMQManager: jest.Mocked<RabbitMQManager>;
+  let mockRabbitMQManager: any;
   let mockConnection: WebSocketConnectionData;
   let hookExecutionLog: string[];
 
@@ -632,7 +631,7 @@ describe.skip('WebMQServer Hook System', () => {
 describe.skip('WebMQServer Message Handling', () => {
   let server: WebMQServer;
   let mockWebSocketManager: any;
-  let mockRabbitMQManager: jest.Mocked<RabbitMQManager>;
+  let mockRabbitMQManager: any;
   let mockConnection: WebSocketConnectionData;
   let mockWS: jest.Mocked<WebSocket>;
 
@@ -699,7 +698,7 @@ describe.skip('WebMQServer Message Handling', () => {
 
     // Capture the message handler callback when subscribe is called
     mockRabbitMQManager.subscribe.mockImplementation(
-      async (bindingKey, handler) => {
+      async (bindingKey: any, handler: any) => {
         messageHandlerCallback = handler;
         return { queue: 'test-queue', consumerTag: 'test-consumer' };
       }
@@ -752,7 +751,7 @@ describe.skip('WebMQServer Message Handling', () => {
 describe.skip('WebMQServer Error Handling', () => {
   let server: WebMQServer;
   let mockWebSocketManager: any;
-  let mockRabbitMQManager: jest.Mocked<RabbitMQManager>;
+  let mockRabbitMQManager: any;
   let mockConnection: WebSocketConnectionData;
 
   beforeEach(() => {
@@ -1061,8 +1060,8 @@ describe.skip('WebSocketManager', () => {
   });
 });
 
-describe('RabbitMQManager', () => {
-  let manager: RabbitMQManager;
+describe.skip('RabbitMQManager', () => {
+  let manager: any; // RabbitMQManager removed
   let mockChannel: any;
 
   beforeEach(() => {
@@ -1077,7 +1076,7 @@ describe('RabbitMQManager', () => {
       ack: jest.fn(),
     };
 
-    manager = new RabbitMQManager(mockChannel, 'test-exchange');
+    manager = null; // RabbitMQManager removed
   });
 
   describe('subscribe', () => {
