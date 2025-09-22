@@ -32,128 +32,7 @@ import {
 
 // SessionManager removed - logic inlined into WebMQClient with closures
 
-/**
- * Executes message actions with hook support
- */
-class ActionExecutor {
-  private hooks: Required<ClientHooks>;
-  private hookContext: ClientHookContext;
-  private logger: Logger;
-
-  constructor(client: WebMQClient, logger: Logger) {
-    this.hooks = {
-      pre: [],
-      onPublish: [],
-      onMessage: [],
-      onListen: [],
-    };
-    this.hookContext = { client };
-    this.logger = logger;
-  }
-
-  setHooks(hooks: ClientHooks): void {
-    this.hooks.pre = hooks.pre || [];
-    this.hooks.onPublish = hooks.onPublish || [];
-    this.hooks.onMessage = hooks.onMessage || [];
-    this.hooks.onListen = hooks.onListen || [];
-  }
-
-  async executePublish(
-    routingKey: string,
-    payload: any,
-    sendAction: (finalRoutingKey: string, finalPayload: any) => Promise<void>
-  ): Promise<void> {
-    const message: ClientHookMessage = {
-      action: 'publish',
-      routingKey,
-      payload,
-    };
-
-    const mainAction = async (): Promise<void> => {
-      await sendAction(message.routingKey!, message.payload);
-    };
-
-    await this.executeHooks(
-      this.hooks.pre,
-      this.hooks.onPublish,
-      message,
-      mainAction
-    );
-  }
-
-  async executeListen(
-    bindingKey: string,
-    callback: MessageCallback,
-    listenAction: (
-      finalBindingKey: string,
-      finalCallback: MessageCallback
-    ) => Promise<void>
-  ): Promise<void> {
-    const message: ClientHookMessage = {
-      action: 'listen',
-      bindingKey,
-      callback,
-    };
-
-    const mainAction = async (): Promise<void> => {
-      await listenAction(message.bindingKey!, message.callback!);
-    };
-
-    await this.executeHooks(
-      this.hooks.pre,
-      this.hooks.onListen,
-      message,
-      mainAction
-    );
-  }
-
-  async executeMessage(
-    bindingKey: string,
-    payload: any,
-    callbacks: MessageCallback[]
-  ): Promise<void> {
-    const hookMessage: ClientHookMessage = {
-      action: 'message',
-      bindingKey,
-      payload,
-    };
-
-    const mainAction = async (): Promise<void> => {
-      callbacks.forEach((cb) => cb(hookMessage.payload));
-    };
-
-    try {
-      await this.executeHooks(
-        this.hooks.pre,
-        this.hooks.onMessage,
-        hookMessage,
-        mainAction
-      );
-    } catch (error) {
-      this.logger.error(
-        `Message hook failed: ${error instanceof Error ? error.message : String(error)}`
-      );
-    }
-  }
-
-  private async executeHooks(
-    preHooks: ClientHook[],
-    actionHooks: ClientHook[],
-    message: ClientHookMessage,
-    mainAction: () => Promise<void>
-  ): Promise<void> {
-    const allHooks = [...preHooks, ...actionHooks];
-
-    const run = async (index: number): Promise<void> => {
-      if (index >= allHooks.length) {
-        return mainAction();
-      }
-      await allHooks[index](this.hookContext, message, () => run(index + 1));
-    };
-
-    await run(0);
-  }
-}
+// ActionExecutor removed - hook execution logic inlined into WebMQClient with closures
 
 /**
  * Manages message publishing with acknowledgments and queuing
@@ -410,8 +289,16 @@ export class WebMQClient extends EventEmitter {
   private sessionId: string | null = null;
   private sessionIdentified = false;
 
+  // Inlined hook state (was ActionExecutor)
+  private hooks: Required<ClientHooks> = {
+    pre: [],
+    onPublish: [],
+    onMessage: [],
+    onListen: [],
+  };
+  private hookContext: ClientHookContext;
+
   // Core components (remaining abstractions)
-  private actionExecutor: ActionExecutor;
   private messagePublisher: MessagePublisher;
   private subscriptionManager: SubscriptionManager;
 
@@ -431,6 +318,9 @@ export class WebMQClient extends EventEmitter {
     // Initialize session (was SessionManager)
     this.initializeSessionId();
 
+    // Initialize hook context (was ActionExecutor)
+    this.hookContext = { client: this };
+
     // Initialize components (pass connection operations as closures)
     const connectionOps = {
       getConnection: () => this.ws,
@@ -438,10 +328,6 @@ export class WebMQClient extends EventEmitter {
       send: (data: string) => this.ws?.send(data)
     };
 
-    this.actionExecutor = new ActionExecutor(
-      this,
-      this.logger.child('ActionExecutor')
-    );
     this.messagePublisher = new MessagePublisher(
       connectionOps,
       this.logger.child('MessagePublisher')
@@ -510,6 +396,124 @@ export class WebMQClient extends EventEmitter {
    */
   private resetIdentification(): void {
     this.sessionIdentified = false;
+  }
+
+  /**
+   * Set hooks configuration (was ActionExecutor.setHooks)
+   */
+  private setHooks(hooks: ClientHooks): void {
+    this.hooks.pre = hooks.pre || [];
+    this.hooks.onPublish = hooks.onPublish || [];
+    this.hooks.onMessage = hooks.onMessage || [];
+    this.hooks.onListen = hooks.onListen || [];
+  }
+
+  /**
+   * Execute hooks in sequence (was ActionExecutor.executeHooks)
+   */
+  private async executeHooks(
+    preHooks: ClientHook[],
+    actionHooks: ClientHook[],
+    message: ClientHookMessage,
+    mainAction: () => Promise<void>
+  ): Promise<void> {
+    const allHooks = [...preHooks, ...actionHooks];
+
+    const run = async (index: number): Promise<void> => {
+      if (index >= allHooks.length) {
+        return mainAction();
+      }
+      await allHooks[index](this.hookContext, message, () => run(index + 1));
+    };
+
+    await run(0);
+  }
+
+  /**
+   * Execute publish action with hooks (was ActionExecutor.executePublish)
+   */
+  private async executePublish(
+    routingKey: string,
+    payload: any,
+    sendAction: (finalRoutingKey: string, finalPayload: any) => Promise<void>
+  ): Promise<void> {
+    const message: ClientHookMessage = {
+      action: 'publish',
+      routingKey,
+      payload,
+    };
+
+    const mainAction = async (): Promise<void> => {
+      await sendAction(message.routingKey!, message.payload);
+    };
+
+    await this.executeHooks(
+      this.hooks.pre,
+      this.hooks.onPublish,
+      message,
+      mainAction
+    );
+  }
+
+  /**
+   * Execute listen action with hooks (was ActionExecutor.executeListen)
+   */
+  private async executeListen(
+    bindingKey: string,
+    callback: MessageCallback,
+    listenAction: (
+      finalBindingKey: string,
+      finalCallback: MessageCallback
+    ) => Promise<void>
+  ): Promise<void> {
+    const message: ClientHookMessage = {
+      action: 'listen',
+      bindingKey,
+      callback,
+    };
+
+    const mainAction = async (): Promise<void> => {
+      await listenAction(message.bindingKey!, message.callback!);
+    };
+
+    await this.executeHooks(
+      this.hooks.pre,
+      this.hooks.onListen,
+      message,
+      mainAction
+    );
+  }
+
+  /**
+   * Execute message receive with hooks (was ActionExecutor.executeMessage)
+   */
+  private async executeMessage(
+    bindingKey: string,
+    payload: any,
+    callbacks: MessageCallback[]
+  ): Promise<void> {
+    const hookMessage: ClientHookMessage = {
+      action: 'message',
+      bindingKey,
+      payload,
+    };
+
+    const mainAction = async (): Promise<void> => {
+      callbacks.forEach((cb) => cb(hookMessage.payload));
+    };
+
+    try {
+      await this.executeHooks(
+        this.hooks.pre,
+        this.hooks.onMessage,
+        hookMessage,
+        mainAction
+      );
+    } catch (error) {
+      this.logger.error(
+        `Message hook failed: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
   }
 
 // createConnectionOperations method removed - logic inlined directly
@@ -583,7 +587,7 @@ export class WebMQClient extends EventEmitter {
               dataMessage.bindingKey
             );
             if (callbacks) {
-              await this.actionExecutor.executeMessage(
+              await this.executeMessage( // Direct call (was actionExecutor.executeMessage)
                 dataMessage.bindingKey,
                 dataMessage.payload,
                 callbacks
@@ -637,10 +641,6 @@ export class WebMQClient extends EventEmitter {
       send: (data: string) => this.ws?.send(data)
     };
 
-    this.actionExecutor = new ActionExecutor(
-      this,
-      this.logger.child('ActionExecutor')
-    );
     this.messagePublisher = new MessagePublisher(
       connectionOps,
       this.logger.child('MessagePublisher')
@@ -669,7 +669,7 @@ export class WebMQClient extends EventEmitter {
       this.messagePublisher.setMessageTimeout(options.messageTimeout);
     }
     if (options.hooks) {
-      this.actionExecutor.setHooks(options.hooks);
+      this.setHooks(options.hooks); // Direct call (was actionExecutor.setHooks)
     }
   }
 
@@ -763,7 +763,7 @@ export class WebMQClient extends EventEmitter {
       }
     };
 
-    await this.actionExecutor.executePublish(routingKey, payload, sendAction);
+    await this.executePublish(routingKey, payload, sendAction); // Direct call (was actionExecutor.executePublish)
   }
 
   /**
@@ -789,7 +789,7 @@ export class WebMQClient extends EventEmitter {
       }
     };
 
-    await this.actionExecutor.executeListen(bindingKey, callback, listenAction);
+    await this.executeListen(bindingKey, callback, listenAction); // Direct call (was actionExecutor.executeListen)
   }
 
   /**
