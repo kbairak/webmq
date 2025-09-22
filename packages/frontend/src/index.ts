@@ -36,78 +36,7 @@ import {
 
 // MessagePublisher removed - publishing logic inlined into WebMQClient with closures
 
-/**
- * Manages subscription listeners and server communication
- */
-class SubscriptionManager {
-  private messageListeners: Map<string, MessageCallback[]> = new Map();
-  private connectionOps: { getConnection: () => WebSocket | null; isReady: () => boolean; send: (data: string) => void };
-  private logger: Logger;
-
-  constructor(connectionOps: { getConnection: () => WebSocket | null; isReady: () => boolean; send: (data: string) => void }, logger: Logger) {
-    this.connectionOps = connectionOps;
-    this.logger = logger;
-  }
-
-  async listen(bindingKey: string, callback: MessageCallback): Promise<void> {
-    const existing = this.messageListeners.get(bindingKey);
-    if (existing) {
-      existing.push(callback);
-      return; // Don't send another listen message
-    } else {
-      this.messageListeners.set(bindingKey, [callback]);
-    }
-
-    // Send listen message for the first listener on this key
-    if (this.connectionOps.isReady()) {
-      const listenMessage: ListenMessage = { action: 'listen', bindingKey };
-      this.connectionOps.send(JSON.stringify(listenMessage));
-    }
-  }
-
-  async unlisten(bindingKey: string, callback: MessageCallback): Promise<void> {
-    const callbacks = this.messageListeners.get(bindingKey);
-    if (!callbacks) return;
-
-    const filteredCallbacks = callbacks.filter((cb) => cb !== callback);
-
-    if (filteredCallbacks.length > 0) {
-      this.messageListeners.set(bindingKey, filteredCallbacks);
-    } else {
-      this.messageListeners.delete(bindingKey);
-      if (this.connectionOps.isReady()) {
-        const unlistenMessage: UnlistenMessage = {
-          action: 'unlisten',
-          bindingKey,
-        };
-        this.connectionOps.send(JSON.stringify(unlistenMessage));
-      }
-    }
-  }
-
-  restoreAllListeners(): void {
-    for (const bindingKey of Array.from(this.messageListeners.keys())) {
-      const listenMessage: ListenMessage = { action: 'listen', bindingKey };
-      this.connectionOps.send(JSON.stringify(listenMessage));
-    }
-  }
-
-  getCallbacks(bindingKey: string): MessageCallback[] | undefined {
-    return this.messageListeners.get(bindingKey);
-  }
-
-  hasListeners(): boolean {
-    return this.messageListeners.size > 0;
-  }
-
-  clear(): void {
-    this.messageListeners.clear();
-  }
-
-  size(): number {
-    return this.messageListeners.size;
-  }
-}
+// SubscriptionManager removed - subscription logic inlined into WebMQClient with closures
 
 // --- Main Client Class ---
 
@@ -152,8 +81,8 @@ export class WebMQClient extends EventEmitter {
   private maxQueueSize = 100;
   private messageTimeout = 10000;
 
-  // Core components (remaining abstractions)
-  private subscriptionManager: SubscriptionManager;
+  // Inlined subscription state (was SubscriptionManager)
+  private messageListeners: Map<string, MessageCallback[]> = new Map();
 
   // Logger instance - default to silent in test environments
   private logger: Logger;
@@ -173,18 +102,6 @@ export class WebMQClient extends EventEmitter {
 
     // Initialize hook context (was ActionExecutor)
     this.hookContext = { client: this };
-
-    // Initialize components (pass connection operations as closures)
-    const connectionOps = {
-      getConnection: () => this.ws,
-      isReady: () => this.isConnected,
-      send: (data: string) => this.ws?.send(data)
-    };
-
-    this.subscriptionManager = new SubscriptionManager(
-      connectionOps,
-      this.logger.child('SubscriptionManager')
-    );
 
     // Set up event handlers
     this.setupEventHandlers();
@@ -525,6 +442,86 @@ export class WebMQClient extends EventEmitter {
     return this.messageQueue.length > 0;
   }
 
+  /**
+   * Add listener for binding key (was SubscriptionManager.listen)
+   */
+  private async addMessageListener(bindingKey: string, callback: MessageCallback): Promise<void> {
+    const existing = this.messageListeners.get(bindingKey);
+    if (existing) {
+      existing.push(callback);
+      return; // Don't send another listen message
+    } else {
+      this.messageListeners.set(bindingKey, [callback]);
+    }
+
+    // Send listen message for the first listener on this key
+    if (this.isConnected) {
+      const listenMessage: ListenMessage = { action: 'listen', bindingKey };
+      this.ws?.send(JSON.stringify(listenMessage));
+    }
+  }
+
+  /**
+   * Remove listener for binding key (was SubscriptionManager.unlisten)
+   */
+  private async removeMessageListener(bindingKey: string, callback: MessageCallback): Promise<void> {
+    const callbacks = this.messageListeners.get(bindingKey);
+    if (!callbacks) return;
+
+    const filteredCallbacks = callbacks.filter((cb) => cb !== callback);
+
+    if (filteredCallbacks.length > 0) {
+      this.messageListeners.set(bindingKey, filteredCallbacks);
+    } else {
+      this.messageListeners.delete(bindingKey);
+      if (this.isConnected) {
+        const unlistenMessage: UnlistenMessage = {
+          action: 'unlisten',
+          bindingKey,
+        };
+        this.ws?.send(JSON.stringify(unlistenMessage));
+      }
+    }
+  }
+
+  /**
+   * Restore all listeners on reconnection (was SubscriptionManager.restoreAllListeners)
+   */
+  private restoreAllListeners(): void {
+    for (const bindingKey of Array.from(this.messageListeners.keys())) {
+      const listenMessage: ListenMessage = { action: 'listen', bindingKey };
+      this.ws?.send(JSON.stringify(listenMessage));
+    }
+  }
+
+  /**
+   * Get callbacks for binding key (was SubscriptionManager.getCallbacks)
+   */
+  private getCallbacks(bindingKey: string): MessageCallback[] | undefined {
+    return this.messageListeners.get(bindingKey);
+  }
+
+  /**
+   * Check if has listeners (was SubscriptionManager.hasListeners)
+   */
+  private hasListeners(): boolean {
+    return this.messageListeners.size > 0;
+  }
+
+  /**
+   * Clear all listeners (was SubscriptionManager.clear)
+   */
+  private clearListeners(): void {
+    this.messageListeners.clear();
+  }
+
+  /**
+   * Get listener count (was SubscriptionManager.size)
+   */
+  private getListenerSize(): number {
+    return this.messageListeners.size;
+  }
+
 // createConnectionOperations method removed - logic inlined directly
 
   /**
@@ -534,7 +531,7 @@ export class WebMQClient extends EventEmitter {
     // Handle connection ready
     this.on('connection:ready', ({ wasReconnection }) => {
       this.sendIdentification(); // Direct call (was sessionManager.sendIdentification)
-      this.subscriptionManager.restoreAllListeners();
+      this.restoreAllListeners(); // Direct call (was subscriptionManager.restoreAllListeners)
       this.flushMessageQueue(); // Direct call (was messagePublisher.flushMessageQueue)
 
       if (wasReconnection) {
@@ -554,7 +551,7 @@ export class WebMQClient extends EventEmitter {
 
       // Auto-reconnect logic (inlined from ConnectionManager)
       const shouldReconnect = (
-        (this.subscriptionManager.hasListeners() || this.hasQueuedMessages()) &&
+        (this.hasListeners() || this.hasQueuedMessages()) && // Direct call (was subscriptionManager.hasListeners)
         this.reconnectAttempts < this.maxReconnectAttempts
       );
 
@@ -592,7 +589,7 @@ export class WebMQClient extends EventEmitter {
         switch (message.action) {
           case 'message': {
             const dataMessage = message as DataMessage;
-            const callbacks = this.subscriptionManager.getCallbacks(
+            const callbacks = this.getCallbacks( // Direct call (was subscriptionManager.getCallbacks)
               dataMessage.bindingKey
             );
             if (callbacks) {
@@ -643,17 +640,7 @@ export class WebMQClient extends EventEmitter {
   public setLogLevel(level: LogLevel): void {
     this.logger.setLogLevel(level);
 
-    // Update child loggers (recreate components with new logger)
-    const connectionOps = {
-      getConnection: () => this.ws,
-      isReady: () => this.isConnected,
-      send: (data: string) => this.ws?.send(data)
-    };
-
-    this.subscriptionManager = new SubscriptionManager(
-      connectionOps,
-      this.logger.child('SubscriptionManager')
-    );
+    // No child loggers to recreate - all logic is now inlined
   }
 
   /**
@@ -784,7 +771,7 @@ export class WebMQClient extends EventEmitter {
       finalBindingKey: string,
       finalCallback: MessageCallback
     ): Promise<void> => {
-      await this.subscriptionManager.listen(finalBindingKey, finalCallback);
+      await this.addMessageListener(finalBindingKey, finalCallback); // Direct call (was subscriptionManager.listen)
 
       // Trigger connection if not ready (don't wait for it)
       if (!this.isConnected) {
@@ -806,7 +793,7 @@ export class WebMQClient extends EventEmitter {
     bindingKey: string,
     callback: MessageCallback
   ): Promise<void> {
-    await this.subscriptionManager.unlisten(bindingKey, callback);
+    await this.removeMessageListener(bindingKey, callback); // Direct call (was subscriptionManager.unlisten)
   }
 
   /**
@@ -823,18 +810,18 @@ export class WebMQClient extends EventEmitter {
       );
     }
 
-    if (this.subscriptionManager.size() > 0) {
+    if (this.getListenerSize() > 0) { // Direct call (was subscriptionManager.size)
       switch (onActiveListeners) {
         case 'ignore':
           return; // Do nothing, keep connection alive
 
         case 'throw':
           throw new Error(
-            `Cannot disconnect: ${this.subscriptionManager.size()} active listeners. Use onActiveListeners: 'clear' or unlisten() first.`
+            `Cannot disconnect: ${this.getListenerSize()} active listeners. Use onActiveListeners: 'clear' or unlisten() first.`
           );
 
         case 'clear':
-          this.subscriptionManager.clear(); // Remove all listeners
+          this.clearListeners(); // Direct call (was subscriptionManager.clear)
           break;
       }
     }
@@ -889,13 +876,13 @@ export class WebMQClient extends EventEmitter {
 
   /** Get number of listeners for a binding key (for testing) */
   public _getListenerCount(bindingKey: string): number {
-    const callbacks = this.subscriptionManager.getCallbacks(bindingKey);
+    const callbacks = this.getCallbacks(bindingKey); // Direct call (was subscriptionManager.getCallbacks)
     return callbacks ? callbacks.length : 0;
   }
 
   /** Get total number of binding keys being listened to (for testing) */
   public _getListenerSize(): number {
-    return this.subscriptionManager.size();
+    return this.getListenerSize(); // Direct call (was subscriptionManager.size)
   }
 }
 
