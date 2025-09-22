@@ -1,4 +1,4 @@
-import { WebMQServer, RabbitMQManager } from 'webmq-backend';
+import { WebMQServer } from 'webmq-backend';
 import { WebMQClient } from 'webmq-frontend';
 import { getRabbitMQConnection } from './rabbitmq-utils';
 import amqplib from 'amqplib';
@@ -10,7 +10,40 @@ let webmqServer: WebMQServer;
 let webmqClient: WebMQClient;
 let serverPort: number;
 let workerConnection: amqplib.ChannelModel;
-let rabbitMQManager: RabbitMQManager;
+
+// Simple RabbitMQ helper for e2e tests (replacing removed RabbitMQManager)
+class SimpleRabbitMQHelper {
+  constructor(private channel: amqplib.Channel, private exchangeName: string) {}
+
+  async subscribeJSON(bindingKey: string, messageHandler: (payload: any) => void) {
+    const { queue } = await this.channel.assertQueue('', {
+      exclusive: true,
+      autoDelete: true,
+    });
+
+    await this.channel.bindQueue(queue, this.exchangeName, bindingKey);
+
+    const { consumerTag } = await this.channel.consume(queue, (msg) => {
+      if (msg) {
+        const payload = JSON.parse(msg.content.toString());
+        messageHandler(payload);
+        this.channel.ack(msg);
+      }
+    });
+
+    return { queue, consumerTag };
+  }
+
+  async publish(routingKey: string, payload: any): Promise<void> {
+    this.channel.publish(
+      this.exchangeName,
+      routingKey,
+      Buffer.from(JSON.stringify(payload))
+    );
+  }
+}
+
+let rabbitMQHelper: SimpleRabbitMQHelper;
 
 async function findFreePort(startPort: number = 8080): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -40,7 +73,7 @@ beforeAll(async () => {
   await channel.assertExchange('e2e_exchange_durable', 'topic', {
     durable: true,
   });
-  rabbitMQManager = new RabbitMQManager(channel, 'e2e_exchange_durable');
+  rabbitMQHelper = new SimpleRabbitMQHelper(channel, 'e2e_exchange_durable');
 
   webmqServer = new WebMQServer({
     rabbitmqUrl: rabbitmqUrl,
@@ -66,7 +99,7 @@ afterAll(async () => {
 it('worker receives message', async () => {
   // arrange
   const capturedMessages: any[] = [];
-  await rabbitMQManager.subscribeJSON('routingKey', (payload) => {
+  await rabbitMQHelper.subscribeJSON('routingKey', (payload) => {
     capturedMessages.push(payload);
   });
 
@@ -87,7 +120,7 @@ it('client receives message', async () => {
   await new Promise((resolve) => setTimeout(resolve, 100));
 
   // act
-  await rabbitMQManager.publish('routingKey', { hello: 'from backend' });
+  await rabbitMQHelper.publish('routingKey', { hello: 'from backend' });
 
   // assert
   await new Promise((resolve) => setTimeout(resolve, 100));
@@ -103,9 +136,9 @@ it('multiple messages in sequence', async () => {
   await new Promise((resolve) => setTimeout(resolve, 100));
 
   // act
-  await rabbitMQManager.publish('test.sequence', { id: 1 });
-  await rabbitMQManager.publish('test.sequence', { id: 2 });
-  await rabbitMQManager.publish('test.sequence', { id: 3 });
+  await rabbitMQHelper.publish('test.sequence', { id: 1 });
+  await rabbitMQHelper.publish('test.sequence', { id: 2 });
+  await rabbitMQHelper.publish('test.sequence', { id: 3 });
 
   // assert
   await new Promise((resolve) => setTimeout(resolve, 100));
@@ -121,8 +154,8 @@ it('wildcard routing patterns', async () => {
   await new Promise((resolve) => setTimeout(resolve, 100));
 
   // act
-  await rabbitMQManager.publish('user.login', { action: 'login' });
-  await rabbitMQManager.publish('user.logout', { action: 'logout' });
+  await rabbitMQHelper.publish('user.login', { action: 'login' });
+  await rabbitMQHelper.publish('user.logout', { action: 'logout' });
 
   // assert
   await new Promise((resolve) => setTimeout(resolve, 100));
@@ -138,12 +171,12 @@ it('frontend wildcard receives backend specific routing keys', async () => {
   await new Promise((resolve) => setTimeout(resolve, 100));
 
   // act
-  await rabbitMQManager.publish('order.created', { id: 123 });
-  await rabbitMQManager.publish('order.updated', {
+  await rabbitMQHelper.publish('order.created', { id: 123 });
+  await rabbitMQHelper.publish('order.updated', {
     id: 123,
     status: 'shipped',
   });
-  await rabbitMQManager.publish('payment.completed', { id: 456 }); // Should not match
+  await rabbitMQHelper.publish('payment.completed', { id: 456 }); // Should not match
 
   // assert
   await new Promise((resolve) => setTimeout(resolve, 100));
@@ -156,7 +189,7 @@ it('frontend wildcard receives backend specific routing keys', async () => {
 it('backend wildcard receives frontend specific routing keys', async () => {
   // arrange
   const capturedMessages: any[] = [];
-  await rabbitMQManager.subscribeJSON('notification.*', (payload) => {
+  await rabbitMQHelper.subscribeJSON('notification.*', (payload) => {
     capturedMessages.push(payload);
   });
   await new Promise((resolve) => setTimeout(resolve, 100));
