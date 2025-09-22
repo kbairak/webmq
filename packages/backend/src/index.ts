@@ -24,244 +24,7 @@ import {
 } from './interfaces';
 
 
-// --- WebSocket Management ---
-
-export class WebSocketManager {
-  private connections = new Map<string, WebSocketConnectionData>();
-  private rabbitMQManager: RabbitMQManager | null = null;
-  private wss: WebSocketServer | null = null;
-  private messageHandler:
-    | ((connectionId: string, message: ClientMessage) => Promise<void>)
-    | null = null;
-  private eventEmitter: EventEmitter | null = null;
-  private logger: Logger | null = null;
-
-  setRabbitMQManager(rabbitMQManager: RabbitMQManager): void {
-    this.rabbitMQManager = rabbitMQManager;
-  }
-
-  setMessageHandler(
-    handler: (connectionId: string, message: ClientMessage) => Promise<void>
-  ): void {
-    this.messageHandler = handler;
-  }
-
-  setEventEmitter(emitter: EventEmitter): void {
-    this.eventEmitter = emitter;
-  }
-
-  setLogger(logger: Logger): void {
-    this.logger = logger;
-  }
-
-  createConnection(ws: WebSocket): string {
-    const id = crypto.randomUUID();
-    const context: WebSocketConnectionContext = { ws, id };
-    const subscriptions = new Map<string, RabbitMQSubscription>();
-
-    this.connections.set(id, { ws, subscriptions, context });
-    return id;
-  }
-
-  getConnection(id: string): WebSocketConnectionData | undefined {
-    return this.connections.get(id);
-  }
-
-  removeConnection(id: string): boolean {
-    return this.connections.delete(id);
-  }
-
-  getAllConnections(): WebSocketConnectionData[] {
-    return Array.from(this.connections.values());
-  }
-
-  getConnectionIds(): string[] {
-    return Array.from(this.connections.keys());
-  }
-
-  size(): number {
-    return this.connections.size;
-  }
-
-  // RabbitMQ operations for connections
-  async subscribe(connectionId: string, bindingKey: string): Promise<void> {
-    if (!this.rabbitMQManager) {
-      throw new Error('RabbitMQManager not set');
-    }
-
-    const connection = this.getConnection(connectionId);
-    if (!connection) {
-      throw new Error(`Connection ${connectionId} not found`);
-    }
-
-    const messageHandler = (msg: any) => {
-      if (connection.ws.readyState === WebSocket.OPEN) {
-        const payload = JSON.parse(msg.content.toString());
-        connection.ws.send(
-          JSON.stringify({
-            action: 'message',
-            routingKey: msg.fields.routingKey,
-            payload,
-          })
-        );
-      }
-    };
-
-    const subscription = await this.rabbitMQManager.subscribe(
-      bindingKey,
-      messageHandler
-    );
-    connection.subscriptions.set(bindingKey, subscription);
-  }
-
-  async unsubscribe(connectionId: string, bindingKey: string): Promise<void> {
-    if (!this.rabbitMQManager) {
-      throw new Error('RabbitMQManager not set');
-    }
-
-    const connection = this.getConnection(connectionId);
-    if (!connection) {
-      throw new Error(`Connection ${connectionId} not found`);
-    }
-
-    const subscription = connection.subscriptions.get(bindingKey);
-    if (subscription) {
-      await this.rabbitMQManager.unsubscribe(subscription, bindingKey);
-      connection.subscriptions.delete(bindingKey);
-    }
-  }
-
-  async publish(routingKey: string, payload: any): Promise<void> {
-    if (!this.rabbitMQManager) {
-      throw new Error('RabbitMQManager not set');
-    }
-
-    await this.rabbitMQManager.publish(routingKey, payload);
-  }
-
-  async cleanupConnection(connectionId: string): Promise<void> {
-    if (!this.rabbitMQManager) {
-      return;
-    }
-
-    const connection = this.getConnection(connectionId);
-    if (!connection) {
-      return;
-    }
-
-    await this.rabbitMQManager.cleanupSubscriptions(connection.subscriptions);
-  }
-
-  // WebSocket Server lifecycle management
-  startServer(port: number): void {
-    this.wss = new WebSocketServer({ port });
-    this.wss.on('connection', (ws: WebSocket) => {
-      this.handleConnection(ws);
-    });
-  }
-
-  stopServer(): void {
-    if (this.wss) {
-      this.wss.close();
-      this.wss = null;
-    }
-  }
-
-  private handleConnection(ws: WebSocket): void {
-    const id = this.createConnection(ws);
-
-    if (this.logger) {
-      this.logger.info(`Client ${id} connected.`);
-    }
-
-    if (this.eventEmitter) {
-      this.eventEmitter.emit('client.connected', { connectionId: id });
-    }
-
-    // Set up WebSocket event handlers
-    ws.on('message', async (data: WebSocket.RawData) => {
-      await this.handleMessage(id, ws, data);
-    });
-
-    ws.on('close', async () => {
-      await this.handleClose(id);
-    });
-  }
-
-  private async handleMessage(
-    connectionId: string,
-    ws: WebSocket,
-    data: WebSocket.RawData
-  ): Promise<void> {
-    try {
-      const message: ClientMessage = JSON.parse(data.toString());
-
-      if (this.eventEmitter) {
-        this.eventEmitter.emit('message.received', { connectionId, message });
-      }
-
-      if (this.messageHandler) {
-        await this.messageHandler(connectionId, message);
-      }
-
-      if (this.eventEmitter) {
-        this.eventEmitter.emit('message.processed', { connectionId, message });
-      }
-    } catch (error: any) {
-      if (this.logger) {
-        this.logger.error(
-          `[${connectionId}] Error processing message:`,
-          error.message
-        );
-      }
-
-      if (this.eventEmitter) {
-        this.eventEmitter.emit('error', {
-          connectionId,
-          error,
-          context: 'message processing',
-        });
-      }
-
-      // Send nack for failed message
-      try {
-        const message: ClientMessage = JSON.parse(data.toString());
-        if (message.action === 'publish' && message.messageId) {
-          ws.send(
-            JSON.stringify({
-              action: 'nack',
-              messageId: message.messageId,
-              error: error.message,
-            })
-          );
-          if (this.logger) {
-            this.logger.debug(
-              `[${connectionId}] Sent nack for message ${message.messageId}`
-            );
-          }
-        } else {
-          ws.send(JSON.stringify({ action: 'error', message: error.message }));
-        }
-      } catch (parseError) {
-        // If we can't parse the message, send a generic error
-        ws.send(JSON.stringify({ action: 'error', message: error.message }));
-      }
-    }
-  }
-
-  private async handleClose(connectionId: string): Promise<void> {
-    await this.cleanupConnection(connectionId);
-    this.removeConnection(connectionId);
-
-    if (this.eventEmitter) {
-      this.eventEmitter.emit('client.disconnected', { connectionId });
-    }
-
-    if (this.logger) {
-      this.logger.info(`Client ${connectionId} disconnected.`);
-    }
-  }
-}
+// --- WebSocket Management (inlined) ---
 
 // --- RabbitMQ Management ---
 
@@ -645,7 +408,8 @@ export class WebMQServer extends EventEmitter {
   private readonly hooks: Required<NonNullable<WebMQServerOptions['hooks']>>;
   private connection: ChannelModel | null = null;
   private channel: Channel | null = null;
-  private webSocketManager = new WebSocketManager();
+  private wss: WebSocketServer | null = null;
+  private connections = new Map<string, WebSocketConnectionData>();
   private rabbitMQManager: RabbitMQManager | null = null;
   private messageProcessor: MessageProcessor;
 
@@ -686,8 +450,6 @@ export class WebMQServer extends EventEmitter {
     );
   }
 
-  private wss: WebSocketServer | null = null;
-
   public async start(port: number): Promise<void> {
     this.logger.info('Starting WebMQ Backend...');
 
@@ -705,18 +467,13 @@ export class WebMQServer extends EventEmitter {
       this.logger.child('RabbitMQManager')
     );
 
-    // Connect WebSocketManager with RabbitMQManager
-    this.webSocketManager.setRabbitMQManager(this.rabbitMQManager);
-
-    // Configure WebSocketManager
-    this.webSocketManager.setMessageHandler(this.processMessage.bind(this));
-    this.webSocketManager.setEventEmitter(this);
-    this.webSocketManager.setLogger(this.logger.child('WebSocketManager'));
-
     this.logger.info('RabbitMQ connection and shared channel established');
 
-    // Start WebSocket server using WebSocketManager
-    this.webSocketManager.startServer(port);
+    // Start WebSocket server (inlined)
+    this.wss = new WebSocketServer({ port });
+    this.wss.on('connection', (ws: WebSocket) => {
+      this.handleConnection(ws);
+    });
 
     this.logger.info(`WebMQ Backend started on ws://localhost:${port}`);
 
@@ -730,8 +487,11 @@ export class WebMQServer extends EventEmitter {
   public async stop(): Promise<void> {
     this.logger.info('Stopping WebMQ Backend...');
 
-    // Stop WebSocket server using WebSocketManager
-    this.webSocketManager.stopServer();
+    // Stop WebSocket server
+    if (this.wss) {
+      this.wss.close();
+      this.wss = null;
+    }
 
     // Close RabbitMQ channel and connection
     if (this.channel) {
@@ -747,11 +507,95 @@ export class WebMQServer extends EventEmitter {
     this.logger.info('WebMQ Backend stopped');
   }
 
+  private handleConnection(ws: WebSocket): void {
+    const connectionId = crypto.randomUUID();
+    const context: WebSocketConnectionContext = { ws, id: connectionId };
+    const subscriptions = new Map<string, RabbitMQSubscription>();
+
+    this.connections.set(connectionId, { ws, subscriptions, context });
+
+    this.logger.info(`Client ${connectionId} connected.`);
+    this.emit('client.connected', { connectionId });
+
+    // Set up WebSocket event handlers
+    ws.on('message', async (data: WebSocket.RawData) => {
+      await this.handleMessage(connectionId, ws, data);
+    });
+
+    ws.on('close', async () => {
+      await this.handleClose(connectionId);
+    });
+  }
+
+  private async handleMessage(
+    connectionId: string,
+    ws: WebSocket,
+    data: WebSocket.RawData
+  ): Promise<void> {
+    try {
+      const message: ClientMessage = JSON.parse(data.toString());
+
+      this.emit('message.received', { connectionId, message });
+
+      await this.processMessage(connectionId, message);
+
+      this.emit('message.processed', { connectionId, message });
+    } catch (error: any) {
+      this.logger.error(
+        `[${connectionId}] Error processing message:`,
+        error.message
+      );
+
+      this.emit('error', {
+        connectionId,
+        error,
+        context: 'message processing',
+      });
+
+      // Send nack for failed message
+      try {
+        const message: ClientMessage = JSON.parse(data.toString());
+        if (message.action === 'publish' && message.messageId) {
+          ws.send(
+            JSON.stringify({
+              action: 'nack',
+              messageId: message.messageId,
+              error: error.message,
+            })
+          );
+          this.logger.debug(
+            `[${connectionId}] Sent nack for message ${message.messageId}`
+          );
+        } else {
+          ws.send(JSON.stringify({ action: 'error', message: error.message }));
+        }
+      } catch (parseError) {
+        // If we can't parse the message, send a generic error
+        ws.send(JSON.stringify({ action: 'error', message: error.message }));
+      }
+    }
+  }
+
+  private async handleClose(connectionId: string): Promise<void> {
+    const connection = this.connections.get(connectionId);
+    if (!connection) {
+      return;
+    }
+
+    if (this.rabbitMQManager) {
+      await this.rabbitMQManager.cleanupSubscriptions(connection.subscriptions);
+    }
+
+    this.connections.delete(connectionId);
+    this.emit('client.disconnected', { connectionId });
+    this.logger.info(`Client ${connectionId} disconnected.`);
+  }
+
   private async processMessage(
     connectionId: string,
     message: ClientMessage
   ): Promise<void> {
-    const connection = this.webSocketManager.getConnection(connectionId);
+    const connection = this.connections.get(connectionId);
     if (!connection) {
       throw new Error(`Connection ${connectionId} not found`);
     }
@@ -793,7 +637,7 @@ export class WebMQServer extends EventEmitter {
     connectionId: string,
     message: ClientMessage
   ): Promise<void> {
-    const connection = this.webSocketManager.getConnection(connectionId);
+    const connection = this.connections.get(connectionId);
     if (!connection || !this.channel || !this.rabbitMQManager) {
       throw new Error(
         `Connection ${connectionId} or shared channel not available`
@@ -819,24 +663,6 @@ export class WebMQServer extends EventEmitter {
     }
   }
 
-  private async cleanup(connectionId: string): Promise<void> {
-    const connection = this.webSocketManager.getConnection(connectionId);
-    if (!connection) {
-      this.logger.warn(`Connection ${connectionId} not found during cleanup`);
-      return;
-    }
-
-    this.logger.info(
-      `Client ${connectionId} disconnected. Cleaning up resources.`
-    );
-
-    if (this.rabbitMQManager) {
-      await this.rabbitMQManager.cleanupSubscriptions(connection.subscriptions);
-    }
-
-    this.webSocketManager.removeConnection(connectionId);
-    this.emit('client.disconnected', { connectionId });
-  }
 
   private getHooksForAction(action: ClientMessage['action']): Hook[] {
     switch (action) {
