@@ -34,159 +34,7 @@ import {
 
 // ActionExecutor removed - hook execution logic inlined into WebMQClient with closures
 
-/**
- * Manages message publishing with acknowledgments and queuing
- */
-class MessagePublisher {
-  private pendingMessages: Map<string, PendingMessage> = new Map();
-  private messageQueue: QueuedMessage[] = [];
-  private maxQueueSize = 100;
-  private messageTimeout = 10000;
-  private connectionOps: { getConnection: () => WebSocket | null; isReady: () => boolean; send: (data: string) => void };
-  private logger: Logger;
-
-  constructor(connectionOps: { getConnection: () => WebSocket | null; isReady: () => boolean; send: (data: string) => void }, logger: Logger) {
-    this.connectionOps = connectionOps;
-    this.logger = logger;
-  }
-
-  setMaxQueueSize(size: number): void {
-    this.maxQueueSize = size;
-  }
-
-  setMessageTimeout(timeout: number): void {
-    this.messageTimeout = timeout;
-  }
-
-  async publish(routingKey: string, payload: any): Promise<void> {
-    const messageId = uuidv4();
-
-    return new Promise<void>((resolve, reject) => {
-      if (this.connectionOps.isReady()) {
-        this.sendWithAck(routingKey, payload, messageId, resolve, reject);
-      } else {
-        this.queueMessage(routingKey, payload, messageId, resolve, reject);
-      }
-    });
-  }
-
-  private sendWithAck(
-    routingKey: string,
-    payload: any,
-    messageId: string,
-    resolve: (value?: any) => void,
-    reject: (reason?: any) => void
-  ): void {
-    const timeoutId = setTimeout(() => {
-      this.pendingMessages.delete(messageId);
-      reject(new Error(`Message timeout after ${this.messageTimeout}ms`));
-    }, this.messageTimeout);
-
-    this.pendingMessages.set(messageId, {
-      resolve,
-      reject,
-      timeout: timeoutId,
-    });
-
-    const emitMessage: EmitMessage = {
-      action: 'publish',
-      routingKey,
-      payload,
-      messageId,
-    };
-    this.connectionOps.send(JSON.stringify(emitMessage));
-  }
-
-  private queueMessage(
-    routingKey: string,
-    payload: any,
-    messageId: string,
-    resolve: (value?: any) => void,
-    reject: (reason?: any) => void
-  ): void {
-    if (this.messageQueue.length >= this.maxQueueSize) {
-      const droppedMessage = this.messageQueue.shift();
-      if (droppedMessage) {
-        droppedMessage.reject(new Error('Message dropped: queue full'));
-      }
-      this.logger.warn(
-        `WebMQ message queue full (${this.maxQueueSize}). Dropped oldest message.`
-      );
-    }
-    this.messageQueue.push({ routingKey, payload, messageId, resolve, reject });
-    this.logger.info(
-      `WebMQ message queued. Queue size: ${this.messageQueue.length}/${this.maxQueueSize}`
-    );
-  }
-
-  flushMessageQueue(): void {
-    if (this.messageQueue.length === 0) return;
-
-    this.logger.info(
-      `WebMQ flushing ${this.messageQueue.length} queued messages...`
-    );
-    const queuedMessages = [...this.messageQueue];
-    this.messageQueue = [];
-
-    for (const message of queuedMessages) {
-      if (this.connectionOps.getConnection()) {
-        this.sendWithAck(
-          message.routingKey,
-          message.payload,
-          message.messageId,
-          message.resolve,
-          message.reject
-        );
-      } else {
-        message.reject(new Error('Connection lost during queue flush'));
-      }
-    }
-  }
-
-  handleMessageAck(messageId: string, error: Error | null): void {
-    const pending = this.pendingMessages.get(messageId);
-    if (!pending) return;
-
-    clearTimeout(pending.timeout);
-    this.pendingMessages.delete(messageId);
-
-    if (error) {
-      pending.reject(error);
-    } else {
-      pending.resolve();
-    }
-  }
-
-  clearQueue(): void {
-    const droppedMessages = [...this.messageQueue];
-    this.messageQueue = [];
-
-    for (const message of droppedMessages) {
-      message.reject(new Error('Message cleared from queue'));
-    }
-
-    if (droppedMessages.length > 0) {
-      this.logger.info(
-        `WebMQ cleared ${droppedMessages.length} queued messages.`
-      );
-    }
-  }
-
-  rejectQueuedMessages(reason: string): void {
-    for (const message of this.messageQueue) {
-      message.reject(new Error(reason));
-    }
-    this.messageQueue = [];
-  }
-
-  getQueueSize(): number {
-    return this.messageQueue.length;
-  }
-
-  hasQueuedMessages(): boolean {
-    return this.messageQueue.length > 0;
-  }
-}
+// MessagePublisher removed - publishing logic inlined into WebMQClient with closures
 
 /**
  * Manages subscription listeners and server communication
@@ -298,8 +146,13 @@ export class WebMQClient extends EventEmitter {
   };
   private hookContext: ClientHookContext;
 
+  // Inlined message publishing state (was MessagePublisher)
+  private pendingMessages: Map<string, PendingMessage> = new Map();
+  private messageQueue: QueuedMessage[] = [];
+  private maxQueueSize = 100;
+  private messageTimeout = 10000;
+
   // Core components (remaining abstractions)
-  private messagePublisher: MessagePublisher;
   private subscriptionManager: SubscriptionManager;
 
   // Logger instance - default to silent in test environments
@@ -328,10 +181,6 @@ export class WebMQClient extends EventEmitter {
       send: (data: string) => this.ws?.send(data)
     };
 
-    this.messagePublisher = new MessagePublisher(
-      connectionOps,
-      this.logger.child('MessagePublisher')
-    );
     this.subscriptionManager = new SubscriptionManager(
       connectionOps,
       this.logger.child('SubscriptionManager')
@@ -516,6 +365,166 @@ export class WebMQClient extends EventEmitter {
     }
   }
 
+  /**
+   * Set message publishing configuration (was MessagePublisher.setMaxQueueSize/setMessageTimeout)
+   */
+  private setMaxQueueSize(size: number): void {
+    this.maxQueueSize = size;
+  }
+
+  private setMessageTimeout(timeout: number): void {
+    this.messageTimeout = timeout;
+  }
+
+  /**
+   * Publish message with acknowledgment (was MessagePublisher.publish)
+   */
+  private async publishMessage(routingKey: string, payload: any): Promise<void> {
+    const messageId = uuidv4();
+
+    return new Promise<void>((resolve, reject) => {
+      if (this.isConnected) {
+        this.sendWithAck(routingKey, payload, messageId, resolve, reject);
+      } else {
+        this.queueMessage(routingKey, payload, messageId, resolve, reject);
+      }
+    });
+  }
+
+  /**
+   * Send message with acknowledgment tracking (was MessagePublisher.sendWithAck)
+   */
+  private sendWithAck(
+    routingKey: string,
+    payload: any,
+    messageId: string,
+    resolve: (value?: any) => void,
+    reject: (reason?: any) => void
+  ): void {
+    const timeoutId = setTimeout(() => {
+      this.pendingMessages.delete(messageId);
+      reject(new Error(`Message timeout after ${this.messageTimeout}ms`));
+    }, this.messageTimeout);
+
+    this.pendingMessages.set(messageId, {
+      resolve,
+      reject,
+      timeout: timeoutId,
+    });
+
+    const emitMessage: EmitMessage = {
+      action: 'publish',
+      routingKey,
+      payload,
+      messageId,
+    };
+    this.ws?.send(JSON.stringify(emitMessage));
+  }
+
+  /**
+   * Queue message when disconnected (was MessagePublisher.queueMessage)
+   */
+  private queueMessage(
+    routingKey: string,
+    payload: any,
+    messageId: string,
+    resolve: (value?: any) => void,
+    reject: (reason?: any) => void
+  ): void {
+    if (this.messageQueue.length >= this.maxQueueSize) {
+      const droppedMessage = this.messageQueue.shift();
+      if (droppedMessage) {
+        droppedMessage.reject(new Error('Message dropped: queue full'));
+      }
+      this.logger.warn(
+        `WebMQ message queue full (${this.maxQueueSize}). Dropped oldest message.`
+      );
+    }
+    this.messageQueue.push({ routingKey, payload, messageId, resolve, reject });
+    this.logger.info(
+      `WebMQ message queued. Queue size: ${this.messageQueue.length}/${this.maxQueueSize}`
+    );
+  }
+
+  /**
+   * Flush queued messages on reconnection (was MessagePublisher.flushMessageQueue)
+   */
+  private flushMessageQueue(): void {
+    if (this.messageQueue.length === 0) return;
+
+    this.logger.info(
+      `WebMQ flushing ${this.messageQueue.length} queued messages...`
+    );
+    const queuedMessages = [...this.messageQueue];
+    this.messageQueue = [];
+
+    for (const message of queuedMessages) {
+      if (this.ws) {
+        this.sendWithAck(
+          message.routingKey,
+          message.payload,
+          message.messageId,
+          message.resolve,
+          message.reject
+        );
+      } else {
+        message.reject(new Error('Connection lost during queue flush'));
+      }
+    }
+  }
+
+  /**
+   * Handle acknowledgment from server (was MessagePublisher.handleMessageAck)
+   */
+  private handleMessageAck(messageId: string, error: Error | null): void {
+    const pending = this.pendingMessages.get(messageId);
+    if (!pending) return;
+
+    clearTimeout(pending.timeout);
+    this.pendingMessages.delete(messageId);
+
+    if (error) {
+      pending.reject(error);
+    } else {
+      pending.resolve();
+    }
+  }
+
+  /**
+   * Clear message queue (was MessagePublisher.clearQueue)
+   */
+  private clearMessageQueue(): void {
+    const droppedMessages = [...this.messageQueue];
+    this.messageQueue = [];
+
+    for (const message of droppedMessages) {
+      message.reject(new Error('Message cleared from queue'));
+    }
+
+    if (droppedMessages.length > 0) {
+      this.logger.info(
+        `WebMQ cleared ${droppedMessages.length} queued messages.`
+      );
+    }
+  }
+
+  /**
+   * Reject all queued messages (was MessagePublisher.rejectQueuedMessages)
+   */
+  private rejectQueuedMessages(reason: string): void {
+    for (const message of this.messageQueue) {
+      message.reject(new Error(reason));
+    }
+    this.messageQueue = [];
+  }
+
+  /**
+   * Check if has queued messages (was MessagePublisher.hasQueuedMessages)
+   */
+  private hasQueuedMessages(): boolean {
+    return this.messageQueue.length > 0;
+  }
+
 // createConnectionOperations method removed - logic inlined directly
 
   /**
@@ -526,7 +535,7 @@ export class WebMQClient extends EventEmitter {
     this.on('connection:ready', ({ wasReconnection }) => {
       this.sendIdentification(); // Direct call (was sessionManager.sendIdentification)
       this.subscriptionManager.restoreAllListeners();
-      this.messagePublisher.flushMessageQueue();
+      this.flushMessageQueue(); // Direct call (was messagePublisher.flushMessageQueue)
 
       if (wasReconnection) {
         // TODO: Does this need to be 'super'?
@@ -545,7 +554,7 @@ export class WebMQClient extends EventEmitter {
 
       // Auto-reconnect logic (inlined from ConnectionManager)
       const shouldReconnect = (
-        (this.subscriptionManager.hasListeners() || this.messagePublisher.hasQueuedMessages()) &&
+        (this.subscriptionManager.hasListeners() || this.hasQueuedMessages()) &&
         this.reconnectAttempts < this.maxReconnectAttempts
       );
 
@@ -569,7 +578,7 @@ export class WebMQClient extends EventEmitter {
         this.logger.error(
           `WebMQ client failed to reconnect after maximum attempts.`
         );
-        this.messagePublisher.rejectQueuedMessages(
+        this.rejectQueuedMessages( // Direct call (was messagePublisher.rejectQueuedMessages)
           'Failed to connect after maximum retry attempts'
         );
       }
@@ -597,7 +606,7 @@ export class WebMQClient extends EventEmitter {
           }
           case 'ack': {
             const ackMessage = message as AckMessage;
-            this.messagePublisher.handleMessageAck(
+            this.handleMessageAck( // Direct call (was messagePublisher.handleMessageAck)
               ackMessage.messageId,
               ackMessage.status === 'success'
                 ? null
@@ -607,7 +616,7 @@ export class WebMQClient extends EventEmitter {
           }
           case 'nack': {
             const nackMessage = message as NackMessage;
-            this.messagePublisher.handleMessageAck(
+            this.handleMessageAck( // Direct call (was messagePublisher.handleMessageAck)
               nackMessage.messageId,
               new Error(nackMessage.error || 'Message rejected by server')
             );
@@ -641,10 +650,6 @@ export class WebMQClient extends EventEmitter {
       send: (data: string) => this.ws?.send(data)
     };
 
-    this.messagePublisher = new MessagePublisher(
-      connectionOps,
-      this.logger.child('MessagePublisher')
-    );
     this.subscriptionManager = new SubscriptionManager(
       connectionOps,
       this.logger.child('SubscriptionManager')
@@ -663,10 +668,10 @@ export class WebMQClient extends EventEmitter {
       this.maxReconnectAttempts = options.maxReconnectAttempts; // Direct assignment
     }
     if (options.maxQueueSize !== undefined) {
-      this.messagePublisher.setMaxQueueSize(options.maxQueueSize);
+      this.setMaxQueueSize(options.maxQueueSize); // Direct call (was messagePublisher.setMaxQueueSize)
     }
     if (options.messageTimeout !== undefined) {
-      this.messagePublisher.setMessageTimeout(options.messageTimeout);
+      this.setMessageTimeout(options.messageTimeout); // Direct call (was messagePublisher.setMessageTimeout)
     }
     if (options.hooks) {
       this.setHooks(options.hooks); // Direct call (was actionExecutor.setHooks)
@@ -749,10 +754,10 @@ export class WebMQClient extends EventEmitter {
       finalPayload: any
     ): Promise<void> => {
       if (this.isConnected) {
-        return this.messagePublisher.publish(finalRoutingKey, finalPayload);
+        return this.publishMessage(finalRoutingKey, finalPayload); // Direct call (was messagePublisher.publish)
       } else {
         // Queue message and try to connect
-        const publishPromise = this.messagePublisher.publish(
+        const publishPromise = this.publishMessage( // Direct call (was messagePublisher.publish)
           finalRoutingKey,
           finalPayload
         );
@@ -852,14 +857,14 @@ export class WebMQClient extends EventEmitter {
    * Returns the current number of queued messages.
    */
   public getQueueSize(): number {
-    return this.messagePublisher.getQueueSize();
+    return this.messageQueue.length; // Direct access (was messagePublisher.getQueueSize)
   }
 
   /**
    * Clears all queued messages.
    */
   public clearQueue(): void {
-    this.messagePublisher.clearQueue();
+    this.clearMessageQueue(); // Direct call (was messagePublisher.clearQueue)
   }
 
   /**
