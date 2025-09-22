@@ -30,71 +30,7 @@ import {
 
 // ConnectionManager removed - logic inlined into WebMQClient with closures
 
-/**
- * Manages session identity for persistent queues
- */
-class SessionManager {
-  private sessionId: string | null = null;
-  private sessionIdentified = false;
-  private logger: Logger;
-  private connectionOps: { getConnection: () => WebSocket | null; isReady: () => boolean; send: (data: string) => void };
-
-  constructor(connectionOps: { getConnection: () => WebSocket | null; isReady: () => boolean; send: (data: string) => void }, logger: Logger) {
-    this.connectionOps = connectionOps;
-    this.logger = logger;
-    this.initializeSessionId();
-  }
-
-  private initializeSessionId(): void {
-    try {
-      if (typeof localStorage !== 'undefined') {
-        this.sessionId = localStorage.getItem('webmq-session-id');
-      }
-
-      if (!this.sessionId) {
-        this.sessionId = uuidv4();
-        if (typeof localStorage !== 'undefined') {
-          localStorage.setItem('webmq-session-id', this.sessionId);
-        }
-      }
-
-      this.logger.debug(`Session ID: ${this.sessionId}`);
-    } catch (error) {
-      this.sessionId = uuidv4();
-      this.logger.warn('localStorage unavailable, using temporary session ID');
-    }
-  }
-
-  sendIdentification(): void {
-    if (typeof process !== 'undefined' && process.env.NODE_ENV === 'test') {
-      this.sessionIdentified = true;
-      return;
-    }
-
-    if (
-      this.sessionId &&
-      this.connectionOps.getConnection() &&
-      !this.sessionIdentified
-    ) {
-      const identifyMessage: IdentifyMessage = {
-        action: 'identify',
-        sessionId: this.sessionId,
-      };
-      // TODO: Should we wait for an ack on this? Until then, further published messages could be queued
-      this.connectionOps.send(JSON.stringify(identifyMessage));
-      this.sessionIdentified = true;
-      this.logger.debug(`Sent session identification: ${this.sessionId}`);
-    }
-  }
-
-  resetIdentification(): void {
-    this.sessionIdentified = false;
-  }
-
-  getSessionId(): string | null {
-    return this.sessionId;
-  }
-}
+// SessionManager removed - logic inlined into WebMQClient with closures
 
 /**
  * Executes message actions with hook support
@@ -470,8 +406,11 @@ export class WebMQClient extends EventEmitter {
   private reconnectTimeout: number | null = null;
   private url: string | null = null;
 
+  // Inlined session state (was SessionManager)
+  private sessionId: string | null = null;
+  private sessionIdentified = false;
+
   // Core components (remaining abstractions)
-  private sessionManager: SessionManager;
   private actionExecutor: ActionExecutor;
   private messagePublisher: MessagePublisher;
   private subscriptionManager: SubscriptionManager;
@@ -489,6 +428,9 @@ export class WebMQClient extends EventEmitter {
         : 'error';
     this.logger = new Logger(initialLevel, 'WebMQClient');
 
+    // Initialize session (was SessionManager)
+    this.initializeSessionId();
+
     // Initialize components (pass connection operations as closures)
     const connectionOps = {
       getConnection: () => this.ws,
@@ -496,10 +438,6 @@ export class WebMQClient extends EventEmitter {
       send: (data: string) => this.ws?.send(data)
     };
 
-    this.sessionManager = new SessionManager(
-      connectionOps,
-      this.logger.child('SessionManager')
-    );
     this.actionExecutor = new ActionExecutor(
       this,
       this.logger.child('ActionExecutor')
@@ -519,6 +457,61 @@ export class WebMQClient extends EventEmitter {
     this.setup(url, options);
   }
 
+  /**
+   * Initialize session ID (was SessionManager.initializeSessionId)
+   */
+  private initializeSessionId(): void {
+    try {
+      if (typeof localStorage !== 'undefined') {
+        this.sessionId = localStorage.getItem('webmq-session-id');
+      }
+
+      if (!this.sessionId) {
+        this.sessionId = uuidv4();
+        if (typeof localStorage !== 'undefined') {
+          localStorage.setItem('webmq-session-id', this.sessionId);
+        }
+      }
+
+      this.logger.debug(`Session ID: ${this.sessionId}`);
+    } catch (error) {
+      this.sessionId = uuidv4();
+      this.logger.warn('localStorage unavailable, using temporary session ID');
+    }
+  }
+
+  /**
+   * Send identification to server (was SessionManager.sendIdentification)
+   */
+  private sendIdentification(): void {
+    if (typeof process !== 'undefined' && process.env.NODE_ENV === 'test') {
+      this.sessionIdentified = true;
+      return;
+    }
+
+    if (
+      this.sessionId &&
+      this.ws &&
+      !this.sessionIdentified
+    ) {
+      const identifyMessage: IdentifyMessage = {
+        action: 'identify',
+        sessionId: this.sessionId,
+      };
+      // TODO: Should we wait for an ack on this? Until then, further published messages could be queued
+      this.ws.send(JSON.stringify(identifyMessage));
+      this.sessionIdentified = true;
+      this.logger.debug(`Sent session identification: ${this.sessionId}`);
+    }
+  }
+
+  /**
+   * Reset identification state (was SessionManager.resetIdentification)
+   */
+  private resetIdentification(): void {
+    this.sessionIdentified = false;
+  }
+
 // createConnectionOperations method removed - logic inlined directly
 
   /**
@@ -527,7 +520,7 @@ export class WebMQClient extends EventEmitter {
   private setupEventHandlers(): void {
     // Handle connection ready
     this.on('connection:ready', ({ wasReconnection }) => {
-      this.sessionManager.sendIdentification();
+      this.sendIdentification(); // Direct call (was sessionManager.sendIdentification)
       this.subscriptionManager.restoreAllListeners();
       this.messagePublisher.flushMessageQueue();
 
@@ -543,7 +536,7 @@ export class WebMQClient extends EventEmitter {
 
     // Handle connection closed
     this.on('connection:closed', () => {
-      this.sessionManager.resetIdentification();
+      this.resetIdentification(); // Direct call (was sessionManager.resetIdentification)
       super.emit('disconnect');
 
       // Auto-reconnect logic (inlined from ConnectionManager)
@@ -644,10 +637,6 @@ export class WebMQClient extends EventEmitter {
       send: (data: string) => this.ws?.send(data)
     };
 
-    this.sessionManager = new SessionManager(
-      connectionOps,
-      this.logger.child('SessionManager')
-    );
     this.actionExecutor = new ActionExecutor(
       this,
       this.logger.child('ActionExecutor')
@@ -877,7 +866,7 @@ export class WebMQClient extends EventEmitter {
    * Get session ID for debugging purposes
    */
   public getSessionId(): string | null {
-    return this.sessionManager.getSessionId();
+    return this.sessionId; // Direct access (was sessionManager.getSessionId)
   }
 
   // --- Testing Support Methods ---
