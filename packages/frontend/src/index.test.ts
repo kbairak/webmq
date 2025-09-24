@@ -1,7 +1,7 @@
 import { WebMQClient, client } from './index';
 
 // Disable all logging during tests
-client.setLogLevel('silent');
+client.logLevel = 'silent';
 
 // Mock WebSocket
 const mockSend = jest.fn();

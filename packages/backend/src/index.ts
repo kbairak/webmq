@@ -2,50 +2,17 @@ import WebSocket, { WebSocketServer } from 'ws';
 import amqplib, { Channel, ChannelModel } from 'amqplib';
 import crypto from 'crypto';
 import { EventEmitter } from 'events';
-import { Logger, LogLevel } from './common/logger';
 import {
-  WebSocketConnectionContext,
-  PublishMessage,
-  ListenMessage,
-  UnlistenMessage,
-  IdentifyMessage,
-  AckMessage,
-  DataMessage,
-  NackMessage,
-  ErrorMessage,
   ClientMessage,
-  ServerMessage,
-  RabbitMQSubscription,
-  WebSocketConnectionData,
   Hook,
-  WebMQServerOptions,
-  ActionContext,
-  ActionResult,
+  RabbitMQSubscription,
+  WebSocketConnectionContext,
+  WebSocketConnectionData,
 } from './interfaces';
 
 
-// --- WebSocket Management (inlined) ---
-
-// --- RabbitMQ Management (inlined) ---
-
-// --- Action Processing (inlined) ---
-
-// --- Backend Implementation ---
-
 /**
  * WebMQ backend server that bridges WebSocket connections with RabbitMQ message broker.
- *
- * @example
- * ```javascript
- * import { WebMQServer } from 'webmq-backend';
- *
- * const server = new WebMQServer({
- *   rabbitmqUrl: 'amqp://localhost',
- *   exchangeName: 'my_exchange'
- * });
- *
- * await server.start(8080);
- * ```
  *
  * Events emitted by WebMQServer:
  * - 'client.connected': { connectionId: string }
@@ -59,41 +26,56 @@ import {
 export class WebMQServer extends EventEmitter {
   private readonly rabbitmqUrl: string;
   private readonly exchangeName: string;
-  private readonly hooks: Required<NonNullable<WebMQServerOptions['hooks']>>;
+  private readonly hooks: {
+    pre: Hook[];
+    onListen: Hook[];
+    onPublish: Hook[];
+    onUnlisten: Hook[];
+  };
   private connection: ChannelModel | null = null;
   private channel: Channel | null = null;
   private wss: WebSocketServer | null = null;
   private connections = new Map<string, WebSocketConnectionData>();
 
-  // Instance logger
-  private logger: Logger;
+  public logLevel: 'silent' | 'error' | 'warn' | 'info' | 'debug' = 'error';
 
-  constructor(options: WebMQServerOptions) {
-    super();
-    this.rabbitmqUrl = options.rabbitmqUrl;
-    this.exchangeName = options.exchangeName;
-    this.hooks = {
-      pre: options.hooks?.pre || [],
-      onListen: options.hooks?.onListen || [],
-      onPublish: options.hooks?.onPublish || [],
-      onUnlisten: options.hooks?.onUnlisten || [],
+  constructor({
+    rabbitmqUrl,
+    exchangeName,
+    hooks = {}
+  }: {
+    rabbitmqUrl: string;
+    exchangeName: string;
+    hooks?: {
+      pre?: Hook[];
+      onListen?: Hook[];
+      onPublish?: Hook[];
+      onUnlisten?: Hook[];
     };
-
-    // Initialize logger with default error level
-    this.logger = new Logger('error', 'WebMQServer');
+  }) {
+    super();
+    this.rabbitmqUrl = rabbitmqUrl;
+    this.exchangeName = exchangeName;
+    this.hooks = {
+      pre: hooks.pre || [],
+      onListen: hooks.onListen || [],
+      onPublish: hooks.onPublish || [],
+      onUnlisten: hooks.onUnlisten || [],
+    };
   }
 
-  /**
-   * Sets the log level for the WebMQ server instance.
-   * @param level The log level to set ('silent', 'error', 'warn', 'info', 'debug')
-   */
-  public setLogLevel(level: LogLevel): void {
-    // Update instance logger
-    this.logger.setLogLevel(level);
+  private log(level: 'error' | 'warn' | 'info' | 'debug', ...args: any[]): void {
+    const levels = ['silent', 'error', 'warn', 'info', 'debug'];
+    if (levels.indexOf(this.logLevel) >= levels.indexOf(level) && this.logLevel !== 'silent') {
+      if (level === 'debug') console.debug(...args);
+      else if (level === 'error') console.error(...args);
+      else if (level === 'warn') console.warn(...args);
+      else console.log(...args); // info
+    }
   }
 
   public async start(port: number): Promise<void> {
-    this.logger.info('Starting WebMQ Backend...');
+    this.log('info', 'Starting WebMQ Backend...');
 
     // Establish RabbitMQ connection and shared channel
     this.connection = await amqplib.connect(this.rabbitmqUrl);
@@ -102,7 +84,7 @@ export class WebMQServer extends EventEmitter {
       durable: true,
     });
 
-    this.logger.info('RabbitMQ connection and shared channel established');
+    this.log('info', 'RabbitMQ connection and shared channel established');
 
     // Start WebSocket server (inlined)
     this.wss = new WebSocketServer({ port });
@@ -110,17 +92,17 @@ export class WebMQServer extends EventEmitter {
       this.handleConnection(ws);
     });
 
-    this.logger.info(`WebMQ Backend started on ws://localhost:${port}`);
+    this.log('info', `WebMQ Backend started on ws://localhost:${port}`);
 
     // Add error handler to prevent unhandled error crashes
     this.on('error', (errorEvent) => {
-      this.logger.error('WebMQ Backend error event:', errorEvent);
+      this.log('error', 'WebMQ Backend error event:', errorEvent);
       // Don't re-throw, just log it
     });
   }
 
   public async stop(): Promise<void> {
-    this.logger.info('Stopping WebMQ Backend...');
+    this.log('info', 'Stopping WebMQ Backend...');
 
     // Stop WebSocket server
     if (this.wss) {
@@ -139,7 +121,7 @@ export class WebMQServer extends EventEmitter {
       this.connection = null;
     }
 
-    this.logger.info('WebMQ Backend stopped');
+    this.log('info', 'WebMQ Backend stopped');
   }
 
   private handleConnection(ws: WebSocket): void {
@@ -149,7 +131,7 @@ export class WebMQServer extends EventEmitter {
 
     this.connections.set(connectionId, { ws, subscriptions, context });
 
-    this.logger.info(`Client ${connectionId} connected.`);
+    this.log('info', `Client ${connectionId} connected.`);
     this.emit('client.connected', { connectionId });
 
     // RabbitMQ operations as closures (old-school approach)
@@ -218,7 +200,7 @@ export class WebMQServer extends EventEmitter {
           await unsubscribe(subscription, bindingKey);
         } catch (err) {
           // Log cleanup errors - these are usually harmless during shutdown
-          this.logger.debug(
+          this.log('debug',
             `Error cleaning up subscription for ${bindingKey}:`,
             err
           );
@@ -258,7 +240,7 @@ export class WebMQServer extends EventEmitter {
 
       this.emit('message.processed', { connectionId, message });
     } catch (error: any) {
-      this.logger.error(
+      this.log('error',
         `[${connectionId}] Error processing message:`,
         error.message
       );
@@ -280,7 +262,7 @@ export class WebMQServer extends EventEmitter {
               error: error.message,
             })
           );
-          this.logger.debug(
+          this.log('debug',
             `[${connectionId}] Sent nack for message ${message.messageId}`
           );
         } else {
@@ -307,7 +289,7 @@ export class WebMQServer extends EventEmitter {
 
     this.connections.delete(connectionId);
     this.emit('client.disconnected', { connectionId });
-    this.logger.info(`Client ${connectionId} disconnected.`);
+    this.log('info', `Client ${connectionId} disconnected.`);
   }
 
   private async processMessage(
@@ -319,7 +301,7 @@ export class WebMQServer extends EventEmitter {
       throw new Error(`Connection ${connectionId} not found`);
     }
 
-    this.logger.debug(
+    this.log('debug',
       `[${connectionId}] Processing message:`,
       JSON.stringify(message)
     );
@@ -328,12 +310,12 @@ export class WebMQServer extends EventEmitter {
 
     const run = async (index: number): Promise<void> => {
       if (index >= hooks.length) {
-        this.logger.debug(
+        this.log('debug',
           `[${connectionId}] Executing action: ${message.action}`
         );
         return this.executeAction(connectionId, message);
       }
-      this.logger.debug(
+      this.log('debug',
         `[${connectionId}] Running hook ${index}/${hooks.length}`
       );
       await hooks[index](connection.context, message, () => run(index + 1));
@@ -341,13 +323,13 @@ export class WebMQServer extends EventEmitter {
 
     try {
       await run(0);
-      this.logger.debug(`[${connectionId}] Message processed successfully`);
+      this.log('debug', `[${connectionId}] Message processed successfully`);
     } catch (error: any) {
-      this.logger.error(
+      this.log('error',
         `[${connectionId}] Error in processMessage:`,
         error.message
       );
-      this.logger.error(`[${connectionId}] Stack trace:`, error.stack);
+      this.log('error', `[${connectionId}] Stack trace:`, error.stack);
       throw error;
     }
   }
@@ -369,7 +351,7 @@ export class WebMQServer extends EventEmitter {
       throw new Error(`RabbitMQ operations not available for connection ${connectionId}`);
     }
 
-    this.logger.debug(
+    this.log('debug',
       `[${connectionId}] Executing ${message.action} action`
     );
 
@@ -385,7 +367,7 @@ export class WebMQServer extends EventEmitter {
 
         try {
           await rabbitMQOps.publish(message.routingKey, message.payload);
-          this.logger.debug(`[${connectionId}] Message published successfully`);
+          this.log('debug', `[${connectionId}] Message published successfully`);
 
           // Send ack if messageId present
           if (message.messageId) {
@@ -394,10 +376,10 @@ export class WebMQServer extends EventEmitter {
               messageId: message.messageId,
               status: 'success'
             }));
-            this.logger.debug(`[${connectionId}] Sent ack for message ${message.messageId}`);
+            this.log('debug', `[${connectionId}] Sent ack for message ${message.messageId}`);
           }
         } catch (error: any) {
-          this.logger.error(`[${connectionId}] Error publishing message:`, error.message);
+          this.log('error', `[${connectionId}] Error publishing message:`, error.message);
 
           // Send nack if messageId present
           if (message.messageId) {
@@ -406,7 +388,7 @@ export class WebMQServer extends EventEmitter {
               messageId: message.messageId,
               error: error.message
             }));
-            this.logger.debug(`[${connectionId}] Sent nack for message ${message.messageId}`);
+            this.log('debug', `[${connectionId}] Sent nack for message ${message.messageId}`);
           }
           throw error;
         }
@@ -421,14 +403,14 @@ export class WebMQServer extends EventEmitter {
         }
 
         if (connection.subscriptions.has(message.bindingKey)) {
-          this.logger.debug(`[${connectionId}] Already listening to ${message.bindingKey}`);
+          this.log('debug', `[${connectionId}] Already listening to ${message.bindingKey}`);
           return;
         }
 
         const subscription = await rabbitMQOps.subscribe(
           message.bindingKey,
           (msg: any) => {
-            this.logger.debug(`[${connectionId}] Received message from RabbitMQ:`, msg.content.toString());
+            this.log('debug', `[${connectionId}] Received message from RabbitMQ:`, msg.content.toString());
             connection.ws.send(JSON.stringify({
               action: 'message',
               bindingKey: message.bindingKey,
@@ -437,9 +419,9 @@ export class WebMQServer extends EventEmitter {
           }
         );
 
-        this.logger.debug(`[${connectionId}] Queue created: ${subscription.queue}`);
+        this.log('debug', `[${connectionId}] Queue created: ${subscription.queue}`);
         connection.subscriptions.set(message.bindingKey, subscription);
-        this.logger.debug(`[${connectionId}] Consumer set up with tag: ${subscription.consumerTag}`);
+        this.log('debug', `[${connectionId}] Consumer set up with tag: ${subscription.consumerTag}`);
 
         // Emit subscription created event
         this.emit('subscription.created', {
@@ -461,7 +443,7 @@ export class WebMQServer extends EventEmitter {
         if (subscription) {
           await rabbitMQOps.unsubscribe(subscription, message.bindingKey);
           connection.subscriptions.delete(message.bindingKey);
-          this.logger.debug(`[${connectionId}] Unsubscribed from ${message.bindingKey}`);
+          this.log('debug', `[${connectionId}] Unsubscribed from ${message.bindingKey}`);
 
           // Emit subscription removed event
           this.emit('subscription.removed', {
@@ -469,7 +451,7 @@ export class WebMQServer extends EventEmitter {
             bindingKey: message.bindingKey,
           });
         } else {
-          this.logger.debug(`[${connectionId}] No subscription found for ${message.bindingKey}`);
+          this.log('debug', `[${connectionId}] No subscription found for ${message.bindingKey}`);
         }
       };
 
@@ -483,7 +465,7 @@ export class WebMQServer extends EventEmitter {
 
         // Store sessionId in connection context for potential future use
         connection.context.sessionId = message.sessionId;
-        this.logger.debug(`[${connectionId}] Client identified with session ID: ${message.sessionId}`);
+        this.log('debug', `[${connectionId}] Client identified with session ID: ${message.sessionId}`);
 
         // Emit client identified event
         this.emit('client.identified', {
@@ -510,13 +492,13 @@ export class WebMQServer extends EventEmitter {
           throw new Error(`Unknown action: ${(message as any).action}`);
       }
 
-      this.logger.debug(`[${connectionId}] Action ${message.action} completed successfully`);
+      this.log('debug', `[${connectionId}] Action ${message.action} completed successfully`);
     } catch (error: any) {
-      this.logger.error(
+      this.log('error',
         `[${connectionId}] Error in executeAction(${message.action}):`,
         error.message
       );
-      this.logger.error(`[${connectionId}] Stack trace:`, error.stack);
+      this.log('error', `[${connectionId}] Stack trace:`, error.stack);
       throw error;
     }
   }

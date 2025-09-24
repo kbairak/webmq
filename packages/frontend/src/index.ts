@@ -1,10 +1,6 @@
 import { EventEmitter } from 'events';
 import { v4 as uuidv4 } from 'uuid';
-import { Logger, LogLevel } from './common/logger';
 import {
-  Message,
-  OutgoingMessage,
-  IncomingMessage,
   ListenMessage,
   UnlistenMessage,
   IdentifyMessage,
@@ -12,7 +8,6 @@ import {
   DataMessage,
   AckMessage,
   NackMessage,
-  ClientMessage,
   ServerMessage,
   ClientHookContext,
   ClientHookMessage,
@@ -25,18 +20,6 @@ import {
   MessageCallback,
 } from './interfaces';
 
-
-// --- Core Components ---
-
-// ConnectionManager removed - logic inlined into WebMQClient with closures
-
-// SessionManager removed - logic inlined into WebMQClient with closures
-
-// ActionExecutor removed - hook execution logic inlined into WebMQClient with closures
-
-// MessagePublisher removed - publishing logic inlined into WebMQClient with closures
-
-// SubscriptionManager removed - subscription logic inlined into WebMQClient with closures
 
 // --- Main Client Class ---
 
@@ -84,18 +67,16 @@ export class WebMQClient extends EventEmitter {
   // Inlined subscription state (was SubscriptionManager)
   private messageListeners: Map<string, MessageCallback[]> = new Map();
 
-  // Logger instance - default to silent in test environments
-  private logger: Logger;
+  public logLevel: 'silent' | 'error' | 'warn' | 'info' | 'debug' = 'error';
 
   constructor(url: string = '', options: WebMQClientOptions = {}) {
     super();
 
-    // Initialize logger - default to silent in test environments
-    const initialLevel =
+    // Initialize log level - default to silent in test environments
+    this.logLevel =
       typeof process !== 'undefined' && process.env.NODE_ENV === 'test'
         ? 'silent'
         : 'error';
-    this.logger = new Logger(initialLevel, 'WebMQClient');
 
     // Initialize session (was SessionManager)
     this.initializeSessionId();
@@ -125,10 +106,10 @@ export class WebMQClient extends EventEmitter {
         }
       }
 
-      this.logger.debug(`Session ID: ${this.sessionId}`);
+      this.log('debug',`Session ID: ${this.sessionId}`);
     } catch (error) {
       this.sessionId = uuidv4();
-      this.logger.warn('localStorage unavailable, using temporary session ID');
+      this.log('warn','localStorage unavailable, using temporary session ID');
     }
   }
 
@@ -153,7 +134,7 @@ export class WebMQClient extends EventEmitter {
       // TODO: Should we wait for an ack on this? Until then, further published messages could be queued
       this.ws.send(JSON.stringify(identifyMessage));
       this.sessionIdentified = true;
-      this.logger.debug(`Sent session identification: ${this.sessionId}`);
+      this.log('debug',`Sent session identification: ${this.sessionId}`);
     }
   }
 
@@ -276,7 +257,7 @@ export class WebMQClient extends EventEmitter {
         mainAction
       );
     } catch (error) {
-      this.logger.error(
+      this.log('error',
         `Message hook failed: ${error instanceof Error ? error.message : String(error)}`
       );
     }
@@ -353,12 +334,12 @@ export class WebMQClient extends EventEmitter {
       if (droppedMessage) {
         droppedMessage.reject(new Error('Message dropped: queue full'));
       }
-      this.logger.warn(
+      this.log('warn',
         `WebMQ message queue full (${this.maxQueueSize}). Dropped oldest message.`
       );
     }
     this.messageQueue.push({ routingKey, payload, messageId, resolve, reject });
-    this.logger.info(
+    this.log('info',
       `WebMQ message queued. Queue size: ${this.messageQueue.length}/${this.maxQueueSize}`
     );
   }
@@ -369,7 +350,7 @@ export class WebMQClient extends EventEmitter {
   private flushMessageQueue(): void {
     if (this.messageQueue.length === 0) return;
 
-    this.logger.info(
+    this.log('info',
       `WebMQ flushing ${this.messageQueue.length} queued messages...`
     );
     const queuedMessages = [...this.messageQueue];
@@ -419,7 +400,7 @@ export class WebMQClient extends EventEmitter {
     }
 
     if (droppedMessages.length > 0) {
-      this.logger.info(
+      this.log('info',
         `WebMQ cleared ${droppedMessages.length} queued messages.`
       );
     }
@@ -522,7 +503,7 @@ export class WebMQClient extends EventEmitter {
     return this.messageListeners.size;
   }
 
-// createConnectionOperations method removed - logic inlined directly
+  // createConnectionOperations method removed - logic inlined directly
 
   /**
    * Set up internal event handlers to coordinate between components
@@ -562,7 +543,7 @@ export class WebMQClient extends EventEmitter {
           1000 * Math.pow(2, this.reconnectAttempts - 1),
           30000
         );
-        this.logger.info(
+        this.log('info',
           `WebMQ client attempting reconnection ${this.reconnectAttempts}/${this.maxReconnectAttempts} in ${delay}ms...`
         );
 
@@ -572,7 +553,7 @@ export class WebMQClient extends EventEmitter {
           });
         }, delay) as any;
       } else if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-        this.logger.error(
+        this.log('error',
           `WebMQ client failed to reconnect after maximum attempts.`
         );
         this.rejectQueuedMessages( // Direct call (was messagePublisher.rejectQueuedMessages)
@@ -620,7 +601,7 @@ export class WebMQClient extends EventEmitter {
             break;
           }
           default: {
-            this.logger.warn(
+            this.log('warn',
               'Unknown message action received:',
               (message as any).action
             );
@@ -628,19 +609,19 @@ export class WebMQClient extends EventEmitter {
           }
         }
       } catch (e) {
-        this.logger.error('Error parsing message from server:', e);
+        this.log('error','Error parsing message from server:', e);
       }
     });
   }
 
-  /**
-   * Sets the log level for this WebMQ client instance.
-   * @param level The log level to set ('silent', 'error', 'warn', 'info', 'debug')
-   */
-  public setLogLevel(level: LogLevel): void {
-    this.logger.setLogLevel(level);
-
-    // No child loggers to recreate - all logic is now inlined
+  private log(level: 'error' | 'warn' | 'info' | 'debug', ...args: any[]): void {
+    const levels = ['silent', 'error', 'warn', 'info', 'debug'];
+    if (levels.indexOf(this.logLevel) >= levels.indexOf(level) && this.logLevel !== 'silent') {
+      if (level === 'debug') console.debug(...args);
+      else if (level === 'error') console.error(...args);
+      else if (level === 'warn') console.warn(...args);
+      else console.log(...args); // info
+    }
   }
 
   /**
@@ -679,7 +660,7 @@ export class WebMQClient extends EventEmitter {
         this.ws = new WebSocket(this.url!);
 
         this.ws.addEventListener('open', () => {
-          this.logger.info('WebMQ client connected.');
+          this.log('info','WebMQ client connected.');
           const wasReconnection = this.reconnectAttempts > 0;
           this.isConnected = true;
           this.reconnectAttempts = 0;
@@ -697,7 +678,7 @@ export class WebMQClient extends EventEmitter {
         });
 
         this.ws.addEventListener('error', (err) => {
-          this.logger.error('WebMQ client error:', err);
+          this.log('error','WebMQ client error:', err);
           const wasConnected = this.isConnected;
           this.isConnected = false;
           this.emit('connection:error', { err, wasConnected });
@@ -707,7 +688,7 @@ export class WebMQClient extends EventEmitter {
         });
 
         this.ws.addEventListener('close', () => {
-          this.logger.info('WebMQ client disconnected.');
+          this.log('info','WebMQ client disconnected.');
           this.isConnected = false;
           this.ws = null;
           this.connectionPromise = null;
@@ -899,5 +880,5 @@ export const unlisten = defaultClient.unlisten.bind(defaultClient);
 export const disconnect = defaultClient.disconnect.bind(defaultClient);
 
 // Export the defaultClient for advanced features (queue monitoring, logging, events)
-// Use: client.getQueueSize(), client.clearQueue(), client.setLogLevel(), client.on('event', ...)
+// Use: client.getQueueSize(), client.clearQueue(), client.logLevel = 'debug', client.on('event', ...)
 export { defaultClient as client };

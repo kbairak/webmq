@@ -79,11 +79,11 @@ beforeAll(async () => {
     rabbitmqUrl: rabbitmqUrl,
     exchangeName: 'e2e_exchange_durable',
   });
-  webmqServer.setLogLevel('silent');
+  webmqServer.logLevel = 'silent';
   await webmqServer.start(serverPort);
 
   webmqClient = new WebMQClient();
-  webmqClient.setLogLevel('silent');
+  webmqClient.logLevel = 'silent';
   webmqClient.setup(`ws://localhost:${serverPort}`);
   await webmqClient.connect();
 }, 30000); // 30 second timeout for container startup

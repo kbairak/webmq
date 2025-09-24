@@ -20,21 +20,18 @@ export async function getRabbitMQConnection(): Promise<RabbitMQConnection> {
   const existingContainer = await findExistingRabbitMQContainer();
 
   if (existingContainer) {
-    console.log(
-      '♻️  Reusing existing RabbitMQ container:',
-      existingContainer.name
-    );
+    // Reusing existing RabbitMQ container
     return {
       url: `amqp://guest:guest@localhost:${existingContainer.port}`,
       cleanup: async () => {
         // No cleanup needed for existing containers - we didn't create them
-        console.log('♻️  Skipping cleanup for existing container');
+        // Skipping cleanup for existing container
       },
     };
   }
 
   // No existing container found, create a new one
-  console.log('🚀 Starting new RabbitMQ testcontainer...');
+  // Starting new RabbitMQ testcontainer
   const container = await new RabbitMQContainer('rabbitmq:3.11').start();
   createdContainer = container;
 
@@ -42,7 +39,7 @@ export async function getRabbitMQConnection(): Promise<RabbitMQConnection> {
     url: container.getAmqpUrl(),
     cleanup: async () => {
       if (createdContainer) {
-        console.log('🧹 Stopping created RabbitMQ testcontainer...');
+        // Stopping created RabbitMQ testcontainer
         await createdContainer.stop();
         createdContainer = null;
       }
@@ -79,10 +76,7 @@ async function findExistingRabbitMQContainer(): Promise<{
       }
     }
   } catch (error: any) {
-    console.warn(
-      '⚠️  Could not check for existing RabbitMQ containers:',
-      error.message
-    );
+    // Could not check for existing RabbitMQ containers
   }
 
   return null;
@@ -138,9 +132,7 @@ async function isRabbitMQHealthy(port: number): Promise<boolean> {
  */
 export async function cleanupRabbitMQ(): Promise<void> {
   if (createdContainer) {
-    console.log(
-      '🧹 Global cleanup: Stopping created RabbitMQ testcontainer...'
-    );
+    // Global cleanup: Stopping created RabbitMQ testcontainer
     await createdContainer.stop();
     createdContainer = null;
   }

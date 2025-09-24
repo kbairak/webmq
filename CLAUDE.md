@@ -2,6 +2,15 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Programming guidelines
+
+- Avoid unnecessary abstractions
+  - If a typescript type/interface is to be used only once, just inline it
+  - If a function or class is to be used only once, be very in favor of inlining it; keep it separate only if you are very confident that the name of the function explains its purpose well and that if one reads the function in isolation, they will be able to understand what it does
+- When following general instructions, apply them both on the backend and the frontend. If it's not clear from the request whether it applies to both, ask for clarification
+- After every change, run the tests (including e2e-tests) to make sure nothing is broken
+- After every change to the interface and functionality, remember to edit the Readme
+
 ## Project Overview
 
 WebMQ is a framework that bridges web frontends with RabbitMQ message brokers using WebSockets for real-time bidirectional communication. It's a monorepo with two main packages (`webmq-backend` and `webmq-frontend`) and example applications.

@@ -38,34 +38,6 @@ export interface IdentifyMessage {
   sessionId: string;
 }
 
-// Server sends this to confirm successful message processing
-export interface AckMessage {
-  action: 'ack';
-  messageId: string;
-  status: 'success';
-}
-
-// Server sends this to deliver routed message data to subscribed clients
-export interface DataMessage {
-  action: 'message';
-  bindingKey: string;
-  payload: any;
-  routingKey?: string;
-}
-
-// Server sends this when message processing fails
-export interface NackMessage {
-  action: 'nack';
-  messageId: string;
-  error: string;
-}
-
-// Server sends this for general errors not tied to specific messages
-export interface ErrorMessage {
-  action: 'error';
-  message: string;
-}
-
 /**
  * Union type for all client-to-server messages
  */
@@ -74,15 +46,6 @@ export type ClientMessage =
   | ListenMessage
   | UnlistenMessage
   | IdentifyMessage;
-
-/**
- * Union type for all server-to-client messages
- */
-export type ServerMessage =
-  | DataMessage
-  | AckMessage
-  | NackMessage
-  | ErrorMessage;
 
 /** A RabbitMQ subscription with queue and consumer information. */
 export interface RabbitMQSubscription {
@@ -104,28 +67,3 @@ export type Hook = (
   next: () => Promise<void>
 ) => Promise<void>;
 
-export interface WebMQServerOptions {
-  rabbitmqUrl: string;
-  exchangeName: string;
-  hooks?: {
-    pre?: Hook[];
-    onListen?: Hook[];
-    onPublish?: Hook[];
-    onUnlisten?: Hook[];
-  };
-}
-
-// --- Action Processing Interfaces ---
-
-export interface ActionContext {
-  connectionId: string;
-  connection: WebSocketConnectionData;
-  subscriptionManager: any; // RabbitMQManager - avoiding circular dependency
-  serverEmitter: EventEmitter;
-}
-
-export interface ActionResult {
-  success: boolean;
-  data?: any;
-  error?: string;
-}

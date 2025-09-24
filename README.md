@@ -22,6 +22,7 @@ const server = new WebMQServer({
   exchangeName: 'chat_app'
 });
 
+server.logLevel = 'info';
 await server.start(8080);
 console.log('WebMQ server running on ws://localhost:8080');
 ```
@@ -232,11 +233,11 @@ Both frontend and backend support configurable logging levels for debugging and 
 ```javascript
 // Frontend logging
 import { client } from 'webmq-frontend';
-client.setLogLevel('debug'); // 'silent' | 'error' | 'warn' | 'info' | 'debug'
+client.logLevel = 'debug'; // 'silent' | 'error' | 'warn' | 'info' | 'debug'
 
 // Backend logging
 const server = new WebMQServer({ /* ... */ });
-server.setLogLevel('info');
+server.logLevel = 'info';
 ```
 
 ### EventEmitter Events
@@ -397,6 +398,7 @@ const server = new WebMQServer({
   rabbitmqUrl: 'amqp://localhost',
   exchangeName: 'my_app'
 });
+server.logLevel = 'debug';
 await server.start(8080);
 ```
 
