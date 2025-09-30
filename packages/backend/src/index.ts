@@ -1,21 +1,15 @@
 import WebSocket, { WebSocketServer } from 'ws';
 import amqplib, { Channel, ChannelModel } from 'amqplib';
-import crypto from 'crypto';
 
-// Inlined interfaces
-interface RabbitMQSubscription {
-  queue: string;
-  consumerTag: string;
+function matchesPattern(routingKey: string, bindingKey: string): boolean {
+  const regexPattern = bindingKey
+    .replace(/\./g, '\\.') // Escape dots
+    .replace(/\*/g, '[^.]+') // * matches one or more non-dots
+    .replace(/#/g, '.*');    // # matches zero or more of any character
+  const regex = new RegExp(`^${regexPattern}$`);
+  return regex.test(routingKey);
 }
 
-export interface WebSocketConnectionData {
-  ws: WebSocket;
-  subscriptions: Map<string, RabbitMQSubscription>;
-  subscribe: (bindingKey: string, messageHandler: (msg: any) => void) => Promise<void>;
-  unsubscribe: (subscription: RabbitMQSubscription, bindingKey: string) => Promise<void>;
-  publish: (routingKey: string, payload: any) => Promise<void>;
-  cleanupSubscriptions: () => Promise<void>;
-}
 
 export type ClientMessage = {
   action: 'publish' | 'listen' | 'unlisten' | 'identify';
@@ -33,119 +27,192 @@ export class WebMQServer {
   private _rabbitmqConnection: ChannelModel | null = null;
   private _rabbitmqChannel: Channel | null = null;
   private _wss: WebSocketServer | null = null;
-  private _websocketConnections = new Map<string, WebSocketConnectionData>();
 
   constructor(
-    private readonly _rabbitmqUrl: string,
-    private readonly _exchangeName: string
-  ) {
-  }
+    private readonly rabbitmqUrl: string,
+    private readonly exchangeName: string
+  ) { }
 
   public async start(port: number): Promise<void> {
-    // Establish RabbitMQ connection and shared channel
-    this._rabbitmqConnection = await amqplib.connect(this._rabbitmqUrl);
-    this._rabbitmqChannel = await this._rabbitmqConnection.createChannel();
-    await this._rabbitmqChannel.assertExchange(this._exchangeName, 'topic', {
-      durable: true,
-    });
+    // Initialize channel through getter to set up auto-recovery
+    await this._getRabbitmqChannel();
 
-    // Start WebSocket server (inlined)
     this._wss = new WebSocketServer({ port });
     this._wss.on('connection', (ws: WebSocket) => {
-      this._handleWebsocketConnection(ws);
-    });
-  }
+      let sessionId: string | null = null;
+      let consumerTag: string | null = null;
+      const activeBindings = new Set<string>();
 
-  private _handleWebsocketConnection(ws: WebSocket): void {
-    const connectionId = crypto.randomUUID();
-    const subscriptions = new Map<string, RabbitMQSubscription>();
-
-    // Store connection data with RabbitMQ operations as siblings
-    this._websocketConnections.set(connectionId, {
-      ws,
-      subscriptions,
-      subscribe: async (bindingKey: string, messageHandler: (msg: any) => void): Promise<void> => {
-        if (subscriptions.has(bindingKey)) {
-          return; // Already subscribed to this binding key
-        }
-
-        const { queue } = await this._rabbitmqChannel!.assertQueue('', {
-          exclusive: true,
-          autoDelete: true,
-        });
-
-        await this._rabbitmqChannel!.bindQueue(queue, this._exchangeName, bindingKey);
-
-        const { consumerTag } = await this._rabbitmqChannel!.consume(queue, (msg: any) => {
-          if (msg) {
-            messageHandler(msg);
-            this._rabbitmqChannel!.ack(msg);
-          }
-        });
-
-        subscriptions.set(bindingKey, { queue, consumerTag });
-      },
-      unsubscribe: async (subscription: RabbitMQSubscription, bindingKey: string): Promise<void> => {
-        // Check if channel is still open before attempting cleanup
-        if (
-          !this._rabbitmqChannel ||
-          (this._rabbitmqChannel as any).closing ||
-          (this._rabbitmqChannel as any).closed
-        ) {
-          return; // Channel is already closed, nothing to clean up
-        }
-
+      ws.on('message', async (data: WebSocket.RawData) => {
         try {
-          // Cancel consumer first - this will trigger autoDelete for the queue
-          await this._rabbitmqChannel.cancel(subscription.consumerTag);
-          // Unbind queue from exchange for clean shutdown
-          await this._rabbitmqChannel.unbindQueue(
-            subscription.queue,
-            this._exchangeName,
-            bindingKey
-          );
-          // Note: Queue deletion is handled automatically by autoDelete when last consumer is removed
+          const message: ClientMessage = JSON.parse(data.toString());
+          switch (message.action) {
+            case 'identify':
+              if (!message.sessionId) {
+                throw new Error('identify requires a sessionId');
+              }
+
+              try {
+                sessionId = message.sessionId; // Queue name equals sessionId
+                const channel = await this._getRabbitmqChannel();
+                await channel.assertQueue(sessionId, { expires: 5 * 60 * 1000 });
+
+                consumerTag = (await channel.consume(sessionId, (msg: any) => {
+                  if (msg) {
+                    // TODO: Optimize to send message once with array of matching bindingKeys
+                    [...activeBindings]
+                      .filter(bindingKey => matchesPattern(msg.fields.routingKey, bindingKey))
+                      .forEach(bindingKey => {
+                        ws.send(JSON.stringify({
+                          action: 'message',
+                          bindingKey: bindingKey,
+                          payload: JSON.parse(msg.content.toString()),
+                        }));
+                      });
+
+                    channel.ack(msg);
+                  }
+                })).consumerTag;
+
+                if (message.messageId) {
+                  ws.send(JSON.stringify({ action: 'ack', messageId: message.messageId }));
+                }
+              } catch (error: any) {
+                if (message.messageId) {
+                  ws.send(JSON.stringify({
+                    action: 'nack',
+                    messageId: message.messageId,
+                    error: error.message
+                  }));
+                }
+                throw error;
+              }
+              break;
+            case 'publish':
+              if (!message.routingKey || !message.payload) {
+                throw new Error('publish requires routingKey and payload');
+              }
+
+              try {
+                const channel = await this._getRabbitmqChannel();
+                channel.publish(
+                  this.exchangeName,
+                  message.routingKey,
+                  Buffer.from(JSON.stringify(message.payload))
+                );
+
+                // Send ack if messageId present
+                if (message.messageId) {
+                  ws.send(JSON.stringify({
+                    action: 'ack',
+                    messageId: message.messageId,
+                    status: 'success'
+                  }));
+                }
+              } catch (error: any) {
+                // Send nack if messageId present
+                if (message.messageId) {
+                  ws.send(JSON.stringify({
+                    action: 'nack',
+                    messageId: message.messageId,
+                    error: error.message
+                  }));
+                }
+                throw error;
+              }
+              break;
+            case 'listen':
+              if (!message.bindingKey) {
+                throw new Error('listen requires a bindingKey');
+              }
+              if (!sessionId) {
+                throw new Error('Must identify with sessionId before listening');
+              }
+
+              if (activeBindings.has(message.bindingKey)) {
+                break; // Already subscribed to this binding key
+              }
+
+              // Bind the session queue to this binding key
+              const channel = await this._getRabbitmqChannel();
+              await channel.bindQueue(
+                sessionId, this.exchangeName, message.bindingKey
+              );
+
+              // Track this binding
+              activeBindings.add(message.bindingKey);
+              break;
+            case 'unlisten':
+              if (!message.bindingKey) {
+                throw new Error('unlisten requires a bindingKey');
+              }
+
+              if (!sessionId) {
+                throw new Error('Must identify with sessionId before unlistening');
+              }
+
+              if (activeBindings.has(message.bindingKey)) {
+                try {
+                  const channel = await this._getRabbitmqChannel();
+                  await channel.unbindQueue(
+                    sessionId,
+                    this.exchangeName,
+                    message.bindingKey
+                  );
+                } catch (error: any) {
+                  // If channel recovery fails, ignore the error during cleanup
+                  // The binding will be cleaned up when the client reconnects
+                }
+                activeBindings.delete(message.bindingKey);
+              }
+              break;
+            default:
+              throw new Error(`Unknown action: ${(message as any).action}`);
+          }
         } catch (error: any) {
-          // If channel was closed during cleanup, ignore the error
-          if (
-            error.message?.includes('Channel closed') ||
-            error.message?.includes('Channel closing') ||
-            error.message?.includes('IllegalOperationError')
-          ) {
-            return;
-          }
-          throw error; // Re-throw other errors
-        }
-      },
-      publish: async (routingKey: string, payload: any): Promise<void> => {
-        this._rabbitmqChannel!.publish(
-          this._exchangeName,
-          routingKey,
-          Buffer.from(JSON.stringify(payload))
-        );
-      },
-      cleanupSubscriptions: async (): Promise<void> => {
-        const connection = this._websocketConnections.get(connectionId);
-        if (!connection) return;
-
-        for (const [bindingKey, subscription] of subscriptions.entries()) {
+          // Send nack for failed message
           try {
-            await connection.unsubscribe(subscription, bindingKey);
-          } catch (err) {
-            // Log cleanup errors - these are usually harmless during shutdown
-            // Error cleaning up subscription
+            const message: ClientMessage = JSON.parse(data.toString());
+            if (message.action === 'publish' && message.messageId) {
+              ws.send(
+                JSON.stringify({
+                  action: 'nack',
+                  messageId: message.messageId,
+                  error: error.message,
+                })
+              );
+            } else {
+              ws.send(JSON.stringify({ action: 'error', message: error.message }));
+            }
+          } catch (parseError) {
+            // If we can't parse the message, send a generic error
+            ws.send(JSON.stringify({ action: 'error', message: error.message }));
           }
         }
-      }
-    });
+      });
 
-    // Set up WebSocket event handlers
-    ws.on('message', async (data: WebSocket.RawData) => {
-      await this._handleWebsocketMessage(connectionId, ws, data);
-    });
+      ws.on('close', async (code, reason) => {
+        // TODO: Add ping/pong heartbeat mechanism to better detect network issues
+        if (consumerTag) {
+          try {
+            const channel = await this._getRabbitmqChannel();
+            await channel.cancel(consumerTag);
 
-    ws.on('close', async () => {
-      await this._handleWebsocketClose(connectionId);
+            if ([1000, 1001].includes(code) && sessionId) { // Normal closure or going away
+              try {
+                await channel.deleteQueue(sessionId);
+              } catch (deleteError: any) {
+                // Queue might not exist or already be deleted - ignore error
+              }
+            } else {
+              // Note: Queue remains with TTL for potential reconnection
+            }
+          } catch (error: any) {
+            // If channel recovery fails during cleanup, ignore the error
+            // Resources will be cleaned up when connection/channel is reestablished
+          }
+        }
+      });
     });
   }
 
@@ -158,7 +225,11 @@ export class WebMQServer {
 
     // Close RabbitMQ channel and connection
     if (this._rabbitmqChannel) {
-      await this._rabbitmqChannel.close();
+      try {
+        await this._rabbitmqChannel.close();
+      } catch (error) {
+        // Channel might already be closed or failed to create
+      }
       this._rabbitmqChannel = null;
     }
 
@@ -168,175 +239,30 @@ export class WebMQServer {
     }
   }
 
-  private async _handleWebsocketMessage(
-    connectionId: string,
-    ws: WebSocket,
-    data: WebSocket.RawData
-  ): Promise<void> {
-    try {
-      const message: ClientMessage = JSON.parse(data.toString());
-      const websocketConnection = this._websocketConnections.get(connectionId);
-      if (!websocketConnection || !this._rabbitmqChannel) {
-        throw new Error(
-          `Connection ${connectionId} or shared channel not available`
-        );
-      }
-
-      // Action handlers as arrow functions (old-school approach)
-      const handlePublish = async (): Promise<void> => {
-        if (message.action !== 'publish') {
-          throw new Error('Expected publish message');
-        }
-        if (!message.routingKey || !message.payload) {
-          throw new Error('publish requires routingKey and payload');
-        }
-
-        try {
-          await websocketConnection.publish(message.routingKey, message.payload);
-
-          // Send ack if messageId present
-          if (message.messageId) {
-            websocketConnection.ws.send(JSON.stringify({
-              action: 'ack',
-              messageId: message.messageId,
-              status: 'success'
-            }));
-          }
-        } catch (error: any) {
-
-          // Send nack if messageId present
-          if (message.messageId) {
-            websocketConnection.ws.send(JSON.stringify({
-              action: 'nack',
-              messageId: message.messageId,
-              error: error.message
-            }));
-          }
-          throw error;
-        }
-      };
-
-      const handleListen = async (): Promise<void> => {
-        if (message.action !== 'listen') {
-          throw new Error('Expected listen message');
-        }
-        if (!message.bindingKey) {
-          throw new Error('listen requires a bindingKey');
-        }
-
-        await websocketConnection.subscribe(
-          message.bindingKey,
-          (msg: any) => {
-            websocketConnection.ws.send(JSON.stringify({
-              action: 'message',
-              bindingKey: message.bindingKey,
-              payload: JSON.parse(msg.content.toString()),
-            }));
-          }
-        );
-
-      };
-
-      const handleUnlisten = async (): Promise<void> => {
-        if (message.action !== 'unlisten') {
-          throw new Error('Expected unlisten message');
-        }
-        if (!message.bindingKey) {
-          throw new Error('unlisten requires a bindingKey');
-        }
-
-        const subscription = websocketConnection.subscriptions.get(message.bindingKey);
-        if (subscription) {
-          await websocketConnection.unsubscribe(subscription, message.bindingKey);
-          websocketConnection.subscriptions.delete(message.bindingKey);
-
-        } else {
-        }
-      };
-
-      const handleIdentify = async (): Promise<void> => {
-        if (message.action !== 'identify') {
-          throw new Error('Expected identify message');
-        }
-        if (!message.sessionId) {
-          throw new Error('identify requires a sessionId');
-        }
-
-        try {
-          // Note: sessionId received but not stored since we don't have hooks/context anymore
-
-          // Send ack if messageId present
-          if (message.messageId) {
-            websocketConnection.ws.send(JSON.stringify({
-              action: 'ack',
-              messageId: message.messageId
-            }));
-          }
-
-          // Emit client identified event
-        } catch (error: any) {
-
-          // Send nack if messageId present
-          if (message.messageId) {
-            websocketConnection.ws.send(JSON.stringify({
-              action: 'nack',
-              messageId: message.messageId,
-              error: error.message
-            }));
-          }
-          throw error;
-        }
-      };
-
-      // Execute action based on message type
-      switch (message.action) {
-        case 'publish':
-          await handlePublish();
-          break;
-        case 'listen':
-          await handleListen();
-          break;
-        case 'unlisten':
-          await handleUnlisten();
-          break;
-        case 'identify':
-          await handleIdentify();
-          break;
-        default:
-          throw new Error(`Unknown action: ${(message as any).action}`);
-      }
-    } catch (error: any) {
-      // Send nack for failed message
-      try {
-        const message: ClientMessage = JSON.parse(data.toString());
-        if (message.action === 'publish' && message.messageId) {
-          ws.send(
-            JSON.stringify({
-              action: 'nack',
-              messageId: message.messageId,
-              error: error.message,
-            })
-          );
-        } else {
-          ws.send(JSON.stringify({ action: 'error', message: error.message }));
-        }
-      } catch (parseError) {
-        // If we can't parse the message, send a generic error
-        ws.send(JSON.stringify({ action: 'error', message: error.message }));
-      }
+  private async _getRabbitmqChannel(): Promise<Channel> {
+    if (!this._rabbitmqConnection) {
+      this._rabbitmqConnection = await amqplib.connect(this.rabbitmqUrl);
+      this._rabbitmqConnection.on('close', () => {
+        this._rabbitmqChannel = null;
+        this._rabbitmqConnection = null;
+      })
+      this._rabbitmqConnection.on('error', () => {
+        this._rabbitmqChannel = null;
+        this._rabbitmqConnection = null;
+      })
     }
-  }
+    if (!this._rabbitmqChannel) {
+      this._rabbitmqChannel = await this._rabbitmqConnection.createChannel();
 
-  private async _handleWebsocketClose(connectionId: string): Promise<void> {
-    const websocketConnection = this._websocketConnections.get(connectionId);
-    if (!websocketConnection) {
-      return;
+      this._rabbitmqChannel.on('close', () => {
+        this._rabbitmqChannel = null;
+      });
+
+      this._rabbitmqChannel.on('error', () => {
+        this._rabbitmqChannel = null;
+      });
     }
-
-    // Use closure-based cleanup
-    await websocketConnection.cleanupSubscriptions();
-
-    this._websocketConnections.delete(connectionId);
+    await this._rabbitmqChannel.assertExchange(this.exchangeName, 'topic', { durable: true });
+    return this._rabbitmqChannel;
   }
-
 }

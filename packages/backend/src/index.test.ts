@@ -1,7 +1,6 @@
 import {
   WebMQServer,
   ClientMessage,
-  WebSocketConnectionData,
 } from './index';
 import { WebSocket, WebSocketServer } from 'ws'; // Import WebSocket and WebSocketServer
 import amqplib from 'amqplib';
@@ -27,11 +26,13 @@ jest.mock('amqplib', () => {
     deleteQueue: jest.fn(),
     ack: jest.fn(),
     close: jest.fn(),
+    on: jest.fn(), // Add event listener mock
   };
 
   const mockConnection = {
     createChannel: jest.fn().mockResolvedValue(mockChannel),
     close: jest.fn(),
+    on: jest.fn(), // Add event listener mock
   };
 
   return {
@@ -59,10 +60,12 @@ describe('WebMQServer Lifecycle', () => {
       consume: jest.fn().mockResolvedValue({ consumerTag: 'test-consumer' }),
       publish: jest.fn(),
       ack: jest.fn(),
+      on: jest.fn(), // Add event listener mock
     };
 
     mockConnection = {
       createChannel: jest.fn().mockResolvedValue(mockChannel),
+      on: jest.fn(), // Add event listener mock
     };
 
     // Mock amqplib.connect
