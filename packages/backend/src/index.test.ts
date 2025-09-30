@@ -1,11 +1,8 @@
 import {
   WebMQServer,
-} from './index';
-import {
   ClientMessage,
-  Hook,
   WebSocketConnectionData,
-} from './interfaces';
+} from './index';
 import { WebSocket, WebSocketServer } from 'ws'; // Import WebSocket and WebSocketServer
 import amqplib from 'amqplib';
 
@@ -71,10 +68,7 @@ describe('WebMQServer Lifecycle', () => {
     // Mock amqplib.connect
     (amqplib.connect as jest.Mock).mockResolvedValue(mockConnection);
 
-    server = new WebMQServer({
-      rabbitmqUrl: 'amqp://localhost',
-      exchangeName: 'test-exchange',
-    });
+    server = new WebMQServer('amqp://localhost', 'test-exchange');
   });
 
   it('should initialize RabbitMQ connection and WebSocket server', async () => {

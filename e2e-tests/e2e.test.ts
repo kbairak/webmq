@@ -75,22 +75,15 @@ beforeAll(async () => {
   });
   rabbitMQHelper = new SimpleRabbitMQHelper(channel, 'e2e_exchange_durable');
 
-  webmqServer = new WebMQServer({
-    rabbitmqUrl: rabbitmqUrl,
-    exchangeName: 'e2e_exchange_durable',
-  });
-  webmqServer.logLevel = 'silent';
+  webmqServer = new WebMQServer(rabbitmqUrl, 'e2e_exchange_durable');
   await webmqServer.start(serverPort);
 
   webmqClient = new WebMQClient();
-  webmqClient.logLevel = 'silent';
   webmqClient.setup(`ws://localhost:${serverPort}`);
-  await webmqClient.connect();
 }, 30000); // 30 second timeout for container startup
 
 afterAll(async () => {
   // Clean up in reverse order
-  webmqClient.disconnect({ onActiveListeners: 'clear' });
   await workerConnection.close();
   await webmqServer.stop();
   await rabbitmqCleanup(); // Only stops if we created the container
