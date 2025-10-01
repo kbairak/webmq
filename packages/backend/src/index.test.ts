@@ -722,7 +722,7 @@ describe('WebMQServer', () => {
 
       expect(mockWS.send).toHaveBeenCalledWith(JSON.stringify({
         action: 'message',
-        bindingKey: 'user.*',
+        bindingKeys: ['user.*'],
         payload: { action: 'login' }
       }));
       expect(mockChannel.ack).toHaveBeenCalledWith(mockMessage);
@@ -833,15 +833,45 @@ describe('WebMQServer', () => {
       // Should receive both messages with correct binding keys
       expect(mockWS.send).toHaveBeenCalledWith(JSON.stringify({
         action: 'message',
-        bindingKey: 'user.*',
+        bindingKeys: ['user.*'],
         payload: { action: 'login' }
       }));
 
       expect(mockWS.send).toHaveBeenCalledWith(JSON.stringify({
         action: 'message',
-        bindingKey: 'order.created',
+        bindingKeys: ['order.created'],
         payload: { orderId: 123 }
       }));
+    });
+
+    it('should send single message when multiple bindings match same routing key', async () => {
+      // Add overlapping bindings
+      const listenMessages: ClientMessage[] = [
+        { action: 'listen', bindingKey: 'user.#' },
+        { action: 'listen', bindingKey: 'user.login' }
+      ];
+
+      for (const msg of listenMessages) {
+        await messageHandler(Buffer.from(JSON.stringify(msg)));
+      }
+
+      const consumerFn = mockChannel.consume.mock.calls[0][1];
+
+      // Message that matches multiple patterns
+      const message = {
+        fields: { routingKey: 'user.login' },
+        content: Buffer.from(JSON.stringify({ action: 'login' }))
+      };
+
+      consumerFn(message);
+
+      // Should send only ONE message with all matching bindingKeys
+      expect(mockWS.send).toHaveBeenCalledTimes(1);
+      const sentMessage = JSON.parse(mockWS.send.mock.calls[0][0]);
+      expect(sentMessage.action).toBe('message');
+      expect(sentMessage.bindingKeys).toEqual(expect.arrayContaining(['user.*', 'user.#', 'user.login']));
+      expect(sentMessage.bindingKeys).toHaveLength(3);
+      expect(sentMessage.payload).toEqual({ action: 'login' });
     });
   });
 });

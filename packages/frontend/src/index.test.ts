@@ -182,7 +182,7 @@ describe('WebMQClient', () => {
       const event = {
         data: JSON.stringify({
           action: 'message',
-          bindingKey: 'test.key',
+          bindingKeys: ['test.key'],
           payload: { hello: 'world' }
         })
       };
@@ -252,7 +252,7 @@ describe('WebMQClient', () => {
       const event = {
         data: JSON.stringify({
           action: 'message',
-          bindingKey: 'test.key1',
+          bindingKeys: ['test.key1'],
           payload: { data: 'for key1' }
         })
       };
@@ -261,6 +261,41 @@ describe('WebMQClient', () => {
 
       expect(callback1).toHaveBeenCalledWith({ data: 'for key1' });
       expect(callback2).not.toHaveBeenCalled();
+    });
+
+    it('should deliver message to all callbacks when multiple bindingKeys match', () => {
+      webmqClient.setup('ws://localhost:8080');
+      const callback1 = jest.fn();
+      const callback2 = jest.fn();
+      const callback3 = jest.fn();
+
+      webmqClient.listen('user.*', callback1);
+      webmqClient.listen('user.#', callback2);
+      webmqClient.listen('user.login', callback3);
+
+      const messageHandlerCall = mockWebSocketInstance.addEventListener.mock.calls.find(
+        call => call[0] === 'message'
+      );
+      const messageHandler = messageHandlerCall![1];
+
+      // Message with multiple matching bindingKeys (optimization case)
+      const event = {
+        data: JSON.stringify({
+          action: 'message',
+          bindingKeys: ['user.*', 'user.#', 'user.login'],
+          payload: { action: 'login' }
+        })
+      };
+
+      messageHandler(event);
+
+      // All three callbacks should be invoked with the same payload
+      expect(callback1).toHaveBeenCalledWith({ action: 'login' });
+      expect(callback2).toHaveBeenCalledWith({ action: 'login' });
+      expect(callback3).toHaveBeenCalledWith({ action: 'login' });
+      expect(callback1).toHaveBeenCalledTimes(1);
+      expect(callback2).toHaveBeenCalledTimes(1);
+      expect(callback3).toHaveBeenCalledTimes(1);
     });
   });
 });

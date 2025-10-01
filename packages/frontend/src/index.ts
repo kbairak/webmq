@@ -56,14 +56,18 @@ export class WebMQClient {
 
         // Only handle data messages (not ack/nack which are handled by WebSocket layer)
         if (message.action === 'message') {
-          this._log('debug', `Received message for binding '${message.bindingKey}'`);
-          const callbacks = this.messageListeners.get(message.bindingKey);
-          if (callbacks) {
-            this._log('debug', `Delivering message to ${callbacks.size} callback(s)`);
-            callbacks.forEach(callback => callback(message.payload));
-          } else {
-            this._log('warn', `No callbacks registered for binding '${message.bindingKey}'`);
-          }
+          const bindingKeys = message.bindingKeys || [];
+          this._log('debug', `Received message for ${bindingKeys.length} binding(s): [${bindingKeys.join(', ')}]`);
+
+          bindingKeys.forEach((bindingKey: string) => {
+            const callbacks = this.messageListeners.get(bindingKey);
+            if (callbacks) {
+              this._log('debug', `Delivering message to ${callbacks.size} callback(s) for binding '${bindingKey}'`);
+              callbacks.forEach(callback => callback(message.payload));
+            } else {
+              this._log('warn', `No callbacks registered for binding '${bindingKey}'`);
+            }
+          });
         }
       } catch (e) {
         this._log('warn', `Failed to parse message: ${e}`);
