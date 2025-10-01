@@ -1,4 +1,4 @@
-import { WebMQClient, setup, publish, listen, unlisten, client } from './index';
+import { WebMQClient, setup, publish, listen, unlisten, webMQClient } from './index';
 
 // Mock the WebSocket implementation
 const mockWebSocketInstance = {
@@ -304,9 +304,9 @@ describe('Singleton exports', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     // Reset the default client's state
-    (client as any).ws = null;
-    (client as any).messageListeners.clear();
-    client.logLevel = 'silent';
+    (webMQClient as any).ws = null;
+    (webMQClient as any).messageListeners.clear();
+    webMQClient.logLevel = 'silent';
   });
 
   it('should export bound methods from default client', async () => {
@@ -356,6 +356,251 @@ describe('Singleton exports', () => {
   });
 
   it('should export the default client instance', () => {
-    expect(client).toBeInstanceOf(WebMQClient);
+    expect(webMQClient).toBeInstanceOf(WebMQClient);
+  });
+});
+
+describe('Hooks', () => {
+  let webmqClient: WebMQClient;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  describe('onPublish hooks', () => {
+    it('should run pre and onPublish hooks before publishing', async () => {
+      const preHook = jest.fn(async (context, message, next) => {
+        message.payload.addedByPre = true;
+        await next();
+      });
+      const onPublishHook = jest.fn(async (context, message, next) => {
+        message.payload.addedByOnPublish = true;
+        await next();
+      });
+
+      webmqClient = new WebMQClient('', {
+        pre: [preHook],
+        onPublish: [onPublishHook]
+      });
+      webmqClient.logLevel = 'silent';
+      webmqClient.setup('ws://localhost:8080');
+
+      await webmqClient.publish('test.key', { original: 'data' });
+
+      expect(preHook).toHaveBeenCalled();
+      expect(onPublishHook).toHaveBeenCalled();
+      expect(mockWebSocketInstance.send).toHaveBeenCalledWith({
+        action: 'publish',
+        routingKey: 'test.key',
+        payload: { original: 'data', addedByPre: true, addedByOnPublish: true }
+      });
+    });
+
+    it('should abort publish if hook throws error', async () => {
+      const errorHook = jest.fn(async () => {
+        throw new Error('Hook rejected');
+      });
+
+      webmqClient = new WebMQClient('', { onPublish: [errorHook] });
+      webmqClient.logLevel = 'silent';
+      webmqClient.setup('ws://localhost:8080');
+
+      await expect(webmqClient.publish('test.key', { data: 'test' })).rejects.toThrow('Hook rejected');
+      expect(mockWebSocketInstance.send).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('onListen hooks', () => {
+    it('should run pre and onListen hooks before listening', async () => {
+      const preHook = jest.fn(async (context, message, next) => {
+        context.modified = true;
+        await next();
+      });
+      const onListenHook = jest.fn(async (context, message, next) => {
+        message.bindingKey = 'modified.' + message.bindingKey;
+        await next();
+      });
+
+      webmqClient = new WebMQClient('', {
+        pre: [preHook],
+        onListen: [onListenHook]
+      });
+      webmqClient.logLevel = 'silent';
+      webmqClient.setup('ws://localhost:8080');
+
+      const callback = jest.fn();
+      await webmqClient.listen('test.key', callback);
+
+      expect(preHook).toHaveBeenCalled();
+      expect(onListenHook).toHaveBeenCalled();
+      expect(mockWebSocketInstance.send).toHaveBeenCalledWith({
+        action: 'listen',
+        bindingKey: 'modified.test.key'
+      });
+    });
+  });
+
+  describe('onUnlisten hooks', () => {
+    it('should run pre and onUnlisten hooks before unlistening', async () => {
+      const onUnlistenHook = jest.fn(async (context, message, next) => {
+        context.unlistenCalled = true;
+        await next();
+      });
+
+      webmqClient = new WebMQClient('', { onUnlisten: [onUnlistenHook] });
+      webmqClient.logLevel = 'silent';
+      webmqClient.setup('ws://localhost:8080');
+
+      const callback = jest.fn();
+      await webmqClient.listen('test.key', callback);
+      mockWebSocketInstance.send.mockClear();
+
+      await webmqClient.unlisten('test.key', callback);
+
+      expect(onUnlistenHook).toHaveBeenCalled();
+      expect(mockWebSocketInstance.send).toHaveBeenCalledWith({
+        action: 'unlisten',
+        bindingKey: 'test.key'
+      });
+    });
+  });
+
+  describe('onMessage hooks', () => {
+    it('should run pre and onMessage hooks before delivering to callbacks', async () => {
+      const preHook = jest.fn(async (context, message, next) => {
+        if (message.action === 'message' && message.payload) {
+          message.payload.processedByPre = true;
+        }
+        await next();
+      });
+      const onMessageHook = jest.fn(async (context, message, next) => {
+        message.payload.decrypted = true;
+        await next();
+      });
+
+      webmqClient = new WebMQClient('', {
+        pre: [preHook],
+        onMessage: [onMessageHook]
+      });
+      webmqClient.logLevel = 'silent';
+      webmqClient.setup('ws://localhost:8080');
+
+      const callback = jest.fn();
+      await webmqClient.listen('test.key', callback);
+
+      const messageHandlerCall = mockWebSocketInstance.addEventListener.mock.calls.find(
+        call => call[0] === 'message'
+      );
+      const messageHandler = messageHandlerCall![1];
+
+      const event = {
+        data: JSON.stringify({
+          action: 'message',
+          bindingKeys: ['test.key'],
+          payload: { encrypted: 'data' }
+        })
+      };
+
+      messageHandler(event);
+
+      // Wait for async hooks to complete
+      await new Promise(resolve => setTimeout(resolve, 10));
+
+      expect(preHook).toHaveBeenCalled();
+      expect(onMessageHook).toHaveBeenCalled();
+      expect(callback).toHaveBeenCalledWith({
+        encrypted: 'data',
+        processedByPre: true,
+        decrypted: true
+      });
+    });
+
+    it('should not deliver message if hook throws error', async () => {
+      const errorHook = jest.fn(async () => {
+        throw new Error('Message rejected by hook');
+      });
+
+      webmqClient = new WebMQClient('', { onMessage: [errorHook] });
+      webmqClient.logLevel = 'silent';
+      webmqClient.setup('ws://localhost:8080');
+
+      const callback = jest.fn();
+      await webmqClient.listen('test.key', callback);
+
+      const messageHandlerCall = mockWebSocketInstance.addEventListener.mock.calls.find(
+        call => call[0] === 'message'
+      );
+      const messageHandler = messageHandlerCall![1];
+
+      const event = {
+        data: JSON.stringify({
+          action: 'message',
+          bindingKeys: ['test.key'],
+          payload: { data: 'test' }
+        })
+      };
+
+      messageHandler(event);
+
+      // Wait for async hooks to complete
+      await new Promise(resolve => setTimeout(resolve, 10));
+
+      expect(errorHook).toHaveBeenCalled();
+      expect(callback).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('Context persistence', () => {
+    it('should persist context across different hook calls', async () => {
+      let contextId: string | undefined;
+
+      const hook1 = jest.fn(async (context, message, next) => {
+        if (!context.id) {
+          context.id = 'test-session-' + Date.now();
+        }
+        contextId = context.id;
+        await next();
+      });
+
+      const hook2 = jest.fn(async (context, message, next) => {
+        expect(context.id).toBe(contextId);
+        await next();
+      });
+
+      webmqClient = new WebMQClient('', {
+        pre: [hook1, hook2]
+      });
+      webmqClient.logLevel = 'silent';
+      webmqClient.setup('ws://localhost:8080');
+
+      await webmqClient.publish('test.key1', { data: '1' });
+      await webmqClient.publish('test.key2', { data: '2' });
+
+      expect(hook1).toHaveBeenCalledTimes(2);
+      expect(hook2).toHaveBeenCalledTimes(2);
+      // Both calls should see the same context.id
+    });
+  });
+
+  describe('Hooks via setup()', () => {
+    it('should accept hooks via setup() options', async () => {
+      const hook = jest.fn(async (context, message, next) => {
+        message.payload.modified = true;
+        await next();
+      });
+
+      webmqClient = new WebMQClient();
+      webmqClient.logLevel = 'silent';
+      webmqClient.setup('ws://localhost:8080', { onPublish: [hook] });
+
+      await webmqClient.publish('test.key', { original: 'data' });
+
+      expect(hook).toHaveBeenCalled();
+      expect(mockWebSocketInstance.send).toHaveBeenCalledWith({
+        action: 'publish',
+        routingKey: 'test.key',
+        payload: { original: 'data', modified: true }
+      });
+    });
   });
 });
