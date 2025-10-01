@@ -1,4 +1,5 @@
 {
+  "type": "module",
   "name": "basic-chat",
   "version": "1.0.0",
   "description": "Basic chat example for WebMQ",

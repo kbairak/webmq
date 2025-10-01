@@ -157,7 +157,7 @@ import { setup } from 'webmq-frontend';
 // Authentication hook - add tokens to all publish requests
 const authenticationHook = async (context, message, next) => {
   if (!message.payload) message.payload = {};
-  message.payload.token = localStorage.getItem('authToken');
+  message.payload.token = sessionStorage.getItem('authToken');
   await next();
 };
 

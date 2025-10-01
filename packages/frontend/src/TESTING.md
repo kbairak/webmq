@@ -5,11 +5,11 @@ This document outlines the key challenges and approaches for unit testing the We
 ## Testing Challenges
 
 ### 1. **Browser vs Node.js Environment Differences**
-The class behaves differently based on whether `window.localStorage` is available:
-- **Browser**: Uses localStorage for session persistence
+The class behaves differently based on whether `window.sessionStorage` is available:
+- **Browser**: Uses sessionStorage for session persistence
 - **Node.js**: Falls back to UUID-only session IDs
 
-**Challenge**: Mocking `window.localStorage` properly in Jest is tricky because of how the constructor checks `typeof window !== 'undefined'`.
+**Challenge**: Mocking `window.sessionStorage` properly in Jest is tricky because of how the constructor checks `typeof window !== 'undefined'`.
 
 ### 2. **WebSocket API Mocking**
 The native WebSocket API has complex lifecycle and event handling:
@@ -55,8 +55,8 @@ const mockWebSocketInstance = {
 };
 global.WebSocket = jest.fn(() => mockWebSocketInstance) as any;
 
-// 3. Mock localStorage
-const mockLocalStorage = {
+// 3. Mock sessionStorage
+const mockSessionStorage = {
   getItem: jest.fn(),
   setItem: jest.fn(),
 };
@@ -64,21 +64,21 @@ const mockLocalStorage = {
 // 4. Proper test lifecycle management with global state restoration
 describe('WebMQClientWebSocket', () => {
   let originalWindow: any;
-  let originalLocalStorage: any;
+  let originalSessionStorage: any;
 
   beforeEach(() => {
     // Save original global values
     originalWindow = (global as any).window;
-    originalLocalStorage = (global as any).localStorage;
+    originalSessionStorage = (global as any).sessionStorage;
 
     // Setup environment
     Object.defineProperty(global, 'window', {
-      value: { localStorage: mockLocalStorage },
+      value: { sessionStorage: mockSessionStorage },
       writable: true,
       configurable: true
     });
-    Object.defineProperty(global, 'localStorage', {
-      value: mockLocalStorage,
+    Object.defineProperty(global, 'sessionStorage', {
+      value: mockSessionStorage,
       writable: true,
       configurable: true
     });
@@ -100,10 +100,10 @@ describe('WebMQClientWebSocket', () => {
       delete (global as any).window;
     }
 
-    if (originalLocalStorage !== undefined) {
-      (global as any).localStorage = originalLocalStorage;
+    if (originalSessionStorage !== undefined) {
+      (global as any).sessionStorage = originalSessionStorage;
     } else {
-      delete (global as any).localStorage;
+      delete (global as any).sessionStorage;
     }
   });
 });
@@ -113,12 +113,12 @@ describe('WebMQClientWebSocket', () => {
 
 #### 1. **Constructor Tests**
 ```typescript
-it('should create sessionId from localStorage if available', () => {
-  mockLocalStorage.getItem.mockReturnValue('existing-session');
+it('should create sessionId from sessionStorage if available', () => {
+  mockSessionStorage.getItem.mockReturnValue('existing-session');
 
   const ws = new WebMQClientWebSocket('ws://test:8080');
 
-  expect(mockLocalStorage.getItem).toHaveBeenCalledWith('webmq_session_id');
+  expect(mockSessionStorage.getItem).toHaveBeenCalledWith('webmq_session_id');
   expect(ws.sessionId).toBe('existing-session');
 });
 ```
@@ -174,8 +174,8 @@ it('should add and remove event listeners correctly', () => {
 
 ## Testing Limitations Discovered
 
-### 1. **localStorage Mocking Complexity**
-Despite multiple approaches, properly mocking `window.localStorage` for constructor tests proved challenging. The test was detecting that localStorage wasn't being called, suggesting the constructor logic might not be executing as expected in the test environment.
+### 1. **sessionStorage Mocking Complexity**
+Despite multiple approaches, properly mocking `window.sessionStorage` for constructor tests proved challenging. The test was detecting that sessionStorage wasn't being called, suggesting the constructor logic might not be executing as expected in the test environment.
 
 ### 2. **WebSocket Event Flow**
 Testing the full WebSocket connection flow (connect → open → identify → ack) requires complex mock orchestration that can become brittle.
@@ -229,7 +229,7 @@ After combining and refining both test approaches, we achieved:
 
 ### ✅ **All Challenges Resolved**
 All previous testing challenges have been successfully resolved:
-1. **localStorage Mocking** - Fixed by setting both `global.localStorage` and `global.window.localStorage`
+1. **sessionStorage Mocking** - Fixed by setting both `global.sessionStorage` and `global.window.sessionStorage`
 2. **Test Isolation** - Resolved by simplifying assertions to focus on essential behavior rather than strict call counts
 
 ### 📋 **Test Categories Covered**
@@ -238,8 +238,8 @@ All previous testing challenges have been successfully resolved:
 ```typescript
 ✅ URL storage works correctly
 ✅ Node.js environment fallback works
-✅ localStorage sessionId retrieval
-✅ localStorage sessionId generation
+✅ sessionStorage sessionId retrieval
+✅ sessionStorage sessionId generation
 ```
 
 #### **Message Flow Testing**
@@ -273,7 +273,7 @@ The combined test suite demonstrates that **comprehensive unit testing of WebMQC
 5. **Event flow simulation** using mock event handlers
 
 ### 🔧 **What Needs Improvement**
-1. **Environment mocking** - localStorage and window object setup is complex
+1. **Environment mocking** - sessionStorage and window object setup is complex
 2. **Test isolation** - Better cleanup between tests to prevent state leakage
 3. **Mock orchestration** - Complex event flows require careful mock setup
 

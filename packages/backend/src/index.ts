@@ -32,6 +32,8 @@ function matchesPattern(routingKey: string, bindingKey: string): boolean {
  * WebMQ backend server that bridges WebSocket connections with RabbitMQ message broker.
  */
 export class WebMQServer {
+  public logLevel: 'silent' | 'error' | 'warn' | 'info' | 'debug' = 'info';
+
   private _rabbitmqConnection: ChannelModel | null = null;
   private _rabbitmqChannel: Channel | null = null;
   private _wss: WebSocketServer | null = null;
@@ -59,11 +61,40 @@ export class WebMQServer {
     }
   }
 
+  private _log(level: 'error' | 'warn' | 'info' | 'debug', message: string): void {
+    if (this.logLevel === 'silent') return;
+
+    const levels = ['error', 'warn', 'info', 'debug'];
+    const currentLevelIndex = levels.indexOf(this.logLevel);
+    const messageLevelIndex = levels.indexOf(level);
+
+    if (messageLevelIndex <= currentLevelIndex) {
+      switch (level) {
+        case 'error':
+          console.error(`[WebMQ ERROR] ${message}`);
+          break;
+        case 'warn':
+          console.warn(`[WebMQ WARN] ${message}`);
+          break;
+        case 'info':
+          console.log(`[WebMQ INFO] ${message}`);
+          break;
+        case 'debug':
+          console.debug(`[WebMQ DEBUG] ${message}`);
+          break;
+      }
+    }
+  }
+
   public async start(port: number): Promise<void> {
+    this._log('info', `Starting WebMQ server on port ${port}`);
     await this._getRabbitmqChannel();
 
     this._wss = new WebSocketServer({ port });
+    this._log('info', `WebSocket server listening on port ${port}`);
+
     this._wss.on('connection', (ws: WebSocket) => {
+      this._log('info', 'Client connected');
       const hookContext = {
         ws,
         sessionId: null as string | null,
@@ -74,6 +105,7 @@ export class WebMQServer {
       ws.on('message', async (data: WebSocket.RawData) => {
         try {
           const message: ClientMessage = JSON.parse(data.toString());
+          this._log('debug', `Received message: ${message.action}`);
           switch (message.action) {
             case 'identify':
               await runWithHooks(
@@ -184,6 +216,11 @@ export class WebMQServer {
 
                   // Track this binding
                   hookContext.activeBindings.add(message.bindingKey);
+
+                  // Send ack if messageId present
+                  if (message.messageId) {
+                    ws.send(JSON.stringify({ action: 'ack', messageId: message.messageId }));
+                  }
                 }
               );
               break;
@@ -213,6 +250,11 @@ export class WebMQServer {
                       // The binding will be cleaned up when the client reconnects
                     }
                     hookContext.activeBindings.delete(message.bindingKey);
+                  }
+
+                  // Send ack if messageId present
+                  if (message.messageId) {
+                    ws.send(JSON.stringify({ action: 'ack', messageId: message.messageId }));
                   }
                 }
               );

@@ -9,7 +9,7 @@ import { v4 as uuid } from 'uuid';
  * - Lazy connection (connects only when needed)
  * - Automatic message acknowledgments with timeout handling
  * - Exponential backoff reconnection with configurable retry limits
- * - Session ID management with localStorage persistence
+ * - Session ID management with sessionStorage persistence
  * - Automatic identify message sending for session establishment
  * - Message queuing during connection/reconnection
  *
@@ -32,6 +32,7 @@ import { v4 as uuid } from 'uuid';
 export default class WebMQClientWebSocket {
   private _ws: WebSocket | null = null;
   private _connectionPromise: Promise<void> | null = null;
+  private _identifyPromise: Promise<void> | null = null;
   readonly sessionId: string;
 
   private _reconnectAttempts = 0;
@@ -43,6 +44,7 @@ export default class WebMQClientWebSocket {
   private _shouldReconnect = true;
   private _cachedError: Event | null = null;
   private _cachedClose: Event | null = null;
+  private _identifyMessageId: string | null = null;
   private _eventListeners = {
     open: new Set<Function>(),
     close: new Set<Function>(),
@@ -52,11 +54,11 @@ export default class WebMQClientWebSocket {
 
 
   constructor(readonly url: string) {
-    if (typeof window !== 'undefined' && window.localStorage) {
-      this.sessionId = localStorage.getItem('webmq_session_id') || '';
+    if (typeof window !== 'undefined' && window.sessionStorage) {
+      this.sessionId = sessionStorage.getItem('webmq_session_id') || '';
       if (!this.sessionId) {
         this.sessionId = uuid();
-        localStorage.setItem('webmq_session_id', this.sessionId);
+        sessionStorage.setItem('webmq_session_id', this.sessionId);
       }
     } else {
       this.sessionId = uuid();
@@ -65,7 +67,7 @@ export default class WebMQClientWebSocket {
 
   // Enhanced send with acknowledgment support
   send(data: any): Promise<void> {
-    return new Promise((resolve, reject) => {
+    return new Promise(async (resolve, reject) => {
       const messageId = uuid();
 
       const timeout = setTimeout(() => {
@@ -80,8 +82,19 @@ export default class WebMQClientWebSocket {
         timeout
       });
 
-      // Lazy connection - connect if needed
-      this._ensureConnection().then(() => this._flushPendingMessages()).catch(reject)
+      try {
+        // Ensure connection is established
+        await this._ensureConnection();
+
+        // Wait for identification if this is not an identify message
+        if (data.action !== 'identify' && this._identifyPromise) {
+          await this._identifyPromise;
+        }
+
+        this._flushPendingMessages();
+      } catch (error) {
+        reject(error);
+      }
     });
   }
 
@@ -95,9 +108,6 @@ export default class WebMQClientWebSocket {
           const wasReconnection = this._reconnectAttempts > 0;
           this._reconnectAttempts = 0;
 
-          // Flush pending messages on both initial connection and reconnection
-          this._flushPendingMessages();
-
           this._cachedError = null;
           this._cachedClose = null;
 
@@ -105,11 +115,34 @@ export default class WebMQClientWebSocket {
 
           resolve();
 
-          // Send identify message to establish session with backend
-          // Call after resolve() so connection is considered established
-          this.send({ action: 'identify', sessionId: this.sessionId }).catch(() => {
-            // Identify failure is non-fatal
+          // Send identify message FIRST to establish session with backend
+          const identifyMessage = { action: 'identify', sessionId: this.sessionId, messageId: uuid() };
+          this._identifyMessageId = identifyMessage.messageId;
+
+          this._pendingMessages.set(identifyMessage.messageId, {
+            data: identifyMessage,
+            resolve: () => {},
+            reject: () => {},
+            timeout: setTimeout(() => {
+              this._pendingMessages.delete(identifyMessage.messageId);
+              this._identifyPromise = null;
+              this._identifyMessageId = null;
+            }, this.timeoutDelay)
           });
+
+          this._identifyPromise = new Promise<void>((resolveIdentify, rejectIdentify) => {
+            const pending = this._pendingMessages.get(identifyMessage.messageId);
+            if (pending) {
+              pending.resolve = resolveIdentify;
+              pending.reject = rejectIdentify;
+            }
+          });
+
+          // Send identify message directly
+          this._ws!.send(JSON.stringify(identifyMessage));
+
+          // Flush OTHER pending messages (excluding identify messages)
+          this._flushPendingMessagesExceptIdentify();
         });
 
         this._ws.addEventListener('message', (event) => {
@@ -140,6 +173,8 @@ export default class WebMQClientWebSocket {
         this._ws.addEventListener('close', (event) => {
           this._ws = null;
           this._connectionPromise = null; // Reset so new connections can be attempted
+          this._identifyPromise = null; // Reset identify promise on disconnect
+          this._identifyMessageId = null; // Reset identify message ID
 
           // Cache first close only, don't emit immediately
           if (!this._cachedClose) {
@@ -175,6 +210,15 @@ export default class WebMQClientWebSocket {
     }
   }
 
+  private _flushPendingMessagesExceptIdentify(): void {
+    for (const [messageId, pending] of this._pendingMessages.entries()) {
+      // Skip identify messages to avoid sending them twice
+      if (pending.data.action !== 'identify') {
+        this._ws!.send(JSON.stringify(pending.data));
+      }
+    }
+  }
+
   private async _attemptReconnect(): Promise<void> {
     this._reconnectAttempts += 1;
     try {
@@ -204,6 +248,8 @@ export default class WebMQClientWebSocket {
       this._ws.close(code, reason);
     }
     this._connectionPromise = null; // Reset connection promise
+    this._identifyPromise = null; // Reset identify promise
+    this._identifyMessageId = null; // Reset identify message ID
 
     // Clear cached events when explicitly closing
     this._cachedError = null;

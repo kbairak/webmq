@@ -116,6 +116,7 @@ describe('WebMQServer', () => {
 
     beforeEach(() => {
       server = new WebMQServer('amqp://localhost', 'test-exchange');
+      server.logLevel = 'silent';
     });
 
     it('should initialize RabbitMQ connection and WebSocket server', async () => {
@@ -164,6 +165,7 @@ describe('WebMQServer', () => {
       };
 
       const serverWithHooks = new WebMQServer('amqp://localhost', 'test-exchange', hooks);
+      serverWithHooks.logLevel = 'silent';
       expect(serverWithHooks).toBeInstanceOf(WebMQServer);
     });
   });
@@ -173,6 +175,7 @@ describe('WebMQServer', () => {
 
     beforeEach(async () => {
       server = new WebMQServer('amqp://localhost', 'test-exchange');
+      server.logLevel = 'silent';
       await server.start(8080);
 
       const connectionHandler = mockWSS.on.mock.calls.find(
@@ -437,6 +440,7 @@ describe('WebMQServer', () => {
 
     beforeEach(async () => {
       server = new WebMQServer('amqp://localhost', 'test-exchange');
+      server.logLevel = 'silent';
       await server.start(8080);
 
       const connectionHandler = mockWSS.on.mock.calls.find(
@@ -607,6 +611,7 @@ describe('WebMQServer', () => {
       };
 
       server = new WebMQServer('amqp://localhost', 'test-exchange', hooks);
+      server.logLevel = 'silent';
       await server.start(8080);
 
       const connectionHandler = mockWSS.on.mock.calls.find(
@@ -666,6 +671,7 @@ describe('WebMQServer', () => {
       const testServer = new WebMQServer('amqp://localhost', 'test-exchange', {
         pre: [jest.fn() as HookFunction<ClientMessage>]
       });
+      testServer.logLevel = 'silent';
       expect(testServer).toBeInstanceOf(WebMQServer);
     });
   });
@@ -677,6 +683,7 @@ describe('WebMQServer', () => {
 
     beforeEach(async () => {
       server = new WebMQServer('amqp://localhost', 'test-exchange');
+      server.logLevel = 'silent';
       await server.start(8080);
 
       const connectionHandler = mockWSS.on.mock.calls.find(

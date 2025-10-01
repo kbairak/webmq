@@ -22,6 +22,7 @@ describe('WebMQClient', () => {
 
   beforeEach(() => {
     webmqClient = new WebMQClient();
+    webmqClient.logLevel = 'silent';
     jest.clearAllMocks();
   });
 
@@ -270,6 +271,7 @@ describe('Singleton exports', () => {
     // Reset the default client's state
     (client as any).ws = null;
     (client as any).messageListeners.clear();
+    client.logLevel = 'silent';
   });
 
   it('should export bound methods from default client', async () => {

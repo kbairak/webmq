@@ -1,8 +1,9 @@
 import WebMQClientWebSocket from './websocket';
 
 // Mock UUID generation for predictable messageIds
+let uuidCounter = 1;
 jest.mock('uuid', () => ({
-  v4: jest.fn(() => 'test-uuid-123')
+  v4: jest.fn(() => `test-uuid-${uuidCounter++}`)
 }));
 
 // Mock WebSocket with comprehensive API
@@ -23,8 +24,8 @@ Object.defineProperty(global.WebSocket, 'OPEN', { value: 1 });
 Object.defineProperty(global.WebSocket, 'CLOSING', { value: 2 });
 Object.defineProperty(global.WebSocket, 'CLOSED', { value: 3 });
 
-// Mock localStorage
-const mockLocalStorage = {
+// Mock sessionStorage
+const mockSessionStorage = {
   getItem: jest.fn(),
   setItem: jest.fn(),
   removeItem: jest.fn(),
@@ -33,25 +34,28 @@ const mockLocalStorage = {
 
 describe('WebMQClientWebSocket', () => {
   let originalWindow: any;
-  let originalLocalStorage: any;
+  let originalSessionStorage: any;
 
   beforeEach(() => {
     jest.useFakeTimers();
 
+    // Reset UUID counter for predictable test behavior
+    uuidCounter = 1;
+
     // Save original values
     originalWindow = (global as any).window;
-    originalLocalStorage = (global as any).localStorage;
+    originalSessionStorage = (global as any).sessionStorage;
 
-    // Set up clean window mock and localStorage global for each test
+    // Set up clean window mock and sessionStorage global for each test
     Object.defineProperty(global, 'window', {
-      value: { localStorage: mockLocalStorage },
+      value: { sessionStorage: mockSessionStorage },
       writable: true,
       configurable: true
     });
 
-    // Also set localStorage as a global for direct access
-    Object.defineProperty(global, 'localStorage', {
-      value: mockLocalStorage,
+    // Also set sessionStorage as a global for direct access
+    Object.defineProperty(global, 'sessionStorage', {
+      value: mockSessionStorage,
       writable: true,
       configurable: true
     });
@@ -71,9 +75,9 @@ describe('WebMQClientWebSocket', () => {
     mockWebSocketInstance.send.mockClear();
     mockWebSocketInstance.close.mockClear();
 
-    // Reset localStorage mock state
-    mockLocalStorage.getItem.mockClear();
-    mockLocalStorage.setItem.mockClear();
+    // Reset sessionStorage mock state
+    mockSessionStorage.getItem.mockClear();
+    mockSessionStorage.setItem.mockClear();
 
     // Restore original global values to prevent cross-test-suite contamination
     if (originalWindow !== undefined) {
@@ -82,43 +86,43 @@ describe('WebMQClientWebSocket', () => {
       delete (global as any).window;
     }
 
-    if (originalLocalStorage !== undefined) {
-      (global as any).localStorage = originalLocalStorage;
+    if (originalSessionStorage !== undefined) {
+      (global as any).sessionStorage = originalSessionStorage;
     } else {
-      delete (global as any).localStorage;
+      delete (global as any).sessionStorage;
     }
   });
 
   describe('Constructor & Session Management', () => {
-    it('should create sessionId from localStorage if available', () => {
-      mockLocalStorage.getItem.mockReturnValue('existing-session-123');
+    it('should create sessionId from sessionStorage if available', () => {
+      mockSessionStorage.getItem.mockReturnValue('existing-session-123');
 
       const ws = new WebMQClientWebSocket('ws://test:8080');
 
-      expect(mockLocalStorage.getItem).toHaveBeenCalledWith('webmq_session_id');
+      expect(mockSessionStorage.getItem).toHaveBeenCalledWith('webmq_session_id');
       expect(ws.sessionId).toBe('existing-session-123');
-      expect(mockLocalStorage.setItem).not.toHaveBeenCalled();
+      expect(mockSessionStorage.setItem).not.toHaveBeenCalled();
     });
 
     it('should generate new sessionId if none exists', () => {
-      mockLocalStorage.getItem.mockReturnValue(null);
+      mockSessionStorage.getItem.mockReturnValue(null);
 
       const ws = new WebMQClientWebSocket('ws://test:8080');
 
-      expect(mockLocalStorage.getItem).toHaveBeenCalledWith('webmq_session_id');
-      expect(mockLocalStorage.setItem).toHaveBeenCalledWith('webmq_session_id', 'test-uuid-123');
-      expect(ws.sessionId).toBe('test-uuid-123');
+      expect(mockSessionStorage.getItem).toHaveBeenCalledWith('webmq_session_id');
+      expect(mockSessionStorage.setItem).toHaveBeenCalledWith('webmq_session_id', 'test-uuid-1');
+      expect(ws.sessionId).toBe('test-uuid-1');
     });
 
-    it('should work in Node.js environment without localStorage', () => {
+    it('should work in Node.js environment without sessionStorage', () => {
       delete (global as any).window;
-      delete (global as any).localStorage;
+      delete (global as any).sessionStorage;
 
       const ws = new WebMQClientWebSocket('ws://test:8080');
 
-      expect(ws.sessionId).toBe('test-uuid-123');
-      expect(mockLocalStorage.getItem).not.toHaveBeenCalled();
-      expect(mockLocalStorage.setItem).not.toHaveBeenCalled();
+      expect(ws.sessionId).toBe('test-uuid-1');
+      expect(mockSessionStorage.getItem).not.toHaveBeenCalled();
+      expect(mockSessionStorage.setItem).not.toHaveBeenCalled();
     });
 
     it('should store URL correctly', () => {
@@ -230,21 +234,21 @@ describe('WebMQClientWebSocket', () => {
       // Simulate connection opening (this is initial connection, not reconnection)
       openHandler({});
 
-      // Should have called send once for the original pending message
-      expect(mockWebSocketInstance.send).toHaveBeenCalledTimes(1);
 
-      // Call should be the original pending message
-      const originalCall = mockWebSocketInstance.send.mock.calls[0][0];
+      // Should have called send twice: identify first, then original message
+      expect(mockWebSocketInstance.send).toHaveBeenCalledTimes(2);
+
+      // First call should be the identify message
+      const identifyCall = mockWebSocketInstance.send.mock.calls[0][0];
+      const identifyMessage = JSON.parse(identifyCall);
+      expect(identifyMessage.action).toBe('identify');
+      expect(identifyMessage.sessionId).toBe('test-uuid-1'); // sessionId from constructor
+
+      // Second call should be the original pending message
+      const originalCall = mockWebSocketInstance.send.mock.calls[1][0];
       const originalMessage = JSON.parse(originalCall);
       expect(originalMessage.test).toBe('data');
-
-      // Verify identify message will be sent by checking pending messages
-      const pendingMessages = (ws as any)._pendingMessages;
-      const identifyPending = Array.from(pendingMessages.values()).find(
-        (pending: any) => pending.data.action === 'identify'
-      ) as any;
-      expect(identifyPending).toBeDefined();
-      expect(identifyPending.data.sessionId).toBe('test-uuid-123');
+      expect(originalMessage.messageId).toBe('test-uuid-2'); // messageId from send call
     });
 
     it('should establish connection when send() is called', () => {
@@ -308,7 +312,7 @@ describe('WebMQClientWebSocket', () => {
       expect(identifyCall).toBeDefined();
       const identifyMessage = JSON.parse(identifyCall![0]);
       expect(identifyMessage.action).toBe('identify');
-      expect(identifyMessage.sessionId).toBe('test-uuid-123');
+      expect(identifyMessage.sessionId).toBe('test-uuid-1');
     });
   });
 
@@ -321,13 +325,13 @@ describe('WebMQClientWebSocket', () => {
       // Check that message was added to pending messages
       const pendingMessages = (ws as any)._pendingMessages;
       expect(pendingMessages.size).toBe(1);
-      expect(pendingMessages.has('test-uuid-123')).toBe(true);
+      expect(pendingMessages.has('test-uuid-2')).toBe(true);
 
-      const pending = pendingMessages.get('test-uuid-123');
+      const pending = pendingMessages.get('test-uuid-2');
       expect(pending.data).toEqual({
         action: 'test',
         data: 'hello',
-        messageId: 'test-uuid-123'
+        messageId: 'test-uuid-2'
       });
     });
 
@@ -335,7 +339,7 @@ describe('WebMQClientWebSocket', () => {
       const ws = new WebMQClientWebSocket('ws://test:8080');
 
       ws.send({ test: 'data' });
-      const pending = (ws as any)._pendingMessages.get('test-uuid-123');
+      const pending = (ws as any)._pendingMessages.get('test-uuid-2');
 
       expect(pending.timeout).toBeDefined();
       expect(typeof pending.timeout).toBe('number');
@@ -376,7 +380,7 @@ describe('WebMQClientWebSocket', () => {
       messageHandler({
         data: JSON.stringify({
           action: 'ack',
-          messageId: 'test-uuid-123'
+          messageId: 'test-uuid-2'
         })
       });
 
@@ -404,7 +408,7 @@ describe('WebMQClientWebSocket', () => {
       messageHandler({
         data: JSON.stringify({
           action: 'nack',
-          messageId: 'test-uuid-123',
+          messageId: 'test-uuid-2',
           error: 'Test error'
         })
       });

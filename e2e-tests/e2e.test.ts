@@ -13,7 +13,7 @@ let workerConnection: amqplib.ChannelModel;
 
 // Simple RabbitMQ helper for e2e tests (replacing removed RabbitMQManager)
 class SimpleRabbitMQHelper {
-  constructor(private channel: amqplib.Channel, private exchangeName: string) {}
+  constructor(private channel: amqplib.Channel, private exchangeName: string) { }
 
   async subscribeJSON(bindingKey: string, messageHandler: (payload: any) => void) {
     const { queue } = await this.channel.assertQueue('', {
@@ -76,9 +76,11 @@ beforeAll(async () => {
   rabbitMQHelper = new SimpleRabbitMQHelper(channel, 'e2e_exchange_durable');
 
   webmqServer = new WebMQServer(rabbitmqUrl, 'e2e_exchange_durable');
+  webmqServer.logLevel = 'silent'; // Keep logging silent for clean test output
   await webmqServer.start(serverPort);
 
   webmqClient = new WebMQClient();
+  webmqClient.logLevel = 'silent'; // Keep logging silent for clean test output
   webmqClient.setup(`ws://localhost:${serverPort}`);
 }, 30000); // 30 second timeout for container startup
 

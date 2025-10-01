@@ -10,6 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - When following general instructions, apply them both on the backend and the frontend. If it's not clear from the request whether it applies to both, ask for clarification
 - After every change, run the tests (including e2e-tests) to make sure nothing is broken
 - After every change to the interface and functionality, remember to edit the Readme
+- Offer to commit and push often
 
 ## Project Overview
 
