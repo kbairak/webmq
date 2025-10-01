@@ -76,11 +76,11 @@ beforeAll(async () => {
   rabbitMQHelper = new SimpleRabbitMQHelper(channel, 'e2e_exchange_durable');
 
   webmqServer = new WebMQServer(rabbitmqUrl, 'e2e_exchange_durable');
-  webmqServer.logLevel = 'silent'; // Keep logging silent for clean test output
+  webmqServer.logLevel = 'silent'; // Keep tests quiet
   await webmqServer.start(serverPort);
 
   webmqClient = new WebMQClient();
-  webmqClient.logLevel = 'silent'; // Keep logging silent for clean test output
+  webmqClient.logLevel = 'silent'; // Keep tests quiet
   webmqClient.setup(`ws://localhost:${serverPort}`);
 }, 30000); // 30 second timeout for container startup
 
