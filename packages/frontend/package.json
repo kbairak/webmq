@@ -24,7 +24,7 @@
     "typescript": "^5.1.6"
   },
   "dependencies": {
-    "events": "^3.3.0",
+    "eventemitter3": "^5.0.1",
     "uuid": "^10.0.0"
   }
 }

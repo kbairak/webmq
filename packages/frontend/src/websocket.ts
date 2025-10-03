@@ -49,7 +49,8 @@ export default class WebMQClientWebSocket {
     open: new Set<Function>(),
     close: new Set<Function>(),
     error: new Set<Function>(),
-    message: new Set<Function>()
+    message: new Set<Function>(),
+    reconnecting: new Set<Function>(),
   };
 
 
@@ -121,8 +122,8 @@ export default class WebMQClientWebSocket {
 
           this._pendingMessages.set(identifyMessage.messageId, {
             data: identifyMessage,
-            resolve: () => {},
-            reject: () => {},
+            resolve: () => { },
+            reject: () => { },
             timeout: setTimeout(() => {
               this._pendingMessages.delete(identifyMessage.messageId);
               this._identifyPromise = null;
@@ -221,6 +222,7 @@ export default class WebMQClientWebSocket {
 
   private async _attemptReconnect(): Promise<void> {
     this._reconnectAttempts += 1;
+    this._eventListeners.reconnecting.forEach(listener => listener({ attempt: this._reconnectAttempts }));
     try {
       await this._ensureConnection();
     } catch (error) {
@@ -273,11 +275,11 @@ export default class WebMQClientWebSocket {
   get protocol(): string { return this._ws?.protocol ?? ''; }
   get readyState(): number { return this._ws?.readyState ?? WebSocket.CONNECTING; }
 
-  addEventListener(type: 'open' | 'close' | 'error' | 'message', listener: Function): void {
+  addEventListener(type: 'open' | 'close' | 'error' | 'message' | 'reconnecting', listener: Function): void {
     this._eventListeners[type].add(listener);
   }
 
-  removeEventListener(type: 'open' | 'close' | 'error' | 'message', listener: Function): void {
+  removeEventListener(type: 'open' | 'close' | 'error' | 'message' | 'reconnecting', listener: Function): void {
     this._eventListeners[type].delete(listener);
   }
 }

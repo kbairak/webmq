@@ -1,5 +1,6 @@
 import WebMQClientWebSocket from './websocket';
 import { HookFunction, runWithHooks } from './hooks';
+import { EventEmitter } from 'eventemitter3';
 
 export type FrontendMessage = {
   action: 'publish' | 'listen' | 'unlisten' | 'message';
@@ -29,7 +30,7 @@ export type WebMQClientHooks = {
  * await publish('chat.room.1', { text: 'Hello World!' });
  * ```
  */
-export class WebMQClient {
+export class WebMQClient extends EventEmitter {
   public logLevel: 'silent' | 'error' | 'warn' | 'info' | 'debug' = 'info';
 
   private ws: WebMQClientWebSocket | null = null;
@@ -44,6 +45,7 @@ export class WebMQClient {
   };
 
   constructor(url?: string, hooks?: WebMQClientHooks) {
+    super();
     this.setup(url || '', hooks);
   }
 
@@ -70,6 +72,24 @@ export class WebMQClient {
 
     this._log('info', `Setting up WebMQ client for: ${url}`);
     this.ws = new WebMQClientWebSocket(url);
+
+    // Forward WebSocket events
+    this.ws.addEventListener('open', () => {
+      this.emit('connected');
+    });
+
+    this.ws.addEventListener('reconnecting', (event: any) => {
+      this.emit('reconnecting', event);
+    });
+
+    this.ws.addEventListener('close', () => {
+      this.emit('disconnected');
+    });
+
+    this.ws.addEventListener('error', (event: Event) => {
+      this.emit('error', event);
+    });
+
     this.ws.addEventListener('message', (event: MessageEvent) => {
       try {
         const message = JSON.parse(event.data);
