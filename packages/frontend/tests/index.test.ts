@@ -1,4 +1,4 @@
-import { WebMQClient, setup, publish, listen, unlisten, webMQClient } from './index';
+import { WebMQClient, setup, publish, listen, unlisten, webMQClient } from '../src/index';
 
 // Mock the WebSocket implementation
 const mockWebSocketInstance = {
@@ -10,7 +10,7 @@ const mockWebSocketInstance = {
   url: 'ws://test:8080'
 };
 
-jest.mock('./websocket', () => {
+jest.mock('../src/websocket', () => {
   return {
     __esModule: true,
     default: jest.fn().mockImplementation(() => mockWebSocketInstance)
@@ -30,7 +30,7 @@ describe('WebMQClient', () => {
     it('should configure WebSocket URL', () => {
       webmqClient.setup('ws://localhost:8080');
 
-      const WebMQClientWebSocket = require('./websocket').default;
+      const WebMQClientWebSocket = require('../src/websocket').default;
       expect(WebMQClientWebSocket).toHaveBeenCalledWith('ws://localhost:8080');
     });
 
@@ -312,7 +312,7 @@ describe('Singleton exports', () => {
   it('should export bound methods from default client', async () => {
     setup('ws://localhost:8080');
 
-    const WebMQClientWebSocket = require('./websocket').default;
+    const WebMQClientWebSocket = require('../src/websocket').default;
     expect(WebMQClientWebSocket).toHaveBeenCalledWith('ws://localhost:8080');
   });
 

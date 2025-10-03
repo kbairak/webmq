@@ -2,10 +2,10 @@ import {
   WebMQServer,
   ClientMessage,
   WebMQHooks,
-} from './index';
+} from '../src/index';
 import { WebSocketServer } from 'ws';
 import amqplib from 'amqplib';
-import { HookFunction } from './hooks';
+import { HookFunction } from '../src/hooks';
 
 // Mock the ws library
 jest.mock('ws', () => ({

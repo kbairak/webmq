@@ -1,4 +1,4 @@
-import { HookFunction, runWithHooks } from './hooks';
+import { HookFunction, runWithHooks } from '../src/hooks';
 
 describe('Hook System', () => {
   describe('runWithHooks', () => {

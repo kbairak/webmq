@@ -1,4 +1,4 @@
-import WebMQClientWebSocket from './websocket';
+import WebMQClientWebSocket from '../src/websocket';
 
 // Mock UUID generation for predictable messageIds
 let uuidCounter = 1;
