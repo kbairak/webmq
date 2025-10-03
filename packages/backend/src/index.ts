@@ -32,6 +32,8 @@ function matchesPattern(routingKey: string, bindingKey: string): boolean {
  * WebMQ backend server that bridges WebSocket connections with RabbitMQ message broker.
  */
 export class WebMQServer {
+  private static _serverInstances = new Set<WebMQServer>();
+
   public logLevel: 'silent' | 'error' | 'warn' | 'info' | 'debug' = 'info';
 
   private _rabbitmqConnection: ChannelModel | null = null;
@@ -92,6 +94,9 @@ export class WebMQServer {
 
     this._wss = new WebSocketServer({ port });
     this._log('info', `WebSocket server listening on port ${port}`);
+
+    // Track this instance for graceful shutdown
+    WebMQServer._serverInstances.add(this);
 
     this._wss.on('connection', (ws: WebSocket) => {
       this._log('info', 'Client connected');
@@ -418,6 +423,9 @@ export class WebMQServer {
   public async stop(): Promise<void> {
     this._log('info', 'Stopping WebMQ server...');
 
+    // Remove from tracked instances
+    WebMQServer._serverInstances.delete(this);
+
     // Stop WebSocket server
     if (this._wss) {
       this._wss.close();
@@ -482,3 +490,15 @@ export class WebMQServer {
     return this._rabbitmqChannel;
   }
 }
+
+// Register graceful shutdown handlers at module level
+const shutdownHandler = async (signal: string) => {
+  console.log(`Received ${signal}, shutting down all WebMQ servers gracefully...`);
+  await Promise.all(
+    Array.from(WebMQServer['_serverInstances']).map(server => server.stop())
+  );
+  process.exit(0);
+};
+
+process.on('SIGTERM', () => shutdownHandler('SIGTERM'));
+process.on('SIGINT', () => shutdownHandler('SIGINT'));
