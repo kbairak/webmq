@@ -11,8 +11,7 @@ let webmqClient: WebMQClient;
 let serverPort: number;
 let workerConnection: amqplib.ChannelModel;
 
-// Simple RabbitMQ helper for e2e tests (replacing removed RabbitMQManager)
-class SimpleRabbitMQHelper {
+class RabbitMQManager {
   constructor(private channel: amqplib.Channel, private exchangeName: string) { }
 
   async subscribeJSON(bindingKey: string, messageHandler: (payload: any) => void) {
@@ -43,7 +42,7 @@ class SimpleRabbitMQHelper {
   }
 }
 
-let rabbitMQHelper: SimpleRabbitMQHelper;
+let rabbitMQHelper: RabbitMQManager;
 
 async function findFreePort(startPort: number = 8080): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -73,7 +72,7 @@ beforeAll(async () => {
   await channel.assertExchange('e2e_exchange_durable', 'topic', {
     durable: true,
   });
-  rabbitMQHelper = new SimpleRabbitMQHelper(channel, 'e2e_exchange_durable');
+  rabbitMQHelper = new RabbitMQManager(channel, 'e2e_exchange_durable');
 
   webmqServer = new WebMQServer(rabbitmqUrl, 'e2e_exchange_durable');
   webmqServer.logLevel = 'silent'; // Keep tests quiet
