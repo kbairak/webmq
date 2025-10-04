@@ -10,6 +10,7 @@
     "build:frontend": "npm run build -w webmq-frontend",
     "build": "npm run build --workspaces --if-present",
     "start:chat": "npm start -w basic-chat",
+    "start:todos": "npm start -w todos",
     "test:backend": "npm run test -w webmq-backend",
     "test:frontend": "npm run test -w webmq-frontend",
     "test": "npm run test --workspaces --if-present",

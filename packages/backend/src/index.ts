@@ -106,274 +106,274 @@ export class WebMQServer {
         activeBindings: new Set<string>(),
       };
       let consumerTag: string | null = null;
+      let messageQueue = Promise.resolve();
 
-      ws.on('message', async (data: WebSocket.RawData) => {
-        try {
-          const message: ClientMessage = JSON.parse(data.toString());
-          this._log('debug', `Received message: ${message.action}`);
-          switch (message.action) {
-            case 'identify':
-              await runWithHooks(
-                hookContext,
-                [...this._hooks.pre, ...this._hooks.identify],
-                message,
-                async () => {
-                  if (!message.sessionId) {
-                    throw new Error('identify requires a sessionId');
-                  }
+      ws.on('message', (data: WebSocket.RawData) => {
+        return messageQueue = messageQueue.then(async () => {
+          try {
+            const message: ClientMessage = JSON.parse(data.toString());
+            this._log('debug', `Received message: ${message.action}`);
+            switch (message.action) {
+              case 'identify':
+                await runWithHooks(
+                  hookContext,
+                  [...this._hooks.pre, ...this._hooks.identify],
+                  message,
+                  async () => {
+                    if (!message.sessionId) {
+                      throw new Error('identify requires a sessionId');
+                    }
 
-                  try {
-                    hookContext.sessionId = message.sessionId; // Queue name equals sessionId
-                    this._log('info', `Identifying client with sessionId: ${message.sessionId}`);
+                    try {
+                      hookContext.sessionId = message.sessionId; // Queue name equals sessionId
+                      this._log('info', `Identifying client with sessionId: ${message.sessionId}`);
 
-                    const channel = await this._getRabbitmqChannel();
-                    await channel.assertQueue(hookContext.sessionId, { expires: 5 * 60 * 1000 });
-                    this._log(
-                      'debug',
-                      `Created session queue: ${hookContext.sessionId} with 5min TTL`
-                    );
+                      const channel = await this._getRabbitmqChannel();
+                      await channel.assertQueue(hookContext.sessionId, { expires: 5 * 60 * 1000 });
+                      this._log(
+                        'debug',
+                        `Created session queue: ${hookContext.sessionId} with 5min TTL`
+                      );
 
-                    consumerTag = (await channel.consume(hookContext.sessionId, (msg: any) => {
-                      if (msg) {
-                        this._log(
-                          'debug',
-                          `Received message from RabbitMQ: routingKey=${msg.fields.routingKey}`
-                        );
+                      consumerTag = (await channel.consume(hookContext.sessionId, (msg: any) => {
+                        if (msg) {
+                          this._log(
+                            'debug',
+                            `Received message from RabbitMQ: routingKey=${msg.fields.routingKey}`
+                          );
 
-                        const bindingKeys = [...hookContext.activeBindings]
-                          .filter(bindingKey => matchesPattern(msg.fields.routingKey, bindingKey));
-
-                        this._log(
-                          'debug',
-                          `Message matches ${bindingKeys.length} binding(s): [${bindingKeys.join(', ')}]`
-                        );
-
-                        if (bindingKeys.length > 0) {
                           const payload = JSON.parse(msg.content.toString());
                           this._log(
                             'debug',
-                            `Forwarding message to client for ${bindingKeys.length} binding(s)`,
+                            `Forwarding message to client ${hookContext.sessionId} with routingKey: ${msg.fields.routingKey}`,
                           );
-                          ws.send(JSON.stringify({
-                            action: 'message',
-                            bindingKeys,
-                            payload: payload,
-                          }));
+
+                          try {
+                            this._log('debug', `Calling ws.send() for client ${hookContext.sessionId}, ws.readyState=${ws.readyState}`);
+                            ws.send(JSON.stringify({
+                              action: 'message',
+                              routingKey: msg.fields.routingKey,
+                              payload: payload,
+                            }));
+                            this._log('debug', `ws.send() completed successfully for client ${hookContext.sessionId}`);
+                          } catch (error: any) {
+                            this._log('error', `ws.send() failed for client ${hookContext.sessionId}: ${error.message}, readyState=${ws.readyState}`);
+                          }
+
+                          channel.ack(msg);
                         }
+                      })).consumerTag;
 
-                        channel.ack(msg);
+                      this._log(
+                        'debug',
+                        `Started consuming from queue ${hookContext.sessionId} with consumerTag: ${consumerTag}`
+                      );
+
+                      if (message.messageId) {
+                        ws.send(JSON.stringify({ action: 'ack', messageId: message.messageId }));
+                        this._log('debug', `Sent ack for identify message: ${message.messageId}`);
                       }
-                    })).consumerTag;
-
-                    this._log(
-                      'debug',
-                      `Started consuming from queue ${hookContext.sessionId} with consumerTag: ${consumerTag}`
-                    );
-
-                    if (message.messageId) {
-                      ws.send(JSON.stringify({ action: 'ack', messageId: message.messageId }));
-                      this._log('debug', `Sent ack for identify message: ${message.messageId}`);
+                    } catch (error: any) {
+                      if (message.messageId) {
+                        ws.send(JSON.stringify({
+                          action: 'nack',
+                          messageId: message.messageId,
+                          error: error.message
+                        }));
+                      }
+                      throw error;
                     }
-                  } catch (error: any) {
-                    if (message.messageId) {
-                      ws.send(JSON.stringify({
-                        action: 'nack',
-                        messageId: message.messageId,
-                        error: error.message
-                      }));
+                  }
+                );
+                break;
+              case 'publish':
+                await runWithHooks(
+                  hookContext,
+                  [...this._hooks.pre, ...this._hooks.publish],
+                  message,
+                  async () => {
+                    if (!message.routingKey || !message.payload) {
+                      throw new Error('publish requires routingKey and payload');
                     }
-                    throw error;
-                  }
-                }
-              );
-              break;
-            case 'publish':
-              await runWithHooks(
-                hookContext,
-                [...this._hooks.pre, ...this._hooks.publish],
-                message,
-                async () => {
-                  if (!message.routingKey || !message.payload) {
-                    throw new Error('publish requires routingKey and payload');
-                  }
 
-                  try {
+                    try {
+                      this._log(
+                        'info',
+                        `Publishing message: routingKey=${message.routingKey}, sessionId=${hookContext.sessionId}`
+                      );
+                      this._log('debug', `Message payload: ${JSON.stringify(message.payload)}`);
+
+                      const channel = await this._getRabbitmqChannel();
+                      channel.publish(
+                        this.exchangeName,
+                        message.routingKey,
+                        Buffer.from(JSON.stringify(message.payload))
+                      );
+
+                      this._log(
+                        'debug',
+                        `Message published to exchange '${this.exchangeName}' with routingKey '${message.routingKey}'`
+                      );
+
+                      // Send ack if messageId present
+                      if (message.messageId) {
+                        ws.send(JSON.stringify({ action: 'ack', messageId: message.messageId }));
+                        this._log('debug', `Sent ack for publish message: ${message.messageId}`);
+                      }
+                    } catch (error: any) {
+                      // Send nack if messageId present
+                      if (message.messageId) {
+                        ws.send(JSON.stringify({
+                          action: 'nack',
+                          messageId: message.messageId,
+                          error: error.message
+                        }));
+                      }
+                      throw error;
+                    }
+                  }
+                );
+                break;
+              case 'listen':
+                await runWithHooks(
+                  hookContext,
+                  [...this._hooks.pre, ...this._hooks.listen],
+                  message,
+                  async () => {
+                    if (!message.bindingKey) {
+                      throw new Error('listen requires a bindingKey');
+                    }
+                    if (!hookContext.sessionId) {
+                      throw new Error('Must identify with sessionId before listening');
+                    }
+
                     this._log(
                       'info',
-                      `Publishing message: routingKey=${message.routingKey}, sessionId=${hookContext.sessionId}`
+                      `Client listening: bindingKey=${message.bindingKey}, sessionId=${hookContext.sessionId}`
                     );
-                    this._log('debug', `Message payload: ${JSON.stringify(message.payload)}`);
 
+                    if (hookContext.activeBindings.has(message.bindingKey)) {
+                      this._log('debug', `Already subscribed to binding: ${message.bindingKey}`);
+                      return; // Already subscribed to this binding key
+                    }
+
+                    // Track this binding
+                    hookContext.activeBindings.add(message.bindingKey);
+                    this._log(
+                      'debug',
+                      `Active bindings for session ${hookContext.sessionId}: [${Array.from(hookContext.activeBindings).join(', ')}]`
+                    );
+
+                    // Bind the session queue to this binding key
                     const channel = await this._getRabbitmqChannel();
-                    channel.publish(
-                      this.exchangeName,
-                      message.routingKey,
-                      Buffer.from(JSON.stringify(message.payload))
+                    await channel.bindQueue(
+                      hookContext.sessionId, this.exchangeName, message.bindingKey
                     );
 
                     this._log(
                       'debug',
-                      `Message published to exchange '${this.exchangeName}' with routingKey '${message.routingKey}'`
+                      `Bound queue '${hookContext.sessionId}' to exchange '${this.exchangeName}' with bindingKey '${message.bindingKey}'`
                     );
 
                     // Send ack if messageId present
                     if (message.messageId) {
                       ws.send(JSON.stringify({ action: 'ack', messageId: message.messageId }));
-                      this._log('debug', `Sent ack for publish message: ${message.messageId}`);
+                      this._log('debug', `Sent ack for listen message: ${message.messageId}`);
                     }
-                  } catch (error: any) {
-                    // Send nack if messageId present
-                    if (message.messageId) {
-                      ws.send(JSON.stringify({
-                        action: 'nack',
-                        messageId: message.messageId,
-                        error: error.message
-                      }));
+                  }
+                );
+                break;
+              case 'unlisten':
+                await runWithHooks(
+                  hookContext,
+                  [...this._hooks.pre, ...this._hooks.unlisten],
+                  message,
+                  async () => {
+                    if (!message.bindingKey) {
+                      throw new Error('unlisten requires a bindingKey');
                     }
-                    throw error;
-                  }
-                }
-              );
-              break;
-            case 'listen':
-              await runWithHooks(
-                hookContext,
-                [...this._hooks.pre, ...this._hooks.listen],
-                message,
-                async () => {
-                  if (!message.bindingKey) {
-                    throw new Error('listen requires a bindingKey');
-                  }
-                  if (!hookContext.sessionId) {
-                    throw new Error('Must identify with sessionId before listening');
-                  }
+                    if (!hookContext.sessionId) {
+                      throw new Error('Must identify with sessionId before unlistening');
+                    }
 
-                  this._log(
-                    'info',
-                    `Client listening: bindingKey=${message.bindingKey}, sessionId=${hookContext.sessionId}`
-                  );
+                    this._log(
+                      'info',
+                      `Client unlistening: bindingKey=${message.bindingKey}, sessionId=${hookContext.sessionId}`
+                    );
 
-                  if (hookContext.activeBindings.has(message.bindingKey)) {
-                    this._log('debug', `Already subscribed to binding: ${message.bindingKey}`);
-                    return; // Already subscribed to this binding key
-                  }
-
-                  // Bind the session queue to this binding key
-                  const channel = await this._getRabbitmqChannel();
-                  await channel.bindQueue(
-                    hookContext.sessionId, this.exchangeName, message.bindingKey
-                  );
-
-                  this._log(
-                    'debug',
-                    `Bound queue '${hookContext.sessionId}' to exchange '${this.exchangeName}' with bindingKey '${message.bindingKey}'`
-                  );
-
-                  // Track this binding
-                  hookContext.activeBindings.add(message.bindingKey);
-                  this._log(
-                    'debug',
-                    `Active bindings for session ${hookContext.sessionId}: [${Array.from(hookContext.activeBindings).join(', ')}]`
-                  );
-
-                  // Send ack if messageId present
-                  if (message.messageId) {
-                    ws.send(JSON.stringify({ action: 'ack', messageId: message.messageId }));
-                    this._log('debug', `Sent ack for listen message: ${message.messageId}`);
-                  }
-                }
-              );
-              break;
-            case 'unlisten':
-              await runWithHooks(
-                hookContext,
-                [...this._hooks.pre, ...this._hooks.unlisten],
-                message,
-                async () => {
-                  if (!message.bindingKey) {
-                    throw new Error('unlisten requires a bindingKey');
-                  }
-                  if (!hookContext.sessionId) {
-                    throw new Error('Must identify with sessionId before unlistening');
-                  }
-
-                  this._log(
-                    'info',
-                    `Client unlistening: bindingKey=${message.bindingKey}, sessionId=${hookContext.sessionId}`
-                  );
-
-                  if (hookContext.activeBindings.has(message.bindingKey)) {
-                    try {
-                      const channel = await this._getRabbitmqChannel();
-                      await channel.unbindQueue(
-                        hookContext.sessionId,
-                        this.exchangeName,
-                        message.bindingKey
-                      );
+                    if (hookContext.activeBindings.has(message.bindingKey)) {
+                      try {
+                        const channel = await this._getRabbitmqChannel();
+                        await channel.unbindQueue(
+                          hookContext.sessionId,
+                          this.exchangeName,
+                          message.bindingKey
+                        );
+                        this._log(
+                          'debug',
+                          `Unbound queue '${hookContext.sessionId}' from bindingKey '${message.bindingKey}'`
+                        );
+                      } catch (error: any) {
+                        this._log(
+                          'warn',
+                          `Failed to unbind queue during unlisten (ignoring): ${error.message}`
+                        );
+                        // If channel recovery fails, ignore the error during cleanup
+                        // The binding will be cleaned up when the client reconnects
+                      }
+                      hookContext.activeBindings.delete(message.bindingKey);
                       this._log(
                         'debug',
-                        `Unbound queue '${hookContext.sessionId}' from bindingKey '${message.bindingKey}'`
+                        `Removed binding '${message.bindingKey}'. Active bindings: [${Array.from(hookContext.activeBindings).join(', ')}]`
                       );
-                    } catch (error: any) {
+                    } else {
                       this._log(
-                        'warn',
-                        `Failed to unbind queue during unlisten (ignoring): ${error.message}`
+                        'debug', `Binding '${message.bindingKey}' was not active for this session`
                       );
-                      // If channel recovery fails, ignore the error during cleanup
-                      // The binding will be cleaned up when the client reconnects
                     }
-                    hookContext.activeBindings.delete(message.bindingKey);
-                    this._log(
-                      'debug',
-                      `Removed binding '${message.bindingKey}'. Active bindings: [${Array.from(hookContext.activeBindings).join(', ')}]`
-                    );
-                  } else {
-                    this._log(
-                      'debug', `Binding '${message.bindingKey}' was not active for this session`
-                    );
+
+                    // Send ack if messageId present
+                    if (message.messageId) {
+                      ws.send(JSON.stringify({ action: 'ack', messageId: message.messageId }));
+                      this._log('debug', `Sent ack for unlisten message: ${message.messageId}`);
+                    }
                   }
+                );
+                break;
+              default:
+                throw new Error(`Unknown action: ${(message as any).action}`);
+            }
+          } catch (error: any) {
+            this._log('error', `Message processing failed: ${error.message}`);
 
-                  // Send ack if messageId present
-                  if (message.messageId) {
-                    ws.send(JSON.stringify({ action: 'ack', messageId: message.messageId }));
-                    this._log('debug', `Sent ack for unlisten message: ${message.messageId}`);
-                  }
-                }
+            // Send nack for failed message
+            try {
+              const message: ClientMessage = JSON.parse(data.toString());
+              this._log(
+                'debug',
+                `Sending nack/error for failed message: action=${message.action}, messageId=${message.messageId}`
               );
-              break;
-            default:
-              throw new Error(`Unknown action: ${(message as any).action}`);
-          }
-        } catch (error: any) {
-          this._log('error', `Message processing failed: ${error.message}`);
 
-          // Send nack for failed message
-          try {
-            const message: ClientMessage = JSON.parse(data.toString());
-            this._log(
-              'debug',
-              `Sending nack/error for failed message: action=${message.action}, messageId=${message.messageId}`
-            );
-
-            if (message.action === 'publish' && message.messageId) {
-              ws.send(
-                JSON.stringify({
-                  action: 'nack',
-                  messageId: message.messageId,
-                  error: error.message,
-                })
+              if (message.action === 'publish' && message.messageId) {
+                ws.send(
+                  JSON.stringify({
+                    action: 'nack',
+                    messageId: message.messageId,
+                    error: error.message,
+                  })
+                );
+              } else {
+                ws.send(JSON.stringify({ action: 'error', message: error.message }));
+              }
+            } catch (parseError) {
+              this._log(
+                'error', `Failed to parse error message, sending generic error: ${parseError}`
               );
-            } else {
+              // If we can't parse the message, send a generic error
               ws.send(JSON.stringify({ action: 'error', message: error.message }));
             }
-          } catch (parseError) {
-            this._log(
-              'error', `Failed to parse error message, sending generic error: ${parseError}`
-            );
-            // If we can't parse the message, send a generic error
-            ws.send(JSON.stringify({ action: 'error', message: error.message }));
           }
-        }
+        });
       });
 
       ws.on('close', async (code, reason) => {

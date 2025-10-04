@@ -31,7 +31,7 @@ describe('WebMQClient', () => {
       webmqClient.setup('ws://localhost:8080');
 
       const WebMQClientWebSocket = require('../src/websocket').default;
-      expect(WebMQClientWebSocket).toHaveBeenCalledWith('ws://localhost:8080');
+      expect(WebMQClientWebSocket).toHaveBeenCalledWith('ws://localhost:8080', 'silent');
     });
 
     it('should set up message event listener', () => {
@@ -178,11 +178,11 @@ describe('WebMQClient', () => {
       expect(messageHandlerCall).toBeDefined();
       const messageHandler = messageHandlerCall![1];
 
-      // Simulate incoming message
+      // Simulate incoming message with routingKey
       const event = {
         data: JSON.stringify({
           action: 'message',
-          bindingKeys: ['test.key'],
+          routingKey: 'test.key',
           payload: { hello: 'world' }
         })
       };
@@ -252,7 +252,7 @@ describe('WebMQClient', () => {
       const event = {
         data: JSON.stringify({
           action: 'message',
-          bindingKeys: ['test.key1'],
+          routingKey: 'test.key1',
           payload: { data: 'for key1' }
         })
       };
@@ -263,7 +263,7 @@ describe('WebMQClient', () => {
       expect(callback2).not.toHaveBeenCalled();
     });
 
-    it('should deliver message to all callbacks when multiple bindingKeys match', () => {
+    it('should deliver message to all callbacks when routingKey matches multiple patterns', () => {
       webmqClient.setup('ws://localhost:8080');
       const callback1 = jest.fn();
       const callback2 = jest.fn();
@@ -278,11 +278,11 @@ describe('WebMQClient', () => {
       );
       const messageHandler = messageHandlerCall![1];
 
-      // Message with multiple matching bindingKeys (optimization case)
+      // Message with routingKey that matches multiple patterns
       const event = {
         data: JSON.stringify({
           action: 'message',
-          bindingKeys: ['user.*', 'user.#', 'user.login'],
+          routingKey: 'user.login',
           payload: { action: 'login' }
         })
       };
@@ -313,7 +313,7 @@ describe('Singleton exports', () => {
     setup('ws://localhost:8080');
 
     const WebMQClientWebSocket = require('../src/websocket').default;
-    expect(WebMQClientWebSocket).toHaveBeenCalledWith('ws://localhost:8080');
+    expect(WebMQClientWebSocket).toHaveBeenCalledWith('ws://localhost:8080', 'silent');
   });
 
   it('should allow publishing via singleton', async () => {
@@ -496,7 +496,7 @@ describe('Hooks', () => {
       const event = {
         data: JSON.stringify({
           action: 'message',
-          bindingKeys: ['test.key'],
+          routingKey: 'test.key',
           payload: { encrypted: 'data' }
         })
       };
@@ -535,7 +535,7 @@ describe('Hooks', () => {
       const event = {
         data: JSON.stringify({
           action: 'message',
-          bindingKeys: ['test.key'],
+          routingKey: 'test.key',
           payload: { data: 'test' }
         })
       };

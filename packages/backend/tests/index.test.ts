@@ -708,11 +708,11 @@ describe('WebMQServer', () => {
       await messageHandler(Buffer.from(JSON.stringify(listenMessage)));
     });
 
-    it('should match exact routing keys', async () => {
+    it('should forward messages with routingKey', async () => {
       // Get the consumer function from the consume call
       const consumerFn = mockChannel.consume.mock.calls[0][1];
 
-      // Simulate incoming message with exact match
+      // Simulate incoming message
       const mockMessage = {
         fields: { routingKey: 'user.login' },
         content: Buffer.from(JSON.stringify({ action: 'login' }))
@@ -722,16 +722,16 @@ describe('WebMQServer', () => {
 
       expect(mockWS.send).toHaveBeenCalledWith(JSON.stringify({
         action: 'message',
-        bindingKeys: ['user.*'],
+        routingKey: 'user.login',
         payload: { action: 'login' }
       }));
       expect(mockChannel.ack).toHaveBeenCalledWith(mockMessage);
     });
 
-    it('should match wildcard patterns with *', async () => {
+    it('should forward all messages from RabbitMQ consumer', async () => {
       const consumerFn = mockChannel.consume.mock.calls[0][1];
 
-      // Test various routing keys that should match user.*
+      // Backend forwards ALL messages from RabbitMQ (no filtering)
       const testCases = [
         'user.login',
         'user.logout',
@@ -749,29 +749,6 @@ describe('WebMQServer', () => {
       });
 
       expect(mockWS.send).toHaveBeenCalledTimes(testCases.length);
-    });
-
-    it('should not match non-matching patterns', async () => {
-      const consumerFn = mockChannel.consume.mock.calls[0][1];
-
-      // Test routing keys that should NOT match user.*
-      const nonMatchingCases = [
-        'order.created',
-        'user',  // Missing second part
-        'user.login.failed',  // Too many parts for * wildcard
-        'admin.user.login'
-      ];
-
-      nonMatchingCases.forEach(routingKey => {
-        const mockMessage = {
-          fields: { routingKey },
-          content: Buffer.from(JSON.stringify({ test: 'data' }))
-        };
-
-        consumerFn(mockMessage);
-      });
-
-      expect(mockWS.send).not.toHaveBeenCalled();
     });
 
     it('should match wildcard patterns with #', async () => {
@@ -806,7 +783,7 @@ describe('WebMQServer', () => {
       expect(mockWS.send).toHaveBeenCalledTimes(testCases.length);
     });
 
-    it('should handle multiple bindings and filter correctly', async () => {
+    it('should forward messages with their routingKeys', async () => {
       // Add another binding
       const listenMessage: ClientMessage = {
         action: 'listen',
@@ -816,7 +793,6 @@ describe('WebMQServer', () => {
 
       const consumerFn = mockChannel.consume.mock.calls[0][1];
 
-      // Message that matches both user.* and order.created patterns
       const userMessage = {
         fields: { routingKey: 'user.login' },
         content: Buffer.from(JSON.stringify({ action: 'login' }))
@@ -830,48 +806,19 @@ describe('WebMQServer', () => {
       consumerFn(userMessage);
       consumerFn(orderMessage);
 
-      // Should receive both messages with correct binding keys
+      // Should forward both messages with their routingKeys
       expect(mockWS.send).toHaveBeenCalledWith(JSON.stringify({
         action: 'message',
-        bindingKeys: ['user.*'],
+        routingKey: 'user.login',
         payload: { action: 'login' }
       }));
 
       expect(mockWS.send).toHaveBeenCalledWith(JSON.stringify({
         action: 'message',
-        bindingKeys: ['order.created'],
+        routingKey: 'order.created',
         payload: { orderId: 123 }
       }));
     });
 
-    it('should send single message when multiple bindings match same routing key', async () => {
-      // Add overlapping bindings
-      const listenMessages: ClientMessage[] = [
-        { action: 'listen', bindingKey: 'user.#' },
-        { action: 'listen', bindingKey: 'user.login' }
-      ];
-
-      for (const msg of listenMessages) {
-        await messageHandler(Buffer.from(JSON.stringify(msg)));
-      }
-
-      const consumerFn = mockChannel.consume.mock.calls[0][1];
-
-      // Message that matches multiple patterns
-      const message = {
-        fields: { routingKey: 'user.login' },
-        content: Buffer.from(JSON.stringify({ action: 'login' }))
-      };
-
-      consumerFn(message);
-
-      // Should send only ONE message with all matching bindingKeys
-      expect(mockWS.send).toHaveBeenCalledTimes(1);
-      const sentMessage = JSON.parse(mockWS.send.mock.calls[0][0]);
-      expect(sentMessage.action).toBe('message');
-      expect(sentMessage.bindingKeys).toEqual(expect.arrayContaining(['user.*', 'user.#', 'user.login']));
-      expect(sentMessage.bindingKeys).toHaveLength(3);
-      expect(sentMessage.payload).toEqual({ action: 'login' });
-    });
   });
 });

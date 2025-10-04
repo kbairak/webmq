@@ -18,6 +18,15 @@ export type WebMQClientHooks = {
   onMessage?: HookFunction<FrontendMessage>[];
 };
 
+function matchesPattern(routingKey: string, bindingKey: string): boolean {
+  const regexPattern = bindingKey
+    .replace(/\./g, '\\.') // Escape dots
+    .replace(/\*/g, '[^.]+') // * matches one or more non-dots
+    .replace(/#/g, '.*');    // # matches zero or more of any character
+  const regex = new RegExp(`^${regexPattern}$`);
+  return regex.test(routingKey);
+}
+
 /**
  * A client for interacting with a WebMQ backend.
  *
@@ -31,7 +40,7 @@ export type WebMQClientHooks = {
  * ```
  */
 export class WebMQClient extends EventEmitter {
-  public logLevel: 'silent' | 'error' | 'warn' | 'info' | 'debug' = 'info';
+  private _logLevel: 'silent' | 'error' | 'warn' | 'info' | 'debug' = 'info';
 
   private ws: WebMQClientWebSocket | null = null;
   private messageListeners = new Map<string, Set<(payload: any) => void>>();
@@ -70,8 +79,14 @@ export class WebMQClient extends EventEmitter {
       return;
     }
 
+    // Close old WebSocket before creating new one to prevent duplicate consumers
+    if (this.ws) {
+      this._log('debug', 'Closing existing WebSocket before creating new one');
+      this.ws.close();
+    }
+
     this._log('info', `Setting up WebMQ client for: ${url}`);
-    this.ws = new WebMQClientWebSocket(url);
+    this.ws = new WebMQClientWebSocket(url, this.logLevel);
 
     // Forward WebSocket events
     this.ws.addEventListener('open', () => {
@@ -96,13 +111,19 @@ export class WebMQClient extends EventEmitter {
 
         // Only handle data messages (not ack/nack which are handled by WebSocket layer)
         if (message.action === 'message') {
-          const bindingKeys = message.bindingKeys || [];
-          this._log('debug', `Received message for ${bindingKeys.length} binding(s): [${bindingKeys.join(', ')}]`);
+          const routingKey = message.routingKey;
 
-          bindingKeys.forEach(async (bindingKey: string) => {
+          // Find all active bindings that match this routing key
+          const matchingBindings = [...this.messageListeners.keys()]
+            .filter(bindingKey => matchesPattern(routingKey, bindingKey));
+
+          this._log('debug', `Received message with routingKey '${routingKey}', matches ${matchingBindings.length} binding(s): [${matchingBindings.join(', ')}]`);
+
+          matchingBindings.forEach(async (bindingKey: string) => {
             const frontendMessage: FrontendMessage = {
               action: 'message',
               bindingKey,
+              routingKey,
               payload: message.payload
             };
 
@@ -116,8 +137,6 @@ export class WebMQClient extends EventEmitter {
                   if (callbacks) {
                     this._log('debug', `Delivering message to ${callbacks.size} callback(s) for binding '${bindingKey}'`);
                     callbacks.forEach(callback => callback(frontendMessage.payload));
-                  } else {
-                    this._log('warn', `No callbacks registered for binding '${bindingKey}'`);
                   }
                 }
               );
@@ -248,6 +267,17 @@ export class WebMQClient extends EventEmitter {
         }
       }
     );
+  }
+
+  public get logLevel(): 'silent' | 'error' | 'warn' | 'info' | 'debug' {
+    return this._logLevel;
+  }
+
+  public set logLevel(level: 'silent' | 'error' | 'warn' | 'info' | 'debug') {
+    this._logLevel = level;
+    if (this.ws) {
+      this.ws.logLevel = level;
+    }
   }
 
   private _log(level: 'error' | 'warn' | 'info' | 'debug', message: string): void {
