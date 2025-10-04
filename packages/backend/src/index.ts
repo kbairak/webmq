@@ -19,15 +19,6 @@ export type WebMQHooks = {
   unlisten?: HookFunction<ClientMessage>[];
 }
 
-function matchesPattern(routingKey: string, bindingKey: string): boolean {
-  const regexPattern = bindingKey
-    .replace(/\./g, '\\.') // Escape dots
-    .replace(/\*/g, '[^.]+') // * matches one or more non-dots
-    .replace(/#/g, '.*');    // # matches zero or more of any character
-  const regex = new RegExp(`^${regexPattern}$`);
-  return regex.test(routingKey);
-}
-
 /**
  * WebMQ backend server that bridges WebSocket connections with RabbitMQ message broker.
  */
@@ -100,11 +91,7 @@ export class WebMQServer {
 
     this._wss.on('connection', (ws: WebSocket) => {
       this._log('info', 'Client connected');
-      const hookContext = {
-        ws,
-        sessionId: null as string | null,
-        activeBindings: new Set<string>(),
-      };
+      const hookContext = { ws, sessionId: null as string | null };
       let consumerTag: string | null = null;
       let messageQueue = Promise.resolve();
 
@@ -252,18 +239,6 @@ export class WebMQServer {
                       `Client listening: bindingKey=${message.bindingKey}, sessionId=${hookContext.sessionId}`
                     );
 
-                    if (hookContext.activeBindings.has(message.bindingKey)) {
-                      this._log('debug', `Already subscribed to binding: ${message.bindingKey}`);
-                      return; // Already subscribed to this binding key
-                    }
-
-                    // Track this binding
-                    hookContext.activeBindings.add(message.bindingKey);
-                    this._log(
-                      'debug',
-                      `Active bindings for session ${hookContext.sessionId}: [${Array.from(hookContext.activeBindings).join(', ')}]`
-                    );
-
                     // Bind the session queue to this binding key
                     const channel = await this._getRabbitmqChannel();
                     await channel.bindQueue(
@@ -301,35 +276,24 @@ export class WebMQServer {
                       `Client unlistening: bindingKey=${message.bindingKey}, sessionId=${hookContext.sessionId}`
                     );
 
-                    if (hookContext.activeBindings.has(message.bindingKey)) {
-                      try {
-                        const channel = await this._getRabbitmqChannel();
-                        await channel.unbindQueue(
-                          hookContext.sessionId,
-                          this.exchangeName,
-                          message.bindingKey
-                        );
-                        this._log(
-                          'debug',
-                          `Unbound queue '${hookContext.sessionId}' from bindingKey '${message.bindingKey}'`
-                        );
-                      } catch (error: any) {
-                        this._log(
-                          'warn',
-                          `Failed to unbind queue during unlisten (ignoring): ${error.message}`
-                        );
-                        // If channel recovery fails, ignore the error during cleanup
-                        // The binding will be cleaned up when the client reconnects
-                      }
-                      hookContext.activeBindings.delete(message.bindingKey);
+                    try {
+                      const channel = await this._getRabbitmqChannel();
+                      await channel.unbindQueue(
+                        hookContext.sessionId,
+                        this.exchangeName,
+                        message.bindingKey
+                      );
                       this._log(
                         'debug',
-                        `Removed binding '${message.bindingKey}'. Active bindings: [${Array.from(hookContext.activeBindings).join(', ')}]`
+                        `Unbound queue '${hookContext.sessionId}' from bindingKey '${message.bindingKey}'`
                       );
-                    } else {
+                    } catch (error: any) {
                       this._log(
-                        'debug', `Binding '${message.bindingKey}' was not active for this session`
+                        'warn',
+                        `Failed to unbind queue during unlisten (ignoring): ${error.message}`
                       );
+                      // If channel recovery fails, ignore the error during cleanup
+                      // The binding will be cleaned up when the client reconnects
                     }
 
                     // Send ack if messageId present
@@ -376,15 +340,18 @@ export class WebMQServer {
         });
       });
 
+      ws.on('error', (error) => {
+        this._log(
+          'error',
+          `WebSocket error: sessionId=${hookContext.sessionId || 'unknown'}, error=${error.message}`
+        );
+      });
+
       ws.on('close', async (code, reason) => {
         // TODO: Add ping/pong heartbeat mechanism to better detect network issues
         this._log(
           'info',
           `Client disconnected: sessionId=${hookContext.sessionId}, code=${code}, reason=${reason}`
-        );
-        this._log(
-          'debug',
-          `Active bindings at disconnect: [${Array.from(hookContext.activeBindings).join(', ')}]`
         );
 
         if (consumerTag) {
