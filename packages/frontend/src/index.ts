@@ -105,6 +105,17 @@ export class WebMQClient extends EventEmitter {
       this.emit('error', event);
     });
 
+    // Disable auto-reconnect when page is unloading to prevent zombie connections
+    if (typeof window !== 'undefined') {
+      const disableReconnectOnUnload = () => {
+        if (this.ws) {
+          (this.ws as any)._shouldReconnect = false;
+          this._log('debug', 'Disabled auto-reconnect due to page unload');
+        }
+      };
+      window.addEventListener('beforeunload', disableReconnectOnUnload);
+    }
+
     this.ws.addEventListener('message', (event: MessageEvent) => {
       try {
         const message = JSON.parse(event.data);

@@ -122,6 +122,15 @@ export class WebMQServer {
                         `Created session queue: ${hookContext.sessionId} with 5min TTL`
                       );
 
+                      // Check if WebSocket is still open after async operations
+                      if (ws.readyState !== WebSocket.OPEN) {
+                        this._log(
+                          'warn',
+                          `WebSocket closed during identify (readyState=${ws.readyState}), skipping consumer creation for ${hookContext.sessionId}`
+                        );
+                        return;
+                      }
+
                       consumerTag = (await channel.consume(hookContext.sessionId, (msg: any) => {
                         if (msg) {
                           this._log(
@@ -137,17 +146,27 @@ export class WebMQServer {
 
                           try {
                             this._log('debug', `Calling ws.send() for client ${hookContext.sessionId}, ws.readyState=${ws.readyState}`);
+
+                            if (ws.readyState !== WebSocket.OPEN) {
+                              this._log(
+                                'warn',
+                                `Cannot send to closed socket (readyState=${ws.readyState}), nacking message for requeue: ${hookContext.sessionId}`
+                              );
+                              channel.nack(msg, false, true); // requeue=true
+                              return;
+                            }
+
                             ws.send(JSON.stringify({
                               action: 'message',
                               routingKey: msg.fields.routingKey,
                               payload: payload,
                             }));
                             this._log('debug', `ws.send() completed successfully for client ${hookContext.sessionId}`);
+                            channel.ack(msg);
                           } catch (error: any) {
                             this._log('error', `ws.send() failed for client ${hookContext.sessionId}: ${error.message}, readyState=${ws.readyState}`);
+                            channel.nack(msg, false, true); // requeue=true on error
                           }
-
-                          channel.ack(msg);
                         }
                       })).consumerTag;
 
