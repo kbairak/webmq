@@ -1,0 +1,31 @@
+{
+  "type": "module",
+  "name": "city-search",
+  "version": "1.0.0",
+  "description": "Multi-source city search demo for WebMQ",
+  "private": true,
+  "scripts": {
+    "docker:up": "docker-compose up -d",
+    "docker:down": "docker-compose down",
+    "docker:logs": "docker-compose logs -f",
+    "start:backend": "node backend/server.js",
+    "start:workers": "node backend/workers/index.js",
+    "start:frontend": "vite",
+    "dev": "concurrently \"npm run start:backend\" \"npm run start:workers\" \"npm run start:frontend\" --names \"server,workers,vite\" --prefix-colors \"blue,green,yellow\"",
+    "start": "npm run docker:up && sleep 3 && npm run dev"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "amqplib": "^0.10.5",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "webmq-backend": "1.0.0",
+    "webmq-frontend": "1.0.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^5.0.0",
+    "concurrently": "^9.2.1",
+    "vite": "^7.1.5"
+  }
+}
