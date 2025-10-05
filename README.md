@@ -390,6 +390,7 @@ const analyticsClient = new WebMQClient('ws://analytics.example.com');
 **Examples:**
 
 Standalone mode:
+
 ```javascript
 const server = new WebMQServer({
   rabbitmqUrl: 'amqp://localhost',
@@ -400,6 +401,7 @@ await server.start();
 ```
 
 Attached to Express:
+
 ```javascript
 import express from 'express';
 import { createServer } from 'http';
@@ -419,11 +421,64 @@ await server.start();
 httpServer.listen(8080);
 ```
 
-## Future Features
+## Roadmap
 
-- **Rate limiting**: Per-connection and per-user message throttling
-- **Health checks**: Monitoring endpoints for production deployments
-- **Alternative serialization**: MessagePack for performance-critical applications
+### Immediate Improvements
+
+1. Production Readiness
+
+- Better error handling in backend (channel errors, connection recovery)
+- Graceful degradation when RabbitMQ is down
+- Health check endpoints
+- Metrics/monitoring integration (Prometheus?)
+
+2. Performance
+
+- Connection pooling for RabbitMQ channels
+- Message batching to reduce overhead
+- Compression for large payloads
+
+3. Developer Experience
+
+- TypeScript support in examples
+- More example apps (notifications, collaborative editing?)
+- Better error messages
+
+### Bigger Features
+
+4. Advanced Patterns
+
+- Request-reply pattern (RPC over WebMQ)
+- Message persistence/replay
+- Dead letter queues
+- Priority queues
+
+5. Security
+
+- TLS/WSS support
+- Rate limiting per client
+- Message size limits
+- Better authentication examples
+
+6. Observability
+
+- Built-in metrics (msg/s, latency, queue depth)
+- Distributed tracing
+- Admin dashboard
+
+### Nice to Have
+
+7. Alternative Transports
+
+- Redis backend (instead of RabbitMQ)
+- Kafka backend
+- In-memory backend for testing
+
+8. Framework Integrations
+
+- React hooks package
+- Vue composables
+- Next.js API routes example
 
 ## For Contributors
 

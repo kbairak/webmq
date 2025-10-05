@@ -1,0 +1,17 @@
+{
+  "type": "module",
+  "name": "webmq-benchmarks",
+  "version": "1.0.0",
+  "description": "Benchmarking tool for WebMQ",
+  "private": true,
+  "scripts": {
+    "benchmark": "node benchmark.js"
+  },
+  "dependencies": {
+    "commander": "^12.1.0",
+    "get-port": "^7.1.0",
+    "testcontainers": "^10.16.0",
+    "webmq-backend": "file:../packages/backend",
+    "webmq-frontend": "file:../packages/frontend"
+  }
+}
