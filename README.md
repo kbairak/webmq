@@ -17,12 +17,11 @@ Here's a complete real-time chat in under 30 lines:
 ```javascript
 import { WebMQServer } from 'webmq-backend';
 
-const server = new WebMQServer({
-  rabbitmqUrl: 'amqp://localhost',
-  exchangeName: 'chat_app'
-});
+const server = new WebMQServer(
+  'amqp://localhost',
+  'chat_app'
+);
 
-server.logLevel = 'info';
 await server.start(8080);
 console.log('WebMQ server running on ws://localhost:8080');
 ```
@@ -35,32 +34,42 @@ import { useState, useEffect } from 'react';
 
 setup('ws://localhost:8080');
 
-export function Chat() {
+export default function Chat() {
+  const username = useRef(randomName());
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
 
+  const onMessageAdded = useCallback((msg) => { setMessages((prev) => [...prev, msg]); }, []);
   useEffect(() => {
-    function _appendMessage(msg) {
-      setMessages((prev) => [...prev, msg]);
-    }
-    listen('chat.messages', _appendMessage);
-    return () => unlisten('chat.messages', _appendMessage);
+    listen('chat.messages', onMessageAdded);
+    return () => unlisten('chat.messages', onMessageAdded);
   }, []);
 
-  const sendMessage = () => {
-    publish('chat.messages', { text: input, user: 'Alice' });
+  const sendMessage = (e) => {
+    e.preventDefault();
+    publish('chat.messages', { id: crypto.randomUUID(), text: input, user: username.current });
     setInput('');
   };
 
   return (
     <div>
-      {messages.map(msg => <div key={msg.id}>{msg.user}: {msg.text}</div>)}
-      <input value={input} onChange={e => setInput(e.target.value)} />
-      <button onClick={sendMessage}>Send</button>
+      {messages.map(msg => <p key={msg.id}>{msg.user}: {msg.text}</p>)}
+      <form onSubmit={sendMessage}>
+        <input value={input} onChange={(e) => setInput(e.target.value)} />
+        <button>Send</button>
+      </form>
     </div>
   );
 }
 ```
+
+> You can run this example with
+>
+> ```sh
+> cd examples/basic-chat
+> npm install
+> npm run start
+> ```
 
 *Note: WebMQ works with any frontend framework—React, Vue, vanilla JavaScript, or anything that can use WebSockets.*
 
@@ -71,27 +80,6 @@ WebMQ acts as a bridge between WebSocket connections and RabbitMQ's topic exchan
 **Topic Routing**: Use patterns like `chat.room.1`, `order.created`, or `user.profile.updated` to organize your events. Subscribers can listen to exact matches (`order.created`) or patterns (`order.*` for all order events).
 
 **Bidirectional Flow**: Frontends can both publish events and subscribe to updates. Backend services can process events and publish results back to specific users or broadcast to all connected clients.
-
-### Architecture
-
-WebMQ uses clean, modular architectures in both frontend and backend to ensure maintainability and extensibility.
-
-**Frontend Component Architecture**: The client uses specialized managers that co-locate related functionality:
-
-- **ConnectionManager**: WebSocket lifecycle and reconnection logic
-- **SessionManager**: Persistent session handling for message persistence
-- **ActionExecutor**: Centralized action dispatching with hook support
-- **MessagePublisher**: Publishing with acknowledgments and queuing
-- **SubscriptionManager**: Topic subscriptions and message routing
-
-**Backend Strategy Pattern**: Actions are handled by dedicated strategy classes that co-locate validation, execution, and response logic:
-
-- **PublishStrategy**: Message publishing with success/failure acknowledgments
-- **ListenStrategy**: RabbitMQSubscription setup with event emission
-- **UnlistenStrategy**: RabbitMQSubscription cleanup with proper resource management
-- **MessageProcessor**: Centralized strategy selection and execution
-
-This architecture ensures that actions and their consequences (like publish/ack or listen/events) are located together, making the codebase easier to understand and maintain.
 
 ### Server-Side Hooks
 
@@ -136,16 +124,38 @@ const payloadEnhancementHook = async (context, message, next) => {
   await next();
 };
 
-const server = new WebMQServer({
-  rabbitmqUrl: 'amqp://localhost',
-  exchangeName: 'secure_app',
-  hooks: {
+const server = new WebMQServer(
+  'amqp://localhost',
+  'secure_app',
+  {
     pre: [authenticationHook],        // Runs before all actions
     onListen: [authorizationHook],    // Runs only for 'listen' actions
     onPublish: [payloadEnhancementHook] // Runs only for 'publish' actions
   }
-});
+);
 ```
+
+**Hook Types:**
+
+- **`pre`**: Runs before all actions (identify, publish, listen, unlisten)
+- **`onIdentify`**: Runs when client sends initial identification message with sessionId, establishing session queue and consumer
+- **`onPublish`**: Runs only when publishing messages, can modify `message.routingKey` and `message.payload`
+- **`onListen`**: Runs only when setting up listeners, can modify `message.bindingKey`
+- **`onUnlisten`**: Runs only when unsubscribing from listeners, can modify `message.bindingKey`
+
+**Hook Parameters:**
+
+Each hook receives three parameters, matching the backend pattern:
+
+- **`context`**: Persistent object containing `ws` (the WebSocket connection object) and `sessionId` (the session ID, set after identify action). Hooks can add custom properties to store user data or other state across requests.
+- **`message`**: Action-specific data containing:
+  - `action`: The type of action ('identify', 'publish', 'listen', 'unlisten')
+  - `routingKey`: Topic being published to (publish actions)
+  - `payload`: Message data (publish, identify actions)
+  - `bindingKey`: Topic pattern being listened to (listen, unlisten actions)
+  - `sessionId`: Session identifier (identify actions)
+  - `messageId`: A unique ID for this message (all actions)
+- **`next`**: Function to continue to the next hook or main action
 
 ### Client-Side Hooks
 
@@ -191,6 +201,7 @@ setup('ws://localhost:8080', {
 - **`pre`**: Runs before all actions (publish, listen, message processing)
 - **`onPublish`**: Runs only when publishing messages, can modify `message.routingKey` and `message.payload`
 - **`onListen`**: Runs only when setting up listeners, can modify `message.bindingKey`
+- **`onUnlisten`**: Runs only when unsubscribing from listeners, can modify `message.bindingKey`
 - **`onMessage`**: Runs for all incoming messages, can modify `message.payload` before callbacks
 
 **Hook Parameters:**
@@ -232,8 +243,8 @@ Both frontend and backend support configurable logging levels for debugging and 
 
 ```javascript
 // Frontend logging
-import { client } from 'webmq-frontend';
-client.logLevel = 'debug'; // 'silent' | 'error' | 'warn' | 'info' | 'debug'
+import { webMQClient } from 'webmq-frontend';
+webMQClient.logLevel = 'debug'; // 'silent' | 'error' | 'warn' | 'info' | 'debug'
 
 // Backend logging
 const server = new WebMQServer({ /* ... */ });
@@ -242,35 +253,24 @@ server.logLevel = 'info';
 
 ### EventEmitter Events
 
-Both WebMQClient and WebMQServer extend EventEmitter, providing connection state monitoring:
+The WebMQClient extends EventEmitter, providing connection state monitoring:
 
 **Frontend Events:**
 
-- `'connect'`: Initial connection established
-- `'disconnect'`: Connection lost
-- `'reconnect'`: Connection restored after being lost
-
-**Backend Events:**
-
-- `'client.connected'`: { connectionId }
-- `'client.disconnected'`: { connectionId }
-- `'message.received'`: { connectionId, message }
-- `'message.processed'`: { connectionId, message }
-- `'subscription.created'`: { connectionId, bindingKey, queue }
-- `'subscription.removed'`: { connectionId, bindingKey }
-- `'error'`: { connectionId?, error, context? }
+- `'connected'`: Initial connection established
+- `'disconnected'`: Connection lost
+- `'reconnecting'`: Connection is attempting to reconnect (includes retry count in event data)
+- `'error'`: WebSocket error occurred
 
 ```javascript
 // Frontend event monitoring
-import { client } from 'webmq-frontend';
-client.on('connect', () => console.log('Connected'));
-client.on('disconnect', () => console.log('Disconnected'));
-
-// Backend event monitoring
-server.on('client.connected', ({ connectionId }) => {
-  console.log(`Client ${connectionId} connected`);
-});
+import { webMQClient } from 'webmq-frontend';
+webMQClient.on('connected', () => console.log('Connected'));
+webMQClient.on('disconnected', () => console.log('Disconnected'));
+webMQClient.on('reconnecting', (event) => console.log('Reconnecting...', event));
 ```
+
+**Note:** The backend WebMQServer does not currently emit custom events. For backend monitoring, use the built-in logging system by setting `server.logLevel = 'debug'`.
 
 ## Features
 
@@ -290,11 +290,11 @@ server.on('client.connected', ({ connectionId }) => {
 
 #### Hybrid Singleton Pattern
 
-WebMQ uses a hybrid approach that provides convenience for common use cases while allowing flexibility for advanced scenarios. The exported functions (`setup`, `listen`, `publish`, etc.) are convenience wrappers around a default singleton client instance.
+WebMQ uses a hybrid approach that provides convenience for common use cases while allowing flexibility for advanced scenarios. The exported functions (`setup`, `listen`, `publish`, `unlisten`) are convenience wrappers around a default singleton client instance.
 
 ```javascript
 // These are equivalent:
-import { setup, listen, publish } from 'webmq-frontend';
+import { setup, listen, publish, unlisten } from 'webmq-frontend';
 setup('ws://localhost:8080');
 
 // vs
@@ -306,7 +306,7 @@ const client = new WebMQClient();
 client.setup('ws://localhost:8080');
 ```
 
-For advanced features like logging or queue monitoring, you can either create a custom instance or import the singleton. See [Logging Configuration](#logging-configuration) and [EventEmitter Events](#eventemitter-events) in Core Concepts.
+For advanced features like logging or event monitoring, you can either create a custom instance or import the singleton. See [Logging Configuration](#logging-configuration) and [EventEmitter Events](#eventemitter-events) in Core Concepts.
 
 Multiple clients can be created to connect to different backends:
 
@@ -319,109 +319,66 @@ const analyticsClient = new WebMQClient('ws://analytics.example.com');
 
 **Constructor:**
 
-- `new WebMQClient(url?, options?)`: Create new client instance
-  - `url` (string, optional): WebSocket URL
-  - `options` (object, optional): Configuration options
+- `new WebMQClient(url?, hooks?)`: Create new client instance
+  - `url` (string, optional): WebSocket URL (e.g., 'ws://localhost:8080')
+  - `hooks` (WebMQClientHooks, optional): Client-side middleware hooks
 
 **Configuration Methods:**
 
-- `setup(url, options?)` (also available as standalone import): Configure connection
+- `setup(url, hooks?)` (also available as standalone import): Configure connection
   - `url` (string): WebSocket URL (e.g., 'ws://localhost:8080')
-  - `options` (object, optional):
-    - `maxReconnectAttempts` (number): Default 5
-    - `messageTimeout` (number): Timeout in ms, default 10000
-    - `maxQueueSize` (number): Offline queue size, default 100
-    - `hooks` (object, optional): Client-side middleware hooks
-      - `pre` (ClientHook[]): Run before all actions
-      - `onPublish` (ClientHook[]): Run for 'publish' actions
-      - `onListen` (ClientHook[]): Run for 'listen' actions
-      - `onMessage` (ClientHook[]): Run for incoming messages
+  - `hooks` (WebMQClientHooks, optional): Client-side middleware hooks
+    - `pre` (ClientHook[]): Run before all actions
+    - `onPublish` (ClientHook[]): Run for 'publish' actions
+    - `onListen` (ClientHook[]): Run for 'listen' actions
+    - `onUnlisten` (ClientHook[]): Run for 'unlisten' actions
+    - `onMessage` (ClientHook[]): Run for incoming messages
 
 **Core Methods:**
 
-- `connect()` (also available as standalone import): Explicitly connect to server
-  - Returns: Promise<void>
-  - Note: Auto-called by listen/publish
 - `listen(bindingKey, callback)` (also available as standalone import): Subscribe to events
-  - `bindingKey` (string): Topic pattern to subscribe to
+  - `bindingKey` (string): Topic pattern to subscribe to (supports `*` and `#` wildcards)
   - `callback` (function): Handler receiving payload
+  - Returns: Promise<void>
+- `unlisten(bindingKey, callback)` (also available as standalone import): Unsubscribe from events
+  - `bindingKey` (string): Topic pattern to stop listening to
+  - `callback` (function): The specific callback to remove
   - Returns: Promise<void>
 - `publish(routingKey, payload)` (also available as standalone import): Publish events
   - `routingKey` (string): Topic to publish to
   - `payload` (any): Data to send (will be JSON.stringify'd)
   - Returns: Promise<void> (resolves on server ACK)
-- `disconnect(options?)` (also available as standalone import): Disconnect from server
-  - `options` (object, optional):
-    - `onActiveListeners` ('ignore' | 'throw' | 'clear'): Default 'ignore'
 
-**Advanced Methods:**
+**Properties:**
 
-- `getQueueSize()`: Get number of queued offline messages
-  - Returns: number
-- `clearQueue()`: Clear all queued messages
+- `logLevel` (get/set): Control logging verbosity ('silent' | 'error' | 'warn' | 'info' | 'debug')
 
 ### Backend API
 
 #### WebMQServer Class
 
-**`new WebMQServer(options)`**
+**`new WebMQServer(rabbitmqUrl, exchangeName, hooks?)`**
 
-- `options` (object):
-  - `rabbitmqUrl` (string): AMQP connection URL
-  - `exchangeName` (string): RabbitMQ exchange name
-  - `exchangeDurable` (boolean, optional): Default false
-  - `hooks` (object, optional):
-    - `pre` (Hook[]): Run before all actions
-    - `onListen` (Hook[]): Run for 'listen' actions
-    - `onPublish` (Hook[]): Run for 'publish' actions
-    - `onUnlisten` (Hook[]): Run for 'unlisten' actions
+- `rabbitmqUrl` (string): AMQP connection URL (e.g., 'amqp://localhost')
+- `exchangeName` (string): RabbitMQ exchange name (exchanges are always durable topic exchanges)
+- `hooks` (object, optional):
+  - `pre` (Hook[]): Run before all actions
+  - `onIdentify` (Hook[]): Run for 'identify' actions
+  - `onPublish` (Hook[]): Run for 'publish' actions
+  - `onListen` (Hook[]): Run for 'listen' actions
+  - `onUnlisten` (Hook[]): Run for 'unlisten' actions
 
 **Instance Methods:**
 
 - `start(port)`: Start WebSocket server on port
 - `stop()`: Stop server and cleanup
 
-### Usage Examples
-
-**Basic Setup**:
-
-```javascript
-// Frontend
-import { setup, listen, publish } from 'webmq-frontend';
-setup('ws://localhost:8080');
-listen('notifications.*', console.log);
-await publish('user.action', { type: 'click' });
-
-// Backend
-import { WebMQServer } from 'webmq-backend';
-const server = new WebMQServer({
-  rabbitmqUrl: 'amqp://localhost',
-  exchangeName: 'my_app'
-});
-server.logLevel = 'debug';
-await server.start(8080);
-```
-
-**Error Handling**:
-
-```javascript
-try {
-  await publish('critical.data', payload);
-} catch (error) {
-  if (error.message.includes('timeout')) {
-    // Retry logic
-  } else {
-    // Handle other errors
-  }
-}
-```
-
 ## Future Features
 
 - **Rate limiting**: Per-connection and per-user message throttling
-- **Message persistence**: Store-and-forward for offline clients
 - **Health checks**: Monitoring endpoints for production deployments
 - **Alternative serialization**: MessagePack for performance-critical applications
+- Combine WebMQServer with express (and other) servers
 
 ## For Contributors
 

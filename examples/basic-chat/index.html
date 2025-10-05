@@ -1,73 +1,13 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>WebMQ Basic Chat</title>
-    <style>
-      body {
-        font-family:
-          -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica,
-          Arial, sans-serif;
-        margin: 2rem;
-        background: #f7f7f7;
-      }
-      #messages {
-        list-style-type: none;
-        margin: 0;
-        padding: 0;
-        background: white;
-        border: 1px solid #ddd;
-        border-radius: 8px;
-        height: 400px;
-        overflow-y: scroll;
-        padding: 1rem;
-      }
-      #messages li {
-        padding: 0.5rem 1rem;
-        margin-bottom: 0.5rem;
-        border-radius: 6px;
-      }
-      #messages li:nth-child(odd) {
-        background: #f1f1f1;
-      }
-      form {
-        display: flex;
-        margin-top: 1rem;
-      }
-      input {
-        flex-grow: 1;
-        border: 1px solid #ccc;
-        padding: 0.75rem;
-        border-radius: 6px;
-      }
-      button {
-        background: #007bff;
-        color: white;
-        border: none;
-        padding: 0.75rem 1.5rem;
-        margin-left: 1rem;
-        border-radius: 6px;
-        cursor: pointer;
-      }
-      button:hover {
-        background: #0056b3;
-      }
-      h1 {
-        font-weight: 500;
-      }
-    </style>
+    <title>WebMQ Chat</title>
+    <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
-    <h1>WebMQ Basic Chat</h1>
-    <ul id="messages"></ul>
-    <form id="form">
-      <input
-        id="input"
-        autocomplete="off"
-        placeholder="Enter message..."
-      /><button>Send</button>
-    </form>
-    <script type="module" src="/main.js"></script>
+    <div id="root"></div>
+    <script type="module" src="./main.jsx"></script>
   </body>
 </html>

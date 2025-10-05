@@ -1,9 +1,14 @@
 import { WebMQServer } from 'webmq-backend';
+import { RabbitMQContainer } from '@testcontainers/rabbitmq';
 
-const port = 8080;
-const rabbitmqUrl = 'amqp://guest:guest@localhost:5672';
-const exchangeName = 'webmq_chat_exchange';
+const rabbitmq = await new RabbitMQContainer(
+  'rabbitmq:3.11-management'
+).start();
 
-const server = new WebMQServer(rabbitmqUrl, exchangeName);
+const server = new WebMQServer(
+  rabbitmq.getAmqpUrl(),
+  'chat_app'
+);
 
-server.start(port).catch(console.error);
+await server.start(8080);
+console.log('WebMQ server running on ws://localhost:8080');

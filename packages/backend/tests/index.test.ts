@@ -161,7 +161,7 @@ describe('WebMQServer', () => {
     it('should accept hooks in constructor', () => {
       const hooks: WebMQHooks = {
         pre: [jest.fn() as HookFunction<ClientMessage>],
-        identify: [jest.fn() as HookFunction<ClientMessage>],
+        onIdentify: [jest.fn() as HookFunction<ClientMessage>],
       };
 
       const serverWithHooks = new WebMQServer('amqp://localhost', 'test-exchange', hooks);
@@ -614,7 +614,7 @@ describe('WebMQServer', () => {
 
       const hooks: WebMQHooks = {
         pre: [preHook],
-        identify: [identifyHook],
+        onIdentify: [identifyHook],
       };
 
       server = new WebMQServer('amqp://localhost', 'test-exchange', hooks);

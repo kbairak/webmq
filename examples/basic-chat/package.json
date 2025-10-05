@@ -1,6 +1,6 @@
 {
   "type": "module",
-  "name": "basic-chat",
+  "name": "webmq-basic-chat",
   "version": "1.0.0",
   "description": "Basic chat example for WebMQ",
   "private": true,
@@ -12,12 +12,15 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "esbuild": "0.25.9",
+    "@testcontainers/rabbitmq": "^11.5.1",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
     "webmq-backend": "1.0.0",
     "webmq-frontend": "1.0.0"
   },
   "devDependencies": {
-    "vite": "^7.1.5",
-    "concurrently": "^9.2.1"
+    "@vitejs/plugin-react": "^5.0.0",
+    "concurrently": "^9.2.1",
+    "vite": "^7.1.5"
   }
 }

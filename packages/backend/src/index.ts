@@ -3,7 +3,7 @@ import amqplib, { Channel, ChannelModel } from 'amqplib';
 import { HookFunction, runWithHooks } from './hooks';
 
 export type ClientMessage = {
-  action: 'publish' | 'listen' | 'unlisten' | 'identify';
+  action: 'identify' | 'publish' | 'listen' | 'unlisten';
   routingKey?: string;
   payload?: any;
   bindingKey?: string;
@@ -13,10 +13,10 @@ export type ClientMessage = {
 
 export type WebMQHooks = {
   pre?: HookFunction<ClientMessage>[];
-  identify?: HookFunction<ClientMessage>[];
-  publish?: HookFunction<ClientMessage>[];
-  listen?: HookFunction<ClientMessage>[];
-  unlisten?: HookFunction<ClientMessage>[];
+  onIdentify?: HookFunction<ClientMessage>[];
+  onPublish?: HookFunction<ClientMessage>[];
+  onListen?: HookFunction<ClientMessage>[];
+  onUnlisten?: HookFunction<ClientMessage>[];
 }
 
 /**
@@ -32,10 +32,10 @@ export class WebMQServer {
   private _wss: WebSocketServer | null = null;
   private _hooks = {
     pre: [] as HookFunction<ClientMessage>[],
-    identify: [] as HookFunction<ClientMessage>[],
-    publish: [] as HookFunction<ClientMessage>[],
-    listen: [] as HookFunction<ClientMessage>[],
-    unlisten: [] as HookFunction<ClientMessage>[]
+    onIdentify: [] as HookFunction<ClientMessage>[],
+    onPublish: [] as HookFunction<ClientMessage>[],
+    onListen: [] as HookFunction<ClientMessage>[],
+    onUnlisten: [] as HookFunction<ClientMessage>[]
   };
 
   constructor(
@@ -46,10 +46,10 @@ export class WebMQServer {
     if (hooks) {
       this._hooks = {
         pre: hooks.pre || [],
-        identify: hooks.identify || [],
-        publish: hooks.publish || [],
-        listen: hooks.listen || [],
-        unlisten: hooks.unlisten || []
+        onIdentify: hooks.onIdentify || [],
+        onPublish: hooks.onPublish || [],
+        onListen: hooks.onListen || [],
+        onUnlisten: hooks.onUnlisten || []
       };
     }
   }
@@ -104,7 +104,7 @@ export class WebMQServer {
               case 'identify':
                 await runWithHooks(
                   hookContext,
-                  [...this._hooks.pre, ...this._hooks.identify],
+                  [...this._hooks.pre, ...this._hooks.onIdentify],
                   message,
                   async () => {
                     if (!message.sessionId) {
@@ -195,7 +195,7 @@ export class WebMQServer {
               case 'publish':
                 await runWithHooks(
                   hookContext,
-                  [...this._hooks.pre, ...this._hooks.publish],
+                  [...this._hooks.pre, ...this._hooks.onPublish],
                   message,
                   async () => {
                     if (!message.routingKey || !message.payload) {
@@ -243,7 +243,7 @@ export class WebMQServer {
               case 'listen':
                 await runWithHooks(
                   hookContext,
-                  [...this._hooks.pre, ...this._hooks.listen],
+                  [...this._hooks.pre, ...this._hooks.onListen],
                   message,
                   async () => {
                     if (!message.bindingKey) {
@@ -280,7 +280,7 @@ export class WebMQServer {
               case 'unlisten':
                 await runWithHooks(
                   hookContext,
-                  [...this._hooks.pre, ...this._hooks.unlisten],
+                  [...this._hooks.pre, ...this._hooks.onUnlisten],
                   message,
                   async () => {
                     if (!message.bindingKey) {
