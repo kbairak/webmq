@@ -27,16 +27,16 @@ function Todo({ id, initialData, onDelete }) {
   }, []);
 
   useEffect(() => {
-    listen(`todos.update.${id}`, handleUpdated);
-    listen(`todos.delete.${id}`, handleDeleted);
+    listen(`todos.updated.${id}`, handleUpdated);
+    listen(`todos.deleted.${id}`, handleDeleted);
     return () => {
-      unlisten(`todos.delete.${id}`, handleDeleted);
-      unlisten(`todos.update.${id}`, handleUpdated);
+      unlisten(`todos.deleted.${id}`, handleDeleted);
+      unlisten(`todos.updated.${id}`, handleUpdated);
     };
   }, []);
 
   const handleToggleComplete = async () => {
-    await publish(`todos.update.${id}`, {
+    await publish(`todos.updated.${id}`, {
       text,
       completed: !completed,
       user: username,
@@ -49,17 +49,18 @@ function Todo({ id, initialData, onDelete }) {
     setIsEditing(true);
   };
 
-  const handleSaveEdit = async () => {
+  const handleSaveEdit = (e) => {
+    e.preventDefault();
+
     if (!editText.trim()) return;
 
-    setIsEditing(false);
-
-    await publish(`todos.update.${id}`, {
+    publish(`todos.updated.${id}`, {
       text: editText,
       completed,
       user: username,
       timestamp: Date.now(),
     });
+    setIsEditing(false);
   };
 
   const handleCancelEdit = () => {
@@ -68,17 +69,14 @@ function Todo({ id, initialData, onDelete }) {
   };
 
   const handleDelete = async () => {
-    await publish(`todos.delete.${id}`, {
+    await publish(`todos.deleted.${id}`, {
       user: username,
       timestamp: Date.now(),
     });
   };
 
-  // TODO: If the input is part of a form, ENTER natively sbmits it (if there is a submit button)
   const handleKeyDown = (e) => {
-    if (e.key === 'Enter') {
-      handleSaveEdit();
-    } else if (e.key === 'Escape') {
+    if (e.key === 'Escape') {
       handleCancelEdit();
     }
   };
@@ -93,7 +91,7 @@ function Todo({ id, initialData, onDelete }) {
       />
 
       {isEditing ? (
-        <div className="edit-controls">
+        <form onSubmit={handleSaveEdit} className="edit-controls">
           <input
             type="text"
             value={editText}
@@ -102,9 +100,9 @@ function Todo({ id, initialData, onDelete }) {
             className="edit-input"
             autoFocus
           />
-          <button onClick={handleSaveEdit} className="save-btn">Save</button>
-          <button onClick={handleCancelEdit} className="cancel-btn">Cancel</button>
-        </div>
+          <button type="submit" className="save-btn">Save</button>
+          <button onClick={handleCancelEdit} type="button" className="cancel-btn">Cancel</button>
+        </form>
       ) : (
         <div className="todo-content" onDoubleClick={handleStartEdit}>
           <span className="todo-text">{text || '(empty)'}</span>

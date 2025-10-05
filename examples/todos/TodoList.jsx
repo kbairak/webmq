@@ -13,16 +13,16 @@ function TodoList() {
   }, [])
 
   useEffect(() => {
-    listen('todos.add', handleTodoAdded);
-    return () => unlisten('todos.add', handleTodoAdded);
+    listen('todos.added', handleTodoAdded);
+    return () => unlisten('todos.added', handleTodoAdded);
   }, []);
 
   const handleAddTodo = async (e) => {
     e.preventDefault();
     if (!newTodoText.trim()) return;
 
-    // Publish to all clients (we'll receive it via our todos.add listener)
-    await publish('todos.add', {
+    // Publish to all clients (we'll receive it via our todos.added listener)
+    await publish('todos.added', {
       id: crypto.randomUUID(),
       text: newTodoText,
       completed: false,
@@ -33,7 +33,7 @@ function TodoList() {
     setNewTodoText('');
   };
 
-  const handleTodoDelete = (id) => {
+  const handleTodoDeleted = (id) => {
     setTodos((prev) => {
       const newTodos = { ...prev };
       delete newTodos[id];
@@ -75,7 +75,7 @@ function TodoList() {
               key={todo.id}
               id={todo.id}
               initialData={todo}
-              onDelete={handleTodoDelete}
+              onDelete={handleTodoDeleted}
             />
           ))
         )}

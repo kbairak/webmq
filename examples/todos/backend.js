@@ -6,7 +6,7 @@ const rabbitmq = await new RabbitMQContainer(
 ).start();
 
 const server = new WebMQServer(rabbitmq.getAmqpUrl(), 'todos_exchange');
-server.logLevel = 'debug';
+// server.logLevel = 'debug';
 await server.start(8080);
 
 console.log('Todo backend running on ws://localhost:8080');

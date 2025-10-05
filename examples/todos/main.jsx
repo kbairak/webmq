@@ -2,10 +2,10 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App.jsx';
 
-import { setup, webMQClient } from 'webmq-frontend';
+import { setup } from 'webmq-frontend';
 
 setup('ws://localhost:8080');
-webMQClient.logLevel = 'debug';
+// webMQClient.logLevel = 'debug';
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
