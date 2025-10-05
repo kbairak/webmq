@@ -115,12 +115,12 @@ describe('WebMQServer', () => {
   describe('Lifecycle', () => {
 
     beforeEach(() => {
-      server = new WebMQServer('amqp://localhost', 'test-exchange');
+      server = new WebMQServer({ rabbitmqUrl: 'amqp://localhost', exchangeName: 'test-exchange', port: 8080 });
       server.logLevel = 'silent';
     });
 
     it('should initialize RabbitMQ connection and WebSocket server', async () => {
-      await server.start(8080);
+      await server.start();
 
       expect(amqplib.connect).toHaveBeenCalledWith('amqp://localhost');
       expect(mockConnection.createChannel).toHaveBeenCalled();
@@ -134,7 +134,7 @@ describe('WebMQServer', () => {
     });
 
     it('should handle WebSocket connections', async () => {
-      await server.start(8080);
+      await server.start();
       const connectionHandler = mockWSS.on.mock.calls.find(
         (call: any) => call[0] === 'connection'
       )?.[1];
@@ -146,7 +146,7 @@ describe('WebMQServer', () => {
     });
 
     it('should stop server and clean up resources', async () => {
-      await server.start(8080);
+      await server.start();
       await server.stop();
 
       expect(mockWSS.close).toHaveBeenCalled();
@@ -164,7 +164,7 @@ describe('WebMQServer', () => {
         onIdentify: [jest.fn() as HookFunction<ClientMessage>],
       };
 
-      const serverWithHooks = new WebMQServer('amqp://localhost', 'test-exchange', hooks);
+      const serverWithHooks = new WebMQServer({ rabbitmqUrl: 'amqp://localhost', exchangeName: 'test-exchange', port: 8080, hooks });
       serverWithHooks.logLevel = 'silent';
       expect(serverWithHooks).toBeInstanceOf(WebMQServer);
     });
@@ -174,9 +174,9 @@ describe('WebMQServer', () => {
     let messageHandler: Function;
 
     beforeEach(async () => {
-      server = new WebMQServer('amqp://localhost', 'test-exchange');
+      server = new WebMQServer({ rabbitmqUrl: 'amqp://localhost', exchangeName: 'test-exchange', port: 8080 });
       server.logLevel = 'silent';
-      await server.start(8080);
+      await server.start();
 
       const connectionHandler = mockWSS.on.mock.calls.find(
         (call: any) => call[0] === 'connection'
@@ -446,9 +446,9 @@ describe('WebMQServer', () => {
     let closeHandler: Function;
 
     beforeEach(async () => {
-      server = new WebMQServer('amqp://localhost', 'test-exchange');
+      server = new WebMQServer({ rabbitmqUrl: 'amqp://localhost', exchangeName: 'test-exchange', port: 8080 });
       server.logLevel = 'silent';
-      await server.start(8080);
+      await server.start();
 
       const connectionHandler = mockWSS.on.mock.calls.find(
         (call: any) => call[0] === 'connection'
@@ -617,9 +617,9 @@ describe('WebMQServer', () => {
         onIdentify: [identifyHook],
       };
 
-      server = new WebMQServer('amqp://localhost', 'test-exchange', hooks);
+      server = new WebMQServer({ rabbitmqUrl: 'amqp://localhost', exchangeName: 'test-exchange', port: 8080, hooks });
       server.logLevel = 'silent';
-      await server.start(8080);
+      await server.start();
 
       const connectionHandler = mockWSS.on.mock.calls.find(
         (call: any) => call[0] === 'connection'
@@ -675,9 +675,9 @@ describe('WebMQServer', () => {
     it('should stop execution if hook does not call next', async () => {
       // This functionality is thoroughly tested in hooks.test.ts
       // Here we just verify the server can be created with hooks
-      const testServer = new WebMQServer('amqp://localhost', 'test-exchange', {
+      const testServer = new WebMQServer({ rabbitmqUrl: 'amqp://localhost', exchangeName: 'test-exchange', port: 8080, hooks: {
         pre: [jest.fn() as HookFunction<ClientMessage>]
-      });
+      } });
       testServer.logLevel = 'silent';
       expect(testServer).toBeInstanceOf(WebMQServer);
     });
@@ -689,9 +689,9 @@ describe('WebMQServer', () => {
     let messageHandler: Function;
 
     beforeEach(async () => {
-      server = new WebMQServer('amqp://localhost', 'test-exchange');
+      server = new WebMQServer({ rabbitmqUrl: 'amqp://localhost', exchangeName: 'test-exchange', port: 8080 });
       server.logLevel = 'silent';
-      await server.start(8080);
+      await server.start();
 
       const connectionHandler = mockWSS.on.mock.calls.find(
         (call: any) => call[0] === 'connection'

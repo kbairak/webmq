@@ -17,12 +17,13 @@ Here's a complete real-time chat in under 30 lines:
 ```javascript
 import { WebMQServer } from 'webmq-backend';
 
-const server = new WebMQServer(
-  'amqp://localhost',
-  'chat_app'
-);
+const server = new WebMQServer({
+  rabbitmqUrl: 'amqp://localhost',
+  exchangeName: 'chat_app',
+  port: 8080
+});
 
-await server.start(8080);
+await server.start();
 console.log('WebMQ server running on ws://localhost:8080');
 ```
 
@@ -124,15 +125,16 @@ const payloadEnhancementHook = async (context, message, next) => {
   await next();
 };
 
-const server = new WebMQServer(
-  'amqp://localhost',
-  'secure_app',
-  {
+const server = new WebMQServer({
+  rabbitmqUrl: 'amqp://localhost',
+  exchangeName: 'secure_app',
+  port: 8080,
+  hooks: {
     pre: [authenticationHook],        // Runs before all actions
     onListen: [authorizationHook],    // Runs only for 'listen' actions
     onPublish: [payloadEnhancementHook] // Runs only for 'publish' actions
   }
-);
+});
 ```
 
 **Hook Types:**
@@ -247,7 +249,11 @@ import { webMQClient } from 'webmq-frontend';
 webMQClient.logLevel = 'debug'; // 'silent' | 'error' | 'warn' | 'info' | 'debug'
 
 // Backend logging
-const server = new WebMQServer({ /* ... */ });
+const server = new WebMQServer({
+  rabbitmqUrl: 'amqp://localhost',
+  exchangeName: 'my_app',
+  port: 8080
+});
 server.logLevel = 'info';
 ```
 
@@ -357,28 +363,67 @@ const analyticsClient = new WebMQClient('ws://analytics.example.com');
 
 #### WebMQServer Class
 
-**`new WebMQServer(rabbitmqUrl, exchangeName, hooks?)`**
+**`new WebMQServer(options)`**
 
-- `rabbitmqUrl` (string): AMQP connection URL (e.g., 'amqp://localhost')
-- `exchangeName` (string): RabbitMQ exchange name (exchanges are always durable topic exchanges)
-- `hooks` (object, optional):
-  - `pre` (Hook[]): Run before all actions
-  - `onIdentify` (Hook[]): Run for 'identify' actions
-  - `onPublish` (Hook[]): Run for 'publish' actions
-  - `onListen` (Hook[]): Run for 'listen' actions
-  - `onUnlisten` (Hook[]): Run for 'unlisten' actions
+- `options` (WebMQServerOptions): Configuration object extending WebSocket ServerOptions
+  - `rabbitmqUrl` (string, required): AMQP connection URL (e.g., 'amqp://localhost')
+  - `exchangeName` (string, required): RabbitMQ exchange name (exchanges are always durable topic exchanges)
+  - `port` (number, optional): Port to listen on for standalone mode
+  - `server` (http.Server | https.Server, optional): Existing HTTP/HTTPS server to attach to
+  - `hooks` (object, optional): Middleware hooks
+    - `pre` (Hook[]): Run before all actions
+    - `onIdentify` (Hook[]): Run for 'identify' actions
+    - `onPublish` (Hook[]): Run for 'publish' actions
+    - `onListen` (Hook[]): Run for 'listen' actions
+    - `onUnlisten` (Hook[]): Run for 'unlisten' actions
+  - All other options from [ws ServerOptions](https://github.com/websockets/ws/blob/master/doc/ws.md#new-websocketserveroptions-callback) (path, perMessageDeflate, etc.)
 
 **Instance Methods:**
 
-- `start(port)`: Start WebSocket server on port
+- `start()`: Start WebSocket server
 - `stop()`: Stop server and cleanup
+
+**Properties:**
+
+- `logLevel` (get/set): Control logging verbosity ('silent' | 'error' | 'warn' | 'info' | 'debug')
+
+**Examples:**
+
+Standalone mode:
+```javascript
+const server = new WebMQServer({
+  rabbitmqUrl: 'amqp://localhost',
+  exchangeName: 'my_app',
+  port: 8080
+});
+await server.start();
+```
+
+Attached to Express:
+```javascript
+import express from 'express';
+import { createServer } from 'http';
+
+const app = express();
+const httpServer = createServer(app);
+
+app.get('/health', (req, res) => res.json({ status: 'ok' }));
+
+const server = new WebMQServer({
+  rabbitmqUrl: 'amqp://localhost',
+  exchangeName: 'my_app',
+  server: httpServer
+});
+
+await server.start();
+httpServer.listen(8080);
+```
 
 ## Future Features
 
 - **Rate limiting**: Per-connection and per-user message throttling
 - **Health checks**: Monitoring endpoints for production deployments
 - **Alternative serialization**: MessagePack for performance-critical applications
-- Combine WebMQServer with express (and other) servers
 
 ## For Contributors
 

@@ -1,4 +1,4 @@
-import WebSocket, { WebSocketServer } from 'ws';
+import WebSocket, { WebSocketServer, ServerOptions } from 'ws';
 import amqplib, { Channel, ChannelModel } from 'amqplib';
 import { HookFunction, runWithHooks } from './hooks';
 
@@ -19,6 +19,12 @@ export type WebMQHooks = {
   onUnlisten?: HookFunction<ClientMessage>[];
 }
 
+export type WebMQServerOptions = ServerOptions & {
+  rabbitmqUrl: string;
+  exchangeName: string;
+  hooks?: WebMQHooks;
+}
+
 /**
  * WebMQ backend server that bridges WebSocket connections with RabbitMQ message broker.
  */
@@ -37,12 +43,17 @@ export class WebMQServer {
     onListen: [] as HookFunction<ClientMessage>[],
     onUnlisten: [] as HookFunction<ClientMessage>[]
   };
+  private readonly rabbitmqUrl: string;
+  private readonly exchangeName: string;
+  private readonly wsOptions: ServerOptions;
 
-  constructor(
-    private readonly rabbitmqUrl: string,
-    private readonly exchangeName: string,
-    hooks?: WebMQHooks
-  ) {
+  constructor(options: WebMQServerOptions) {
+    const { rabbitmqUrl, exchangeName, hooks, ...wsOptions } = options;
+
+    this.rabbitmqUrl = rabbitmqUrl;
+    this.exchangeName = exchangeName;
+    this.wsOptions = wsOptions;
+
     if (hooks) {
       this._hooks = {
         pre: hooks.pre || [],
@@ -79,12 +90,16 @@ export class WebMQServer {
     }
   }
 
-  public async start(port: number): Promise<void> {
-    this._log('info', `Starting WebMQ server on port ${port}`);
+  public async start(): Promise<void> {
+    this._log('info', 'Starting WebMQ server');
     await this._getRabbitmqChannel();
 
-    this._wss = new WebSocketServer({ port });
-    this._log('info', `WebSocket server listening on port ${port}`);
+    this._wss = new WebSocketServer(this.wsOptions);
+    if (this.wsOptions.port) {
+      this._log('info', `WebSocket server listening on port ${this.wsOptions.port}`);
+    } else {
+      this._log('info', 'WebSocket server attached to existing HTTP server');
+    }
 
     // Track this instance for graceful shutdown
     WebMQServer._serverInstances.add(this);

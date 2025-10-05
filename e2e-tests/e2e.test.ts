@@ -74,9 +74,13 @@ beforeAll(async () => {
   });
   rabbitMQHelper = new RabbitMQManager(channel, 'e2e_exchange_durable');
 
-  webmqServer = new WebMQServer(rabbitmqUrl, 'e2e_exchange_durable');
+  webmqServer = new WebMQServer({
+    rabbitmqUrl,
+    exchangeName: 'e2e_exchange_durable',
+    port: serverPort
+  });
   webmqServer.logLevel = 'silent'; // Keep tests quiet
-  await webmqServer.start(serverPort);
+  await webmqServer.start();
 
   webmqClient = new WebMQClient();
   webmqClient.logLevel = 'silent'; // Keep tests quiet
