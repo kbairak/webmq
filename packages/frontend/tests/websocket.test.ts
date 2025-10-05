@@ -35,6 +35,7 @@ const mockSessionStorage = {
 describe('WebMQClientWebSocket', () => {
   let originalWindow: any;
   let originalSessionStorage: any;
+  let ws: WebMQClientWebSocket;
 
   beforeEach(() => {
     jest.useFakeTimers();
@@ -97,7 +98,7 @@ describe('WebMQClientWebSocket', () => {
     it('should create sessionId from sessionStorage if available', () => {
       mockSessionStorage.getItem.mockReturnValue('existing-session-123');
 
-      const ws = new WebMQClientWebSocket('ws://test:8080');
+      const ws = new WebMQClientWebSocket('ws://test:8080', 'silent');
 
       expect(mockSessionStorage.getItem).toHaveBeenCalledWith('webmq_session_id');
       expect(ws.sessionId).toBe('existing-session-123');
@@ -107,7 +108,7 @@ describe('WebMQClientWebSocket', () => {
     it('should generate new sessionId if none exists', () => {
       mockSessionStorage.getItem.mockReturnValue(null);
 
-      const ws = new WebMQClientWebSocket('ws://test:8080');
+      const ws = new WebMQClientWebSocket('ws://test:8080', 'silent');
 
       expect(mockSessionStorage.getItem).toHaveBeenCalledWith('webmq_session_id');
       expect(mockSessionStorage.setItem).toHaveBeenCalledWith('webmq_session_id', 'test-uuid-1');
@@ -118,7 +119,7 @@ describe('WebMQClientWebSocket', () => {
       delete (global as any).window;
       delete (global as any).sessionStorage;
 
-      const ws = new WebMQClientWebSocket('ws://test:8080');
+      const ws = new WebMQClientWebSocket('ws://test:8080', 'silent');
 
       expect(ws.sessionId).toBe('test-uuid-1');
       expect(mockSessionStorage.getItem).not.toHaveBeenCalled();
@@ -135,12 +136,12 @@ describe('WebMQClientWebSocket', () => {
 
   describe('WebSocket Properties & API Compatibility', () => {
     it('should return correct readyState when no connection', () => {
-      const ws = new WebMQClientWebSocket('ws://test:8080');
+      const ws = new WebMQClientWebSocket('ws://test:8080', 'silent');
       expect(ws.readyState).toBe(WebSocket.CONNECTING);
     });
 
     it('should proxy WebSocket properties correctly', () => {
-      const ws = new WebMQClientWebSocket('ws://test:8080');
+      const ws = new WebMQClientWebSocket('ws://test:8080', 'silent');
 
       expect(ws.protocol).toBe('');
       expect(ws.extensions).toBe('');
@@ -148,7 +149,7 @@ describe('WebMQClientWebSocket', () => {
     });
 
     it('should handle binaryType correctly', () => {
-      const ws = new WebMQClientWebSocket('ws://test:8080');
+      const ws = new WebMQClientWebSocket('ws://test:8080', 'silent');
 
       expect(ws.binaryType).toBe('blob');
 
@@ -160,7 +161,7 @@ describe('WebMQClientWebSocket', () => {
 
   describe('Event Handling', () => {
     it('should add and remove event listeners correctly', () => {
-      const ws = new WebMQClientWebSocket('ws://test:8080');
+      const ws = new WebMQClientWebSocket('ws://test:8080', 'silent');
       const openHandler = jest.fn();
       const messageHandler = jest.fn();
 
@@ -177,7 +178,7 @@ describe('WebMQClientWebSocket', () => {
     });
 
     it('should emit events to registered listeners', () => {
-      const ws = new WebMQClientWebSocket('ws://test:8080');
+      const ws = new WebMQClientWebSocket('ws://test:8080', 'silent');
       const messageListener = jest.fn();
 
       ws.addEventListener('message', messageListener);
@@ -209,14 +210,14 @@ describe('WebMQClientWebSocket', () => {
 
   describe('Lazy Connection Pattern', () => {
     it('should not connect until send() is called', () => {
-      const ws = new WebMQClientWebSocket('ws://test:8080');
+      const ws = new WebMQClientWebSocket('ws://test:8080', 'silent');
 
       expect(global.WebSocket).not.toHaveBeenCalled();
       expect((ws as any)._connectionPromise).toBe(null);
     });
 
     it('should send identify message on connection open', () => {
-      const ws = new WebMQClientWebSocket('ws://test:8080');
+      const ws = new WebMQClientWebSocket('ws://test:8080', 'silent');
 
       // Trigger connection
       ws.send({ test: 'data' });
@@ -252,7 +253,7 @@ describe('WebMQClientWebSocket', () => {
     });
 
     it('should establish connection when send() is called', () => {
-      const ws = new WebMQClientWebSocket('ws://test:8080');
+      const ws = new WebMQClientWebSocket('ws://test:8080', 'silent');
 
       ws.send({ test: 'data' });
 
@@ -264,7 +265,7 @@ describe('WebMQClientWebSocket', () => {
     });
 
     it('should handle connection state transitions', () => {
-      const ws = new WebMQClientWebSocket('ws://test:8080');
+      const ws = new WebMQClientWebSocket('ws://test:8080', 'silent');
 
       expect((ws as any)._connectionPromise).toBe(null);
 
@@ -278,7 +279,7 @@ describe('WebMQClientWebSocket', () => {
     });
 
     it('should send identify message on reconnection', () => {
-      const ws = new WebMQClientWebSocket('ws://test:8080');
+      const ws = new WebMQClientWebSocket('ws://test:8080', 'silent');
 
       // Initial connection
       ws.send({ test: 'data' });
@@ -318,7 +319,7 @@ describe('WebMQClientWebSocket', () => {
 
   describe('Message Management', () => {
     it('should generate UUID for each message', () => {
-      const ws = new WebMQClientWebSocket('ws://test:8080');
+      const ws = new WebMQClientWebSocket('ws://test:8080', 'silent');
 
       ws.send({ action: 'test', data: 'hello' });
 
@@ -336,7 +337,7 @@ describe('WebMQClientWebSocket', () => {
     });
 
     it('should set timeout for pending messages', () => {
-      const ws = new WebMQClientWebSocket('ws://test:8080');
+      const ws = new WebMQClientWebSocket('ws://test:8080', 'silent');
 
       ws.send({ test: 'data' });
       const pending = (ws as any)._pendingMessages.get('test-uuid-2');
@@ -346,7 +347,7 @@ describe('WebMQClientWebSocket', () => {
     });
 
     it('should reject promise on timeout', async () => {
-      const ws = new WebMQClientWebSocket('ws://test:8080');
+      const ws = new WebMQClientWebSocket('ws://test:8080', 'silent');
 
       const promise = ws.send({ test: 'data' });
 
@@ -364,7 +365,7 @@ describe('WebMQClientWebSocket', () => {
 
   describe('Message Acknowledgment', () => {
     it('should resolve promise on ack message', async () => {
-      const ws = new WebMQClientWebSocket('ws://test:8080');
+      const ws = new WebMQClientWebSocket('ws://test:8080', 'silent');
 
       // Trigger connection to establish event handlers
       const promise = ws.send({ test: 'data' });
@@ -392,7 +393,7 @@ describe('WebMQClientWebSocket', () => {
     });
 
     it('should reject promise on nack message', async () => {
-      const ws = new WebMQClientWebSocket('ws://test:8080');
+      const ws = new WebMQClientWebSocket('ws://test:8080', 'silent');
 
       // Trigger connection to establish event handlers
       const promise = ws.send({ test: 'data' });
@@ -421,7 +422,7 @@ describe('WebMQClientWebSocket', () => {
     });
 
     it('should handle malformed JSON messages gracefully', () => {
-      const ws = new WebMQClientWebSocket('ws://test:8080');
+      const ws = new WebMQClientWebSocket('ws://test:8080', 'silent');
       const messageListener = jest.fn();
 
       ws.addEventListener('message', messageListener);
@@ -447,7 +448,7 @@ describe('WebMQClientWebSocket', () => {
 
   describe('Connection Lifecycle', () => {
     it('should clean up properly on close', async () => {
-      const ws = new WebMQClientWebSocket('ws://test:8080');
+      const ws = new WebMQClientWebSocket('ws://test:8080', 'silent');
 
       // Add some pending messages and catch their rejections
       const promise = ws.send({ test: 'data1' });
@@ -465,7 +466,7 @@ describe('WebMQClientWebSocket', () => {
     });
 
     it('should handle multiple send calls before connection', () => {
-      const ws = new WebMQClientWebSocket('ws://test:8080');
+      const ws = new WebMQClientWebSocket('ws://test:8080', 'silent');
 
       // Multiple sends should queue up as promises
       const promise1 = ws.send({ test: 'data1' });
@@ -484,7 +485,7 @@ describe('WebMQClientWebSocket', () => {
     });
 
     it('should set correct public configuration properties', () => {
-      const ws = new WebMQClientWebSocket('ws://test:8080');
+      const ws = new WebMQClientWebSocket('ws://test:8080', 'silent');
 
       expect(ws.maxReconnectAttempts).toBe(5);
       expect(ws.reconnectDelay).toBe(1000);

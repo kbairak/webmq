@@ -336,7 +336,7 @@ describe('WebMQServer', () => {
         }));
       });
 
-      it('should ignore duplicate listen requests', async () => {
+      it('should allow duplicate listen requests (RabbitMQ handles idempotency)', async () => {
         // First identify
         const identifyMessage: ClientMessage = {
           action: 'identify',
@@ -352,7 +352,9 @@ describe('WebMQServer', () => {
         await messageHandler(Buffer.from(JSON.stringify(listenMessage)));
         await messageHandler(Buffer.from(JSON.stringify(listenMessage)));
 
-        expect(mockChannel.bindQueue).toHaveBeenCalledTimes(1);
+        // After removing activeBindings tracking, duplicate bindings go to RabbitMQ
+        // RabbitMQ handles duplicate bindings gracefully (they're idempotent)
+        expect(mockChannel.bindQueue).toHaveBeenCalledTimes(2);
       });
     });
 
@@ -399,7 +401,7 @@ describe('WebMQServer', () => {
         }));
       });
 
-      it('should ignore unlisten for non-existent binding', async () => {
+      it('should attempt unlisten even for non-tracked binding', async () => {
         // First identify
         const identifyMessage: ClientMessage = {
           action: 'identify',
@@ -414,7 +416,12 @@ describe('WebMQServer', () => {
         };
         await messageHandler(Buffer.from(JSON.stringify(unlistenMessage)));
 
-        expect(mockChannel.unbindQueue).not.toHaveBeenCalled();
+        // After removing activeBindings tracking, all unlisten requests go to RabbitMQ
+        expect(mockChannel.unbindQueue).toHaveBeenCalledWith(
+          'test-session-123',
+          'test-exchange',
+          'test.*'
+        );
       });
     });
 
@@ -651,7 +658,7 @@ describe('WebMQServer', () => {
       expect(preHook).toHaveBeenCalledWith(
         expect.objectContaining({
           ws: mockWS,
-          activeBindings: expect.any(Set)
+          sessionId: 'test-session-123'
         }),
         message,
         expect.any(Function)
