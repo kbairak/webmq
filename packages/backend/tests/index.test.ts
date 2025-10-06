@@ -828,4 +828,152 @@ describe('WebMQServer', () => {
     });
 
   });
+
+  describe('Health Check', () => {
+    it('should set up health check endpoint when port provided', async () => {
+      const mockHttpServer = {
+        on: jest.fn(),
+        listen: jest.fn()
+      };
+
+      (WebSocketServer as unknown as jest.Mock).mockImplementation((options) => {
+        const wss = {
+          on: jest.fn(),
+          close: jest.fn(),
+          clients: new Set(),
+          options,
+          _server: mockHttpServer // Simulate internal HTTP server
+        };
+        return wss;
+      });
+
+      const server = new WebMQServer({
+        rabbitmqUrl: 'amqp://localhost',
+        exchangeName: 'test-exchange',
+        port: 8080,
+        healthCheck: true
+      });
+
+      await server.start();
+
+      // Should register request listener for health checks
+      expect(mockHttpServer.on).toHaveBeenCalledWith('request', expect.any(Function));
+    });
+
+    it('should use custom health check path when string provided', async () => {
+      const mockHttpServer = {
+        on: jest.fn(),
+        listen: jest.fn()
+      };
+
+      (WebSocketServer as unknown as jest.Mock).mockImplementation((options) => {
+        const wss = {
+          on: jest.fn(),
+          close: jest.fn(),
+          clients: new Set(),
+          options,
+          _server: mockHttpServer
+        };
+        return wss;
+      });
+
+      const server = new WebMQServer({
+        rabbitmqUrl: 'amqp://localhost',
+        exchangeName: 'test-exchange',
+        port: 8080,
+        healthCheck: '/api/health'
+      });
+
+      await server.start();
+
+      expect(mockHttpServer.on).toHaveBeenCalledWith('request', expect.any(Function));
+    });
+
+    it('should return healthy status when server is running', async () => {
+      (WebSocketServer as unknown as jest.Mock).mockImplementation(() => ({
+        on: jest.fn(),
+        close: jest.fn(),
+        clients: new Set()
+      }));
+
+      const mockRes = {
+        writeHead: jest.fn(),
+        end: jest.fn()
+      };
+
+      const server = new WebMQServer({
+        rabbitmqUrl: 'amqp://localhost',
+        exchangeName: 'test-exchange',
+        port: 8080
+      });
+
+      await server.start();
+
+      const handler = server.healthCheckHandler();
+      handler({}, mockRes);
+
+      expect(mockRes.writeHead).toHaveBeenCalledWith(200, { 'Content-Type': 'application/json' });
+      expect(mockRes.end).toHaveBeenCalledWith(expect.stringContaining('"status":"healthy"'));
+      expect(mockRes.end).toHaveBeenCalledWith(expect.stringContaining('"rabbitmq":"connected"'));
+      expect(mockRes.end).toHaveBeenCalledWith(expect.stringContaining('"websocket":"running"'));
+    });
+
+    it('should return unhealthy status when server is stopped', async () => {
+      (WebSocketServer as unknown as jest.Mock).mockImplementation(() => ({
+        on: jest.fn(),
+        close: jest.fn(),
+        clients: new Set()
+      }));
+
+      const mockRes = {
+        writeHead: jest.fn(),
+        end: jest.fn()
+      };
+
+      const server = new WebMQServer({
+        rabbitmqUrl: 'amqp://localhost',
+        exchangeName: 'test-exchange',
+        port: 8080
+      });
+
+      await server.start();
+      await server.stop();
+
+      const handler = server.healthCheckHandler();
+      handler({}, mockRes);
+
+      expect(mockRes.writeHead).toHaveBeenCalledWith(503, { 'Content-Type': 'application/json' });
+      expect(mockRes.end).toHaveBeenCalledWith(expect.stringContaining('"status":"unhealthy"'));
+      expect(mockRes.end).toHaveBeenCalledWith(expect.stringContaining('"rabbitmq":"disconnected"'));
+      expect(mockRes.end).toHaveBeenCalledWith(expect.stringContaining('"websocket":"stopped"'));
+    });
+
+    it('should include connection count in health check response', async () => {
+      const mockClients = new Set(['client1', 'client2', 'client3']);
+
+      (WebSocketServer as unknown as jest.Mock).mockImplementation(() => ({
+        on: jest.fn(),
+        close: jest.fn(),
+        clients: mockClients
+      }));
+
+      const mockRes = {
+        writeHead: jest.fn(),
+        end: jest.fn()
+      };
+
+      const server = new WebMQServer({
+        rabbitmqUrl: 'amqp://localhost',
+        exchangeName: 'test-exchange',
+        port: 8080
+      });
+
+      await server.start();
+
+      const handler = server.healthCheckHandler();
+      handler({}, mockRes);
+
+      expect(mockRes.end).toHaveBeenCalledWith(expect.stringContaining('"connections":3'));
+    });
+  });
 });

@@ -370,6 +370,11 @@ const analyticsClient = new WebMQClient('ws://analytics.example.com');
   - `exchangeName` (string, required): RabbitMQ exchange name (exchanges are always durable topic exchanges)
   - `port` (number, optional): Port to listen on for standalone mode
   - `server` (http.Server | https.Server, optional): Existing HTTP/HTTPS server to attach to
+  - `healthCheck` (boolean | string, optional): Enable health check endpoint
+    - `true`: Automatically creates endpoint at `/health`
+    - `'/custom-path'`: Creates endpoint at specified path
+    - Requires either `port` or `server` option to be provided
+    - Works with both standalone and attached server modes
   - `hooks` (object, optional): Middleware hooks
     - `pre` (Hook[]): Run before all actions
     - `onIdentify` (Hook[]): Run for 'identify' actions
@@ -382,6 +387,7 @@ const analyticsClient = new WebMQClient('ws://analytics.example.com');
 
 - `start()`: Start WebSocket server
 - `stop()`: Stop server and cleanup
+- `healthCheckHandler()`: Returns a handler function for manual health check setup (useful with Express routing)
 
 **Properties:**
 
@@ -400,7 +406,19 @@ const server = new WebMQServer({
 await server.start();
 ```
 
-Attached to Express:
+With automatic health check:
+
+```javascript
+const server = new WebMQServer({
+  rabbitmqUrl: 'amqp://localhost',
+  exchangeName: 'my_app',
+  port: 3000,
+  healthCheck: true  // Creates /health endpoint
+});
+await server.start();
+```
+
+Attached to Express with manual health check:
 
 ```javascript
 import express from 'express';
@@ -409,17 +427,51 @@ import { createServer } from 'http';
 const app = express();
 const httpServer = createServer(app);
 
-app.get('/health', (req, res) => res.json({ status: 'ok' }));
-
-const server = new WebMQServer({
+const webmq = new WebMQServer({
   rabbitmqUrl: 'amqp://localhost',
   exchangeName: 'my_app',
   server: httpServer
 });
 
-await server.start();
+// Manual health check setup
+app.get('/api/health', webmq.healthCheckHandler());
+
+await webmq.start();
 httpServer.listen(8080);
 ```
+
+Attached to Express with automatic health check:
+
+```javascript
+import express from 'express';
+import { createServer } from 'http';
+
+const app = express();
+const httpServer = createServer(app);
+
+const webmq = new WebMQServer({
+  rabbitmqUrl: 'amqp://localhost',
+  exchangeName: 'my_app',
+  server: httpServer,
+  healthCheck: '/health'  // Adds request listener to httpServer
+});
+
+await webmq.start();
+httpServer.listen(8080);
+```
+
+**Health Check Response:**
+
+```json
+{
+  "status": "healthy",
+  "rabbitmq": "connected",
+  "websocket": "running",
+  "connections": 42
+}
+```
+
+Returns HTTP 200 when healthy, 503 when unhealthy (RabbitMQ disconnected or WebSocket server stopped).
 
 ## Roadmap
 
@@ -429,7 +481,6 @@ httpServer.listen(8080);
 
 - Better error handling in backend (channel errors, connection recovery)
 - Graceful degradation when RabbitMQ is down
-- Health check endpoints
 - Metrics/monitoring integration (Prometheus?)
 
 2. Performance

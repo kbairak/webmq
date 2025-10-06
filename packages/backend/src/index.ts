@@ -23,6 +23,7 @@ export type WebMQServerOptions = ServerOptions & {
   rabbitmqUrl: string;
   exchangeName: string;
   hooks?: WebMQHooks;
+  healthCheck?: boolean | string;
 }
 
 /**
@@ -46,14 +47,16 @@ export class WebMQServer {
   private readonly rabbitmqUrl: string;
   private readonly exchangeName: string;
   private readonly wsOptions: ServerOptions;
+  private readonly _healthCheckPath: string | null = null;
 
   constructor(options: WebMQServerOptions) {
-    const { rabbitmqUrl, exchangeName, hooks, ...wsOptions } = options;
+    const { rabbitmqUrl, exchangeName, hooks, healthCheck, ...wsOptions } = options;
 
     this.rabbitmqUrl = rabbitmqUrl;
     this.exchangeName = exchangeName;
     this.wsOptions = wsOptions;
 
+    // TODO: Can we `Object.assign(this._hooks, hooks)`?
     if (hooks) {
       this._hooks = {
         pre: hooks.pre || [],
@@ -63,30 +66,9 @@ export class WebMQServer {
         onUnlisten: hooks.onUnlisten || []
       };
     }
-  }
 
-  private _log(level: 'error' | 'warn' | 'info' | 'debug', message: string): void {
-    if (this.logLevel === 'silent') return;
-
-    const levels = ['error', 'warn', 'info', 'debug'];
-    const currentLevelIndex = levels.indexOf(this.logLevel);
-    const messageLevelIndex = levels.indexOf(level);
-
-    if (messageLevelIndex <= currentLevelIndex) {
-      switch (level) {
-        case 'error':
-          console.error(`[WebMQ ERROR] ${message}`);
-          break;
-        case 'warn':
-          console.warn(`[WebMQ WARN] ${message}`);
-          break;
-        case 'info':
-          console.log(`[WebMQ INFO] ${message}`);
-          break;
-        case 'debug':
-          console.debug(`[WebMQ DEBUG] ${message}`);
-          break;
-      }
+    if (healthCheck) {
+      this._healthCheckPath = typeof healthCheck === 'string' ? healthCheck : '/health';
     }
   }
 
@@ -95,10 +77,16 @@ export class WebMQServer {
     await this._getRabbitmqChannel();
 
     this._wss = new WebSocketServer(this.wsOptions);
-    if (this.wsOptions.port) {
-      this._log('info', `WebSocket server listening on port ${this.wsOptions.port}`);
-    } else {
-      this._log('info', 'WebSocket server attached to existing HTTP server');
+
+    // Setup health check endpoint if requested
+    if (this._healthCheckPath) {
+      const server = (this._wss as any).options?.server || (this._wss as any)._server;
+      server.on('request', (req: any, res: any) => {
+        if (req.url === this._healthCheckPath) {
+          this._handleHealthCheck(req, res);
+        }
+      });
+      this._log('info', `Health check endpoint enabled at ${this._healthCheckPath}`);
     }
 
     // Track this instance for graceful shutdown
@@ -504,6 +492,37 @@ export class WebMQServer {
     this._log('info', 'WebMQ server stopped successfully');
   }
 
+  /**
+   * Returns a health check handler for manual setup with Express or other frameworks.
+   *
+   * @example
+   * ```typescript
+   * const app = express();
+   * const webmq = new WebMQServer({ httpServer: http.createServer(app), ... });
+   * app.get('/health', webmq.healthCheckHandler());
+   * ```
+   */
+  public healthCheckHandler() {
+    return (req: any, res: any) => {
+      this._handleHealthCheck(req, res);
+    };
+  }
+
+  private _handleHealthCheck(req: any, res: any): void {
+    const isHealthy = this._rabbitmqConnection !== null && this._wss !== null;
+    const statusCode = isHealthy ? 200 : 503;
+
+    const health = {
+      status: isHealthy ? 'healthy' : 'unhealthy',
+      rabbitmq: this._rabbitmqConnection ? 'connected' : 'disconnected',
+      websocket: this._wss ? 'running' : 'stopped',
+      connections: this._wss?.clients.size || 0
+    };
+
+    res.writeHead(statusCode, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(health));
+  }
+
   private async _getRabbitmqChannel(): Promise<Channel> {
     if (!this._rabbitmqConnection) {
       this._log('debug', `Connecting to RabbitMQ: ${this.rabbitmqUrl}`);
@@ -538,6 +557,31 @@ export class WebMQServer {
     await this._rabbitmqChannel.assertExchange(this.exchangeName, 'topic', { durable: true });
     this._log('debug', `Exchange '${this.exchangeName}' ready (topic, durable)`);
     return this._rabbitmqChannel;
+  }
+
+  private _log(level: 'error' | 'warn' | 'info' | 'debug', message: string): void {
+    if (this.logLevel === 'silent') return;
+
+    const levels = ['error', 'warn', 'info', 'debug'];
+    const currentLevelIndex = levels.indexOf(this.logLevel);
+    const messageLevelIndex = levels.indexOf(level);
+
+    if (messageLevelIndex <= currentLevelIndex) {
+      switch (level) {
+        case 'error':
+          console.error(`[WebMQ ERROR] ${message}`);
+          break;
+        case 'warn':
+          console.warn(`[WebMQ WARN] ${message}`);
+          break;
+        case 'info':
+          console.log(`[WebMQ INFO] ${message}`);
+          break;
+        case 'debug':
+          console.debug(`[WebMQ DEBUG] ${message}`);
+          break;
+      }
+    }
   }
 }
 
