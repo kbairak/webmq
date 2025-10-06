@@ -107,8 +107,47 @@ export class WebMQServer {
     this._wss.on('connection', (ws: WebSocket) => {
       this._log('info', 'Client connected');
       const hookContext = { ws, sessionId: null as string | null };
+      let clientChannel: Channel | null = null;
       let consumerTag: string | null = null;
       let messageQueue = Promise.resolve();
+
+      const getChannel = async (): Promise<Channel> => {
+        if (!clientChannel) {
+          if (!this._rabbitmqConnection) {
+            this._log('debug', `Connecting to RabbitMQ: ${this.rabbitmqUrl}`);
+            this._rabbitmqConnection = await amqplib.connect(this.rabbitmqUrl);
+            this._log('info', 'RabbitMQ connection established');
+
+            this._rabbitmqConnection.on('close', () => {
+              this._log('warn', 'RabbitMQ connection closed');
+              this._rabbitmqChannel = null;
+              this._rabbitmqConnection = null;
+            });
+            this._rabbitmqConnection.on('error', (err) => {
+              this._log('error', `RabbitMQ connection error: ${err.message}`);
+              this._rabbitmqChannel = null;
+              this._rabbitmqConnection = null;
+            });
+          }
+
+          this._log('debug', `Creating client channel for session ${hookContext.sessionId || 'unidentified'}`);
+          clientChannel = await this._rabbitmqConnection.createChannel();
+
+          clientChannel.on('close', () => {
+            this._log('warn', `Client channel closed for session ${hookContext.sessionId}`);
+            clientChannel = null;
+          });
+
+          clientChannel.on('error', (err) => {
+            this._log('error', `Client channel error for session ${hookContext.sessionId}: ${err.message}`);
+            clientChannel = null;
+          });
+
+          await clientChannel.assertExchange(this.exchangeName, 'topic', { durable: true });
+          this._log('debug', `Exchange '${this.exchangeName}' ready for client ${hookContext.sessionId || 'unidentified'}`);
+        }
+        return clientChannel;
+      };
 
       ws.on('message', (data: WebSocket.RawData) => {
         return messageQueue = messageQueue.then(async () => {
@@ -130,7 +169,7 @@ export class WebMQServer {
                       hookContext.sessionId = message.sessionId; // Queue name equals sessionId
                       this._log('info', `Identifying client with sessionId: ${message.sessionId}`);
 
-                      const channel = await this._getRabbitmqChannel();
+                      const channel = await getChannel();
                       await channel.assertQueue(hookContext.sessionId, { expires: 5 * 60 * 1000 });
                       this._log(
                         'debug',
@@ -224,7 +263,7 @@ export class WebMQServer {
                       );
                       this._log('debug', `Message payload: ${JSON.stringify(message.payload)}`);
 
-                      const channel = await this._getRabbitmqChannel();
+                      const channel = await getChannel();
                       channel.publish(
                         this.exchangeName,
                         message.routingKey,
@@ -274,7 +313,7 @@ export class WebMQServer {
                     );
 
                     // Bind the session queue to this binding key
-                    const channel = await this._getRabbitmqChannel();
+                    const channel = await getChannel();
                     await channel.bindQueue(
                       hookContext.sessionId, this.exchangeName, message.bindingKey
                     );
@@ -311,7 +350,7 @@ export class WebMQServer {
                     );
 
                     try {
-                      const channel = await this._getRabbitmqChannel();
+                      const channel = await getChannel();
                       await channel.unbindQueue(
                         hookContext.sessionId,
                         this.exchangeName,
@@ -388,15 +427,14 @@ export class WebMQServer {
           `Client disconnected: sessionId=${hookContext.sessionId}, code=${code}, reason=${reason}`
         );
 
-        if (consumerTag) {
+        if (consumerTag && clientChannel) {
           try {
-            const channel = await this._getRabbitmqChannel();
-            await channel.cancel(consumerTag);
+            await clientChannel.cancel(consumerTag);
             this._log('debug', `Cancelled consumer: ${consumerTag}`);
 
             if ([1000, 1001].includes(code) && hookContext.sessionId) { // Normal closure or going away
               try {
-                await channel.deleteQueue(hookContext.sessionId);
+                await clientChannel.deleteQueue(hookContext.sessionId);
                 this._log(
                   'info', `Deleted session queue on normal close: ${hookContext.sessionId}`
                 );
@@ -416,6 +454,17 @@ export class WebMQServer {
             // If channel recovery fails during cleanup, ignore the error
             // Resources will be cleaned up when connection/channel is reestablished
           }
+        }
+
+        // Close the client's channel
+        if (clientChannel) {
+          try {
+            await clientChannel.close();
+            this._log('debug', `Closed client channel for session ${hookContext.sessionId}`);
+          } catch (error: any) {
+            this._log('warn', `Failed to close client channel (ignoring): ${error.message}`);
+          }
+          clientChannel = null;
         }
       });
     });

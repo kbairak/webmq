@@ -434,7 +434,6 @@ httpServer.listen(8080);
 
 2. Performance
 
-- Connection pooling for RabbitMQ channels
 - Message batching to reduce overhead
 - Compression for large payloads
 

@@ -138,30 +138,21 @@ Backend Distribution:
 
 **Test System:** Apple M4, 16GB RAM, macOS 15.7
 
-### Finding the Breaking Point
+### Finding the Breaking Point (Per-Client Channels)
 
 | Config | Backends | Latency (p50/p99) | Throughput | Loss | Notes |
 |--------|----------|-------------------|------------|------|-------|
-| 50 clients, 5 msg/s | 1 | 19ms / 367ms | 2,461 msg/s | 0% | ✅ Healthy |
-| 200 clients, 5 msg/s | 1 | **1,430ms / 2,922ms** | 31,679 msg/s | **19%** | ❌ Overloaded |
-| 200 clients, 5 msg/s | 4 | **37ms / 272ms** | 39,125 msg/s | **0%** | ✅ Fixed! |
-| 300 clients, 5 msg/s | 1 | - | - | - | ❌ Timeout/crash |
-| 300 clients, 5 msg/s | 4 | - | - | - | ❌ Timeout (too much fan-out) |
-
-### Impact of Horizontal Scaling
-
-Same load (100 clients, 10 msg/s, ~20k msg/s throughput):
-
-| Backends | Latency p50 | Latency p99 | Improvement |
-|----------|-------------|-------------|-------------|
-| 1 | 40ms | 262ms | baseline |
-| 2 | 26ms | 63ms | **35% faster p50, 76% faster p99** |
+| 100 clients, 5 msg/s | 1 | 18ms / 120ms | 9,950 msg/s | 0% | ✅ Healthy |
+| 200 clients, 5 msg/s | 1 | 956ms / 3,839ms | 39,726 msg/s | **0%** | ⚠️ High latency but no loss |
+| 200 clients, 5 msg/s | 4 | 39ms / 850ms | 38,618 msg/s | 0% | ✅ Better |
+| 300 clients, 5 msg/s | 1 | 5,261ms / 28,609ms | 6,134 msg/s | 93% | ❌ Severe overload |
+| 300 clients, 5 msg/s | 4 | 14,635ms / 27,644ms | 10,483 msg/s | 88% | ❌ Still overloaded |
 
 **Key Findings:**
-1. **Single backend saturates around 200 clients** - latency degrades severely, messages lost
-2. **4 backends handle the same load easily** - 38x latency improvement, 0% loss
-3. **Beyond ~40k msg/s delivery rate**, even multiple backends struggle (fan-out bottleneck)
-4. **Doubling backends nearly halves latency** at moderate-high loads
+1. **Single backend handles 200 clients without message loss** - high latency (956ms p50) but reliable
+2. **100 clients per backend is the sweet spot** - low latency (18ms p50), 0% loss
+3. **Beyond 300 clients, even 4 backends struggle** - extreme fan-out (60x) creates bottleneck
+4. **Scaling backends helps with latency** - 200 clients: 4 backends reduce p50 from 956ms to 39ms
 
 ## Architecture Insights
 
