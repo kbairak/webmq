@@ -30,7 +30,7 @@ node benchmark.js [options]
 | `--backends <n>` | Number of backend processes | 1 |
 | `--listens <n>` | Subscriptions per client | 10 |
 | `--publish-rate <n>` | Messages/sec per client | 5 |
-| `--key-pool-size <n>` | Routing key pool size (0..n-1) | 50 |
+| `--key-pool-size <n>` | Routing key pool size (0..n-1) | clients/2 |
 | `--duration <n>` | Test duration (seconds) | 10 |
 | `--message-size <n>` | Payload size (bytes) | 1024 |
 
@@ -48,12 +48,12 @@ node benchmark.js --clients 500 --backends 4 --publish-rate 10 --duration 30
 
 **Low contention (large key pool):**
 ```bash
-node benchmark.js --clients 100 --key-pool-size 1000
+node benchmark.js --clients 100 --key-pool-size 500
 ```
 
 **High contention (small key pool):**
 ```bash
-node benchmark.js --clients 100 --key-pool-size 10
+node benchmark.js --clients 100 --key-pool-size 5
 ```
 
 ## How It Works
@@ -65,7 +65,13 @@ node benchmark.js --clients 100 --key-pool-size 10
    - Picks random keys from pool to listen to
    - Publishes messages at specified rate to random keys
    - Tracks received messages with latency
-5. **Aggregates results** and displays metrics
+5. **Stops publishing** after duration, then **dynamically drains queues**:
+   - Checks every second if new messages are arriving
+   - Stops when no new messages for 3 consecutive seconds
+   - Safety timeout at 3× test duration (prevents infinite wait)
+6. **Aggregates results** and displays metrics including drain time
+
+> **Note:** Dynamic draining ensures accurate loss measurement. Healthy systems drain quickly (<10s), while overloaded systems hit the timeout still processing queued messages. Drain time is a key indicator of system stress.
 
 ## Output
 
@@ -138,21 +144,22 @@ Backend Distribution:
 
 **Test System:** Apple M4, 16GB RAM, macOS 15.7
 
-### Finding the Breaking Point (Per-Client Channels)
+### Scaling Performance (Key Pool = Clients/2)
 
-| Config | Backends | Latency (p50/p99) | Throughput | Loss | Notes |
-|--------|----------|-------------------|------------|------|-------|
-| 100 clients, 5 msg/s | 1 | 18ms / 120ms | 9,950 msg/s | 0% | ✅ Healthy |
-| 200 clients, 5 msg/s | 1 | 956ms / 3,839ms | 39,726 msg/s | **0%** | ⚠️ High latency but no loss |
-| 200 clients, 5 msg/s | 4 | 39ms / 850ms | 38,618 msg/s | 0% | ✅ Better |
-| 300 clients, 5 msg/s | 1 | 5,261ms / 28,609ms | 6,134 msg/s | 93% | ❌ Severe overload |
-| 300 clients, 5 msg/s | 4 | 14,635ms / 27,644ms | 10,483 msg/s | 88% | ❌ Still overloaded |
+| Config | Backends | Latency (p50/p99) | Throughput | Loss | Drain Time | Notes |
+|--------|----------|-------------------|------------|------|------------|-------|
+| 100 clients, 5 msg/s | 1 | 12ms / 83ms | 9,852 msg/s | 0% | 4.2s | ✅ Excellent |
+| 200 clients, 5 msg/s | 1 | 50ms / 156ms | 19,607 msg/s | 0% | 4.3s | ✅ Healthy |
+| 200 clients, 5 msg/s | 4 | 11ms / 129ms | 19,630 msg/s | 0% | 4.4s | ✅ Lower latency |
+| 300 clients, 5 msg/s | 1 | 99ms / 693ms | 29,539 msg/s | 0% | 4.4s | ✅ Still good! |
+| 300 clients, 5 msg/s | 4 | 2,306ms / 6,052ms | 29,007 msg/s | 0% | 7.7s | ⚠️ High latency |
+| 400 clients, 5 msg/s | 4 | 120ms / 819ms | 38,256 msg/s | 0% | 4.7s | ✅ Surprisingly good |
 
 **Key Findings:**
-1. **Single backend handles 200 clients without message loss** - high latency (956ms p50) but reliable
-2. **100 clients per backend is the sweet spot** - low latency (18ms p50), 0% loss
-3. **Beyond 300 clients, even 4 backends struggle** - extreme fan-out (60x) creates bottleneck
-4. **Scaling backends helps with latency** - 200 clients: 4 backends reduce p50 from 956ms to 39ms
+1. **Scaling key pool with clients dramatically improves performance** - keeps fan-out ratio constant at ~20x regardless of client count
+2. **0% message loss across all tested scenarios** - system handles up to 400 clients reliably
+3. **300 clients with 4 backends shows latency spike** - p99 jumps to 6s despite 0% loss, suggesting temporary queuing
+4. **400 clients performs better than 300** - lower latency (120ms vs 2.3s p50), likely due to better load distribution with 100 clients/backend
 
 ## Architecture Insights
 

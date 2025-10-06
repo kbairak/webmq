@@ -11,18 +11,19 @@ program
   .option('--backends <number>', 'Number of backend processes', '1')
   .option('--listens <number>', 'Number of subscriptions per client', '10')
   .option('--publish-rate <number>', 'Messages per second per client', '5')
-  .option('--key-pool-size <number>', 'Size of routing key pool', '50')
+  .option('--key-pool-size <number>', 'Size of routing key pool (default: clients/2)')
   .option('--duration <number>', 'Test duration in seconds', '10')
   .option('--message-size <number>', 'Message payload size in bytes', '1024')
   .parse();
 
 const opts = program.opts();
+const numClients = parseInt(opts.clients);
 const config = {
-  clients: parseInt(opts.clients),
+  clients: numClients,
   backends: parseInt(opts.backends),
   listens: parseInt(opts.listens),
   publishRate: parseInt(opts.publishRate),
-  keyPoolSize: parseInt(opts.keyPoolSize),
+  keyPoolSize: opts.keyPoolSize ? parseInt(opts.keyPoolSize) : numClients / 2,
   duration: parseInt(opts.duration),
   messageSize: parseInt(opts.messageSize)
 };
@@ -131,8 +132,26 @@ try {
   // Stop publishing
   publishTimers.forEach(timer => clearInterval(timer));
 
-  // Wait a bit for in-flight messages
-  await new Promise(resolve => setTimeout(resolve, 1000));
+  // Dynamic drain: wait for messages to stop arriving
+  console.log('\n⏳ Draining queues...');
+  let lastReceivedCount = 0;
+  let stableSeconds = 0;
+  const maxDrainTime = config.duration * 3; // Safety timeout
+  const startDrain = Date.now();
+
+  while (stableSeconds < 3 && (Date.now() - startDrain) < maxDrainTime * 1000) {
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    const currentReceived = clients.reduce((sum, c) => sum + c.getStats().received, 0);
+
+    if (currentReceived === lastReceivedCount) {
+      stableSeconds++;
+    } else {
+      stableSeconds = 0;
+      lastReceivedCount = currentReceived;
+    }
+  }
+
+  const drainTime = ((Date.now() - startDrain) / 1000).toFixed(1);
 
   // Collect stats
   console.log('\n📊 Calculating results...\n');
@@ -177,6 +196,7 @@ try {
   console.log(`  Delivered: ${totalReceived} msgs (${throughput.toFixed(0)} msg/s)`);
   console.log(`  Fan-out ratio: ${fanoutRatio}x`);
   console.log(`  Loss: ${actualLoss}%`);
+  console.log(`  Drain time: ${drainTime}s`);
   console.log();
 
   if (config.backends > 1) {
