@@ -166,10 +166,9 @@ WebMQ also supports middleware-style hooks on the frontend to intercept and proc
 ```javascript
 import { setup } from 'webmq-frontend';
 
-// Authentication hook - add tokens to all publish requests
+// Authentication hook - add JWT token to identify message
 const authenticationHook = async (context, message, next) => {
-  if (!message.payload) message.payload = {};
-  message.payload.token = sessionStorage.getItem('authToken');
+  message.payload = { token: sessionStorage.getItem('authToken') };
   await next();
 };
 
@@ -191,8 +190,7 @@ const decryptionHook = async (context, message, next) => {
 setup('ws://localhost:8080', {
   hooks: {
     pre: [loggingHook],                           // Run before all actions
-    onPublish: [authenticationHook],              // Run only for publish actions
-    onListen: [],                                 // Run only for listen actions
+    onIdentify: [authenticationHook],             // Run when establishing connection
     onMessage: [decryptionHook]                   // Run for incoming messages
   }
 });
@@ -200,7 +198,8 @@ setup('ws://localhost:8080', {
 
 **Hook Types:**
 
-- **`pre`**: Runs before all actions (publish, listen, message processing)
+- **`pre`**: Runs before all actions (identify, publish, listen, unlisten, message processing)
+- **`onIdentify`**: Runs when establishing WebSocket connection, can add authentication data to `message.payload`
 - **`onPublish`**: Runs only when publishing messages, can modify `message.routingKey` and `message.payload`
 - **`onListen`**: Runs only when setting up listeners, can modify `message.bindingKey`
 - **`onUnlisten`**: Runs only when unsubscribing from listeners, can modify `message.bindingKey`
@@ -500,7 +499,6 @@ Returns HTTP 200 when healthy, 503 when unhealthy (RabbitMQ disconnected or WebS
 
 - Request-reply pattern (RPC over WebMQ)
 - Message persistence/replay
-- Dead letter queues
 - Priority queues
 
 5. Security

@@ -1,0 +1,28 @@
+{
+  "type": "module",
+  "name": "webmq-auth-chat",
+  "version": "1.0.0",
+  "description": "Authenticated chat example for WebMQ",
+  "private": true,
+  "scripts": {
+    "start:backend": "node backend.js",
+    "start:frontend": "vite",
+    "start": "concurrently \"npm run start:backend\" \"npm run start:frontend\" --names \"backend,frontend\" --prefix-colors \"blue,green\""
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@testcontainers/rabbitmq": "^11.5.1",
+    "express": "^4.21.2",
+    "jsonwebtoken": "^9.0.2",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "webmq-backend": "1.0.0",
+    "webmq-frontend": "1.0.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^5.0.0",
+    "concurrently": "^9.2.1",
+    "vite": "^7.1.5"
+  }
+}
