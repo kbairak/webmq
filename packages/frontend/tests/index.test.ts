@@ -31,7 +31,7 @@ describe('WebMQClient', () => {
       webmqClient.setup('ws://localhost:8080');
 
       const WebMQClientWebSocket = require('../src/websocket').default;
-      expect(WebMQClientWebSocket).toHaveBeenCalledWith('ws://localhost:8080', 'silent');
+      expect(WebMQClientWebSocket).toHaveBeenCalledWith('ws://localhost:8080', 'silent', expect.any(Object), expect.any(Array));
     });
 
     it('should set up message event listener', () => {
@@ -313,7 +313,7 @@ describe('Singleton exports', () => {
     setup('ws://localhost:8080');
 
     const WebMQClientWebSocket = require('../src/websocket').default;
-    expect(WebMQClientWebSocket).toHaveBeenCalledWith('ws://localhost:8080', 'silent');
+    expect(WebMQClientWebSocket).toHaveBeenCalledWith('ws://localhost:8080', 'silent', expect.any(Object), expect.any(Array));
   });
 
   it('should allow publishing via singleton', async () => {
@@ -369,11 +369,11 @@ describe('Hooks', () => {
 
   describe('onPublish hooks', () => {
     it('should run pre and onPublish hooks before publishing', async () => {
-      const preHook = jest.fn(async (context, message, next) => {
+      const preHook = jest.fn(async (context, next, message) => {
         message.payload.addedByPre = true;
         await next();
       });
-      const onPublishHook = jest.fn(async (context, message, next) => {
+      const onPublishHook = jest.fn(async (context, next, message) => {
         message.payload.addedByOnPublish = true;
         await next();
       });
@@ -412,11 +412,11 @@ describe('Hooks', () => {
 
   describe('onListen hooks', () => {
     it('should run pre and onListen hooks before listening', async () => {
-      const preHook = jest.fn(async (context, message, next) => {
+      const preHook = jest.fn(async (context, next, message) => {
         context.modified = true;
         await next();
       });
-      const onListenHook = jest.fn(async (context, message, next) => {
+      const onListenHook = jest.fn(async (context, next, message) => {
         message.bindingKey = 'modified.' + message.bindingKey;
         await next();
       });
@@ -442,7 +442,7 @@ describe('Hooks', () => {
 
   describe('onUnlisten hooks', () => {
     it('should run pre and onUnlisten hooks before unlistening', async () => {
-      const onUnlistenHook = jest.fn(async (context, message, next) => {
+      const onUnlistenHook = jest.fn(async (context, next, message) => {
         context.unlistenCalled = true;
         await next();
       });
@@ -467,13 +467,13 @@ describe('Hooks', () => {
 
   describe('onMessage hooks', () => {
     it('should run pre and onMessage hooks before delivering to callbacks', async () => {
-      const preHook = jest.fn(async (context, message, next) => {
+      const preHook = jest.fn(async (context, next, message) => {
         if (message.action === 'message' && message.payload) {
           message.payload.processedByPre = true;
         }
         await next();
       });
-      const onMessageHook = jest.fn(async (context, message, next) => {
+      const onMessageHook = jest.fn(async (context, next, message) => {
         message.payload.decrypted = true;
         await next();
       });
@@ -554,7 +554,7 @@ describe('Hooks', () => {
     it('should persist context across different hook calls', async () => {
       let contextId: string | undefined;
 
-      const hook1 = jest.fn(async (context, message, next) => {
+      const hook1 = jest.fn(async (context, next, message) => {
         if (!context.id) {
           context.id = 'test-session-' + Date.now();
         }
@@ -562,7 +562,7 @@ describe('Hooks', () => {
         await next();
       });
 
-      const hook2 = jest.fn(async (context, message, next) => {
+      const hook2 = jest.fn(async (context, next, message) => {
         expect(context.id).toBe(contextId);
         await next();
       });
@@ -584,7 +584,7 @@ describe('Hooks', () => {
 
   describe('Hooks via setup()', () => {
     it('should accept hooks via setup() options', async () => {
-      const hook = jest.fn(async (context, message, next) => {
+      const hook = jest.fn(async (context, next, message) => {
         message.payload.modified = true;
         await next();
       });

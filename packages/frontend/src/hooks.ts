@@ -1,25 +1,22 @@
 // Generic hook system for middleware execution patterns
 
-export type HookFunction<TData = any> = (
+export type HookFunction = (
   context: any,
-  data: TData,
-  next: () => Promise<void>
+  next: () => Promise<void>,
+  ...args: any[]
 ) => Promise<void>;
 
-export async function runWithHooks<TData = any>(
+export async function runWithHooks(
   context: any,
-  hooks: HookFunction<TData>[],
-  data: TData,
-  func: () => Promise<void>
+  hooks: HookFunction[],
+  ...args: any[]
 ): Promise<void> {
   let index = 0;
 
   async function runNext(): Promise<void> {
     if (index < hooks.length) {
       const hook = hooks[index++];
-      await hook(context, data, runNext);
-    } else {
-      await func();
+      await hook(context, runNext, ...args);
     }
   }
 

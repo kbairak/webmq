@@ -160,8 +160,8 @@ describe('WebMQServer', () => {
 
     it('should accept hooks in constructor', () => {
       const hooks: WebMQHooks = {
-        pre: [jest.fn() as HookFunction<ClientMessage>],
-        onIdentify: [jest.fn() as HookFunction<ClientMessage>],
+        pre: [jest.fn() as HookFunction],
+        onIdentify: [jest.fn() as HookFunction],
       };
 
       const serverWithHooks = new WebMQServer({ rabbitmqUrl: 'amqp://localhost', exchangeName: 'test-exchange', port: 8080, hooks });
@@ -598,16 +598,16 @@ describe('WebMQServer', () => {
 
   describe('Hook Integration', () => {
     let messageHandler: Function;
-    let preHook: jest.MockedFunction<HookFunction<ClientMessage>>;
-    let identifyHook: jest.MockedFunction<HookFunction<ClientMessage>>;
+    let preHook: jest.MockedFunction<HookFunction>;
+    let identifyHook: jest.MockedFunction<HookFunction>;
 
     beforeEach(async () => {
-      preHook = jest.fn(async (context, data, next) => {
+      preHook = jest.fn(async (context, next, data) => {
         context.preHookCalled = true;
         await next();
       });
 
-      identifyHook = jest.fn(async (context, data, next) => {
+      identifyHook = jest.fn(async (context, next, data) => {
         context.identifyHookCalled = true;
         await next();
       });
@@ -660,8 +660,8 @@ describe('WebMQServer', () => {
           ws: mockWS,
           sessionId: 'test-session-123'
         }),
-        message,
-        expect.any(Function)
+        expect.any(Function),
+        message
       );
     });
 
@@ -676,7 +676,7 @@ describe('WebMQServer', () => {
       // This functionality is thoroughly tested in hooks.test.ts
       // Here we just verify the server can be created with hooks
       const testServer = new WebMQServer({ rabbitmqUrl: 'amqp://localhost', exchangeName: 'test-exchange', port: 8080, hooks: {
-        pre: [jest.fn() as HookFunction<ClientMessage>]
+        pre: [jest.fn() as HookFunction]
       } });
       testServer.logLevel = 'silent';
       expect(testServer).toBeInstanceOf(WebMQServer);
@@ -853,6 +853,7 @@ describe('WebMQServer', () => {
         port: 8080,
         healthCheck: true
       });
+      server.logLevel = 'silent';
 
       await server.start();
 
@@ -883,6 +884,7 @@ describe('WebMQServer', () => {
         port: 8080,
         healthCheck: '/api/health'
       });
+      server.logLevel = 'silent';
 
       await server.start();
 
@@ -906,6 +908,7 @@ describe('WebMQServer', () => {
         exchangeName: 'test-exchange',
         port: 8080
       });
+      server.logLevel = 'silent';
 
       await server.start();
 
@@ -935,6 +938,7 @@ describe('WebMQServer', () => {
         exchangeName: 'test-exchange',
         port: 8080
       });
+      server.logLevel = 'silent';
 
       await server.start();
       await server.stop();
@@ -967,6 +971,7 @@ describe('WebMQServer', () => {
         exchangeName: 'test-exchange',
         port: 8080
       });
+      server.logLevel = 'silent';
 
       await server.start();
 

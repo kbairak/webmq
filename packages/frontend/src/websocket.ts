@@ -1,4 +1,5 @@
 import { v4 as uuid } from 'uuid';
+import { HookFunction, runWithHooks } from './hooks';
 
 /**
  * A WebSocket wrapper that provides connection management, message acknowledgments,
@@ -57,6 +58,8 @@ export default class WebMQClientWebSocket {
   constructor(
     readonly url: string,
     public logLevel: 'silent' | 'error' | 'warn' | 'info' | 'debug' = 'info',
+    private context: any = {},
+    private identifyHooks: HookFunction[] = []
   ) {
     if (typeof window !== 'undefined' && window.sessionStorage) {
       this.sessionId = sessionStorage.getItem('webmq_session_id') || '';
@@ -139,41 +142,52 @@ export default class WebMQClientWebSocket {
           resolve();
 
           // Send identify message FIRST to establish session with backend
-          const identifyMessage = { action: 'identify', sessionId: this.sessionId, messageId: uuid() };
+          const identifyMessage: any = { action: 'identify', sessionId: this.sessionId, messageId: uuid(), payload: {} };
           this._identifyMessageId = identifyMessage.messageId;
-          this._log('debug', `Sending identify message: sessionId=${this.sessionId}, messageId=${identifyMessage.messageId}`);
+          this._log('debug', `Preparing identify message: sessionId=${this.sessionId}, messageId=${identifyMessage.messageId}`);
 
-          this._pendingMessages.set(identifyMessage.messageId, {
-            data: identifyMessage,
-            resolve: () => { },
-            reject: () => { },
-            timeout: setTimeout(() => {
-              this._log('warn', `Identify message timeout: messageId=${identifyMessage.messageId}`);
-              this._pendingMessages.delete(identifyMessage.messageId);
-              this._identifyPromise = null;
-              this._identifyMessageId = null;
-            }, this.timeoutDelay),
-            sent: false
+          // Run identify hooks before sending
+          runWithHooks(
+            this.context,
+            [...this.identifyHooks, async (context, next, msg) => {
+              this._log('debug', `Sending identify message with payload: ${JSON.stringify(msg.payload)}`);
+
+              this._pendingMessages.set(msg.messageId, {
+                data: msg,
+                resolve: () => { },
+                reject: () => { },
+                timeout: setTimeout(() => {
+                  this._log('warn', `Identify message timeout: messageId=${msg.messageId}`);
+                  this._pendingMessages.delete(msg.messageId);
+                  this._identifyPromise = null;
+                  this._identifyMessageId = null;
+                }, this.timeoutDelay),
+                sent: false
+              });
+
+              this._identifyPromise = new Promise<void>((resolveIdentify, rejectIdentify) => {
+                const pending = this._pendingMessages.get(msg.messageId);
+                if (pending) {
+                  pending.resolve = resolveIdentify;
+                  pending.reject = rejectIdentify;
+                }
+              });
+
+              // Send identify message directly
+              this._ws!.send(JSON.stringify(msg));
+              this._log('debug', `Identify message transmitted over WebSocket`);
+              const identifyPending = this._pendingMessages.get(msg.messageId);
+              if (identifyPending) {
+                identifyPending.sent = true;
+              }
+
+              // Flush OTHER pending messages (excluding identify messages)
+              this._flushPendingMessagesExceptIdentify();
+            }],
+            identifyMessage
+          ).catch(error => {
+            this._log('error', `Failed to send identify message: ${error.message}`);
           });
-
-          this._identifyPromise = new Promise<void>((resolveIdentify, rejectIdentify) => {
-            const pending = this._pendingMessages.get(identifyMessage.messageId);
-            if (pending) {
-              pending.resolve = resolveIdentify;
-              pending.reject = rejectIdentify;
-            }
-          });
-
-          // Send identify message directly
-          this._ws!.send(JSON.stringify(identifyMessage));
-          this._log('debug', `Identify message transmitted over WebSocket`);
-          const identifyPending = this._pendingMessages.get(identifyMessage.messageId);
-          if (identifyPending) {
-            identifyPending.sent = true;
-          }
-
-          // Flush OTHER pending messages (excluding identify messages)
-          this._flushPendingMessagesExceptIdentify();
         });
 
         this._ws.addEventListener('message', (event) => {

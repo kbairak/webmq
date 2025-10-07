@@ -11,11 +11,12 @@ export type FrontendMessage = {
 };
 
 export type WebMQClientHooks = {
-  pre?: HookFunction<FrontendMessage>[];
-  onPublish?: HookFunction<FrontendMessage>[];
-  onListen?: HookFunction<FrontendMessage>[];
-  onUnlisten?: HookFunction<FrontendMessage>[];
-  onMessage?: HookFunction<FrontendMessage>[];
+  pre?: HookFunction[];
+  onIdentify?: HookFunction[];
+  onPublish?: HookFunction[];
+  onListen?: HookFunction[];
+  onUnlisten?: HookFunction[];
+  onMessage?: HookFunction[];
 };
 
 function matchesPattern(routingKey: string, bindingKey: string): boolean {
@@ -46,11 +47,12 @@ export class WebMQClient extends EventEmitter {
   private messageListeners = new Map<string, Set<(payload: any) => void>>();
   private _context: any = {};
   private _hooks = {
-    pre: [] as HookFunction<FrontendMessage>[],
-    onPublish: [] as HookFunction<FrontendMessage>[],
-    onListen: [] as HookFunction<FrontendMessage>[],
-    onUnlisten: [] as HookFunction<FrontendMessage>[],
-    onMessage: [] as HookFunction<FrontendMessage>[]
+    pre: [] as HookFunction[],
+    onIdentify: [] as HookFunction[],
+    onPublish: [] as HookFunction[],
+    onListen: [] as HookFunction[],
+    onUnlisten: [] as HookFunction[],
+    onMessage: [] as HookFunction[]
   };
 
   constructor(url?: string, hooks?: WebMQClientHooks) {
@@ -67,6 +69,7 @@ export class WebMQClient extends EventEmitter {
     if (hooks) {
       this._hooks = {
         pre: hooks.pre || [],
+        onIdentify: hooks.onIdentify || [],
         onPublish: hooks.onPublish || [],
         onListen: hooks.onListen || [],
         onUnlisten: hooks.onUnlisten || [],
@@ -86,7 +89,7 @@ export class WebMQClient extends EventEmitter {
     }
 
     this._log('info', `Setting up WebMQ client for: ${url}`);
-    this.ws = new WebMQClientWebSocket(url, this.logLevel);
+    this.ws = new WebMQClientWebSocket(url, this.logLevel, this._context, [...this._hooks.pre, ...this._hooks.onIdentify]);
 
     // Forward WebSocket events
     this.ws.addEventListener('open', () => {
@@ -141,15 +144,14 @@ export class WebMQClient extends EventEmitter {
             try {
               await runWithHooks(
                 this._context,
-                [...this._hooks.pre, ...this._hooks.onMessage],
-                frontendMessage,
-                async () => {
+                [...this._hooks.pre, ...this._hooks.onMessage, async (context, next, msg) => {
                   const callbacks = this.messageListeners.get(bindingKey);
                   if (callbacks) {
                     this._log('debug', `Delivering message to ${callbacks.size} callback(s) for binding '${bindingKey}'`);
-                    callbacks.forEach(callback => callback(frontendMessage.payload));
+                    callbacks.forEach(callback => callback(msg.payload));
                   }
-                }
+                }],
+                frontendMessage
               );
             } catch (error: any) {
               this._log('error', `Hook error for binding '${bindingKey}': ${error.message}`);
@@ -181,18 +183,17 @@ export class WebMQClient extends EventEmitter {
 
     await runWithHooks(
       this._context,
-      [...this._hooks.pre, ...this._hooks.onPublish],
-      message,
-      async () => {
-        this._log('info', `Publishing message to routing key: ${message.routingKey}`);
+      [...this._hooks.pre, ...this._hooks.onPublish, async (context, next, msg) => {
+        this._log('info', `Publishing message to routing key: ${msg.routingKey}`);
         try {
-          await this.ws!.send({ action: 'publish', routingKey: message.routingKey, payload: message.payload });
-          this._log('debug', `Message published successfully to: ${message.routingKey}`);
+          await this.ws!.send({ action: 'publish', routingKey: msg.routingKey, payload: msg.payload });
+          this._log('debug', `Message published successfully to: ${msg.routingKey}`);
         } catch (error: any) {
-          this._log('error', `Failed to publish message to '${message.routingKey}': ${error.message}`);
+          this._log('error', `Failed to publish message to '${msg.routingKey}': ${error.message}`);
           throw error;
         }
-      }
+      }],
+      message
     );
   }
 
@@ -211,29 +212,28 @@ export class WebMQClient extends EventEmitter {
 
     await runWithHooks(
       this._context,
-      [...this._hooks.pre, ...this._hooks.onListen],
-      message,
-      async () => {
+      [...this._hooks.pre, ...this._hooks.onListen, async (context, next, msg) => {
         // Add to listeners map
-        const existing = this.messageListeners.get(message.bindingKey!);
+        const existing = this.messageListeners.get(msg.bindingKey!);
         if (existing) {
           existing.add(callback);
-          this._log('debug', `Added callback to existing binding '${message.bindingKey}' (${existing.size} total callbacks)`);
+          this._log('debug', `Added callback to existing binding '${msg.bindingKey}' (${existing.size} total callbacks)`);
         } else {
-          this.messageListeners.set(message.bindingKey!, new Set([callback]));
-          this._log('info', `Creating new binding for pattern: ${message.bindingKey}`);
+          this.messageListeners.set(msg.bindingKey!, new Set([callback]));
+          this._log('info', `Creating new binding for pattern: ${msg.bindingKey}`);
           try {
             // Send listen message for the first listener on this key
-            await this.ws!.send({ action: 'listen', bindingKey: message.bindingKey });
-            this._log('debug', `Successfully subscribed to binding: ${message.bindingKey}`);
+            await this.ws!.send({ action: 'listen', bindingKey: msg.bindingKey });
+            this._log('debug', `Successfully subscribed to binding: ${msg.bindingKey}`);
           } catch (error: any) {
-            this._log('error', `Failed to subscribe to binding '${message.bindingKey}': ${error.message}`);
+            this._log('error', `Failed to subscribe to binding '${msg.bindingKey}': ${error.message}`);
             // Clean up the listener map since subscription failed
-            this.messageListeners.delete(message.bindingKey!);
+            this.messageListeners.delete(msg.bindingKey!);
             throw error;
           }
         }
-      }
+      }],
+      message
     );
   }
 
@@ -252,31 +252,30 @@ export class WebMQClient extends EventEmitter {
 
     await runWithHooks(
       this._context,
-      [...this._hooks.pre, ...this._hooks.onUnlisten],
-      message,
-      async () => {
-        const callbacks = this.messageListeners.get(message.bindingKey!);
+      [...this._hooks.pre, ...this._hooks.onUnlisten, async (context, next, msg) => {
+        const callbacks = this.messageListeners.get(msg.bindingKey!);
         if (!callbacks) {
-          this._log('warn', `Attempted to unlisten from non-existent binding: ${message.bindingKey}`);
+          this._log('warn', `Attempted to unlisten from non-existent binding: ${msg.bindingKey}`);
           return;
         }
 
         callbacks.delete(callback);
-        this._log('debug', `Removed callback from binding '${message.bindingKey}' (${callbacks.size} remaining)`);
+        this._log('debug', `Removed callback from binding '${msg.bindingKey}' (${callbacks.size} remaining)`);
 
         if (callbacks.size === 0) {
-          this.messageListeners.delete(message.bindingKey!);
-          this._log('info', `Unsubscribing from binding: ${message.bindingKey}`);
+          this.messageListeners.delete(msg.bindingKey!);
+          this._log('info', `Unsubscribing from binding: ${msg.bindingKey}`);
           try {
             // Send unlisten message when no more listeners
-            await this.ws!.send({ action: 'unlisten', bindingKey: message.bindingKey });
-            this._log('debug', `Successfully unsubscribed from binding: ${message.bindingKey}`);
+            await this.ws!.send({ action: 'unlisten', bindingKey: msg.bindingKey });
+            this._log('debug', `Successfully unsubscribed from binding: ${msg.bindingKey}`);
           } catch (error: any) {
-            this._log('warn', `Failed to unsubscribe from binding '${message.bindingKey}': ${error.message}`);
+            this._log('warn', `Failed to unsubscribe from binding '${msg.bindingKey}': ${error.message}`);
             // Note: We don't throw here since the local state is already cleaned up
           }
         }
-      }
+      }],
+      message
     );
   }
 
