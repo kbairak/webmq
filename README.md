@@ -8,6 +8,8 @@ Traditional web applications rely on request-response patterns where the client 
 
 While WebSocket libraries exist, WebMQ leverages RabbitMQ's battle-tested message routing, persistence, and clustering capabilities. This means your real-time features inherit decades of messaging reliability. When you need to scale horizontally, simply spin up more backend instances—RabbitMQ handles message distribution seamlessly across your infrastructure.
 
+**You can use WebMQ as a replacement for Socket.IO, but with horizontal scaling naturally supported. But** the real power is making the frontend part of a mature distributed event-driven system. When the frontend publishes a message, any backend service out of hundreds can pick it up and process it. Similarly, the frontend can subscribe to events from any service in your infrastructure.
+
 ## Quick Start
 
 Here's a complete real-time chat in under 30 lines:
@@ -31,7 +33,7 @@ console.log('WebMQ server running on ws://localhost:8080');
 
 ```jsx
 import { setup, listen, unlisten, publish } from 'webmq-frontend';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 
 setup('ws://localhost:8080');
 
@@ -44,7 +46,7 @@ export default function Chat() {
   useEffect(() => {
     listen('chat.messages', onMessageAdded);
     return () => unlisten('chat.messages', onMessageAdded);
-  }, []);
+  }, [onMessageAdded]);
 
   const sendMessage = (e) => {
     e.preventDefault();
