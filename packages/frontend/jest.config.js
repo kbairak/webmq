@@ -5,7 +5,7 @@ module.exports = {
   testPathIgnorePatterns: ['/node_modules/', '/dist/'],
   collectCoverage: true,
   coverageDirectory: 'coverage',
-  coverageReporters: ['text', 'lcov'],
+  coverageReporters: ['text', 'lcov', 'html'],
   collectCoverageFrom: [
     'src/**/*.ts',
     '!src/**/*.test.ts',

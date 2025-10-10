@@ -8,7 +8,7 @@ const rabbitmq = await new RabbitMQContainer(
 const server = new WebMQServer({
   rabbitmqUrl: rabbitmq.getAmqpUrl(),
   exchangeName: 'todos_exchange',
-  port: 8080
+  port: 8080,
 });
 // server.logLevel = 'debug';
 await server.start();

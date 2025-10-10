@@ -25,45 +25,50 @@ const webMQServer = new WebMQServer({
   exchangeName: 'auth_chat_app',
   server: httpServer,
   hooks: {
-    onIdentify: [async (context, next, message) => {
-      // Extract token from identify message payload
-      const { token } = message.payload || {};
+    onIdentify: [
+      async (context, next, message) => {
+        // Extract token from identify message payload
+        const { token } = message.payload || {};
 
-      if (!token) {
-        throw new Error('Authentication required');
-      }
+        if (!token) {
+          throw new Error('Authentication required');
+        }
 
-      try {
-        const { username } = jwt.verify(token, SECRET);
-        context.user = { username };
-        console.log(`User authenticated: ${username}`);
-      } catch (e) {
-        throw new Error('Invalid token');
-      }
+        try {
+          const { username } = jwt.verify(token, SECRET);
+          context.user = { username };
+        } catch (e) {
+          throw new Error('Invalid token');
+        }
 
-      await next();
-    }],
-    pre: [async (context, next, message) => {
-      // Skip auth check for identify messages (already handled by onIdentify)
-      if (message.action === 'identify') {
         await next();
-        return;
-      }
+      },
+    ],
+    pre: [
+      async (context, next, message) => {
+        // Skip auth check for identify messages (already handled by onIdentify)
+        if (message.action === 'identify') {
+          await next();
+          return;
+        }
 
-      // For all other actions, ensure user is authenticated
-      if (!context.user) {
-        throw new Error('Not authenticated');
-      }
+        // For all other actions, ensure user is authenticated
+        if (!context.user) {
+          throw new Error('Not authenticated');
+        }
 
-      await next();
-    }],
-    onPublish: [async (context, next, message) => {
-      // Auto-add username to all published messages
-      message.payload.username = context.user.username;
-      message.payload.timestamp = Date.now();
-      await next();
-    }]
-  }
+        await next();
+      },
+    ],
+    onPublish: [
+      async (context, next, message) => {
+        // Auto-add username to all published messages
+        message.payload.username = context.user.username;
+        message.payload.timestamp = Date.now();
+        await next();
+      },
+    ],
+  },
 });
 
 await webMQServer.start();

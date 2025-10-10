@@ -32,7 +32,7 @@ const webMQServer = new WebMQServer({
   exchangeName: 'chat_app',
   server: httpServer,
   hooks: {
-    onIdentify: [async (context, message, next) => {
+    onIdentify: [async (context, next, message) => {
       // Extract token from identify message payload
       const { token } = message.payload || {};
 
@@ -50,7 +50,7 @@ const webMQServer = new WebMQServer({
 
       await next();
     }],
-    pre: [async (context, message, next) => {
+    pre: [async (context, next, message) => {
       // Skip auth check for identify messages (already handled by onIdentify)
       if (message.action === 'identify') {
         await next();
@@ -64,7 +64,7 @@ const webMQServer = new WebMQServer({
 
       await next();
     }],
-    onPublish: [async (context, message, next) => {
+    onPublish: [async (context, next, message) => {
       // Auto-add username to all published messages
       message.payload.username = context.user.username;
       message.payload.timestamp = Date.now();
@@ -144,7 +144,7 @@ function Chat({ username, token }) {
   useEffect(() => {
     setup('ws://localhost:8080', {
       hooks: {
-        onIdentify: [async (context, message, next) => {
+        onIdentify: [async (context, next, message) => {
           // Add token to identify message payload
           message.payload = { token };
           await next();

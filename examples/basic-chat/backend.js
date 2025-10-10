@@ -8,8 +8,9 @@ const rabbitmq = await new RabbitMQContainer(
 const server = new WebMQServer({
   rabbitmqUrl: rabbitmq.getAmqpUrl(),
   exchangeName: 'chat_app',
-  port: 8080
+  port: 8080,
 });
+// server.logLevel = 'debug';
 
 await server.start();
 console.log('WebMQ server running on ws://localhost:8080');

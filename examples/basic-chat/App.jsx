@@ -1,7 +1,8 @@
-import { setup, listen, unlisten, publish } from 'webmq-frontend';
+import { setup, listen, unlisten, publish, webMQClient } from 'webmq-frontend';
 import { useRef, useState, useCallback, useEffect } from 'react';
 
-setup('ws://localhost:8080');
+setup({ url: 'ws://localhost:8080' });
+// webMQClient.logLevel = 'debug';
 
 const names = ['Alice', 'Bob', 'Charlie', 'Diana', 'Eve', 'Frank', 'Grace', 'Henry', 'Ivy', 'Jack'];
 const randomName = () => names[Math.floor(Math.random() * names.length)];

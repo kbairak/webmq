@@ -82,9 +82,8 @@ beforeAll(async () => {
   webmqServer.logLevel = 'silent'; // Keep tests quiet
   await webmqServer.start();
 
-  webmqClient = new WebMQClient();
+  webmqClient = new WebMQClient({ url: `ws://localhost:${serverPort}` });
   webmqClient.logLevel = 'silent'; // Keep tests quiet
-  webmqClient.setup(`ws://localhost:${serverPort}`);
 }, 30000); // 30 second timeout for container startup
 
 afterAll(async () => {

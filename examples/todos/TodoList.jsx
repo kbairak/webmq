@@ -15,7 +15,7 @@ function TodoList() {
   useEffect(() => {
     listen('todos.added', handleTodoAdded);
     return () => unlisten('todos.added', handleTodoAdded);
-  }, []);
+  }, [handleTodoAdded]);
 
   const handleAddTodo = async (e) => {
     e.preventDefault();

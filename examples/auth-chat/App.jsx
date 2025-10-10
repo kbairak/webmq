@@ -73,16 +73,16 @@ function Login({ onSuccess }) {
 
 function Chat({ username, token }) {
   useEffect(() => {
-    setup('ws://localhost:8080', {
+    setup({
+      url: 'ws://localhost:8080',
       hooks: {
         onIdentify: [async (context, next, message) => {
-          // Add token to identify message payload
-          message.payload = { token };
+          message.payload = { token };  // Add token to identify message payload
           await next();
         }]
       }
     });
-  }, [token]);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');

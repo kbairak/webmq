@@ -2,7 +2,7 @@ import { setup, listen, unlisten, publish } from 'webmq-frontend';
 import { useState, useCallback, useEffect, useRef } from 'react';
 import ResultCard from './components/ResultCard';
 
-setup('ws://localhost:8080');
+setup({ url: 'ws://localhost:8080' });
 
 export default function CitySearch() {
   const [query, setQuery] = useState('');
