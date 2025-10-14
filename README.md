@@ -19,13 +19,13 @@ Here's a complete real-time chat in under 30 lines:
 ```javascript
 import { WebMQServer } from 'webmq-backend';
 
-const server = new WebMQServer({
+const webMQServer = new WebMQServer({
   rabbitmqUrl: 'amqp://localhost',
   exchangeName: 'chat_app',
   port: 8080
 });
 
-await server.start();
+await webMQServer.start();
 console.log('WebMQ server running on ws://localhost:8080');
 ```
 
@@ -127,7 +127,7 @@ const payloadEnhancementHook = async (context, next, message) => {
   await next();
 };
 
-const server = new WebMQServer({
+const webMQServer = new WebMQServer({
   rabbitmqUrl: 'amqp://localhost',
   exchangeName: 'secure_app',
   port: 8080,
@@ -251,12 +251,12 @@ import { webMQClient } from 'webmq-frontend';
 webMQClient.logLevel = 'debug'; // 'silent' | 'error' | 'warn' | 'info' | 'debug'
 
 // Backend logging
-const server = new WebMQServer({
+const webMQServer = new WebMQServer({
   rabbitmqUrl: 'amqp://localhost',
   exchangeName: 'my_app',
   port: 8080
 });
-server.logLevel = 'info';
+webMQServer.logLevel = 'info';
 ```
 
 ### EventEmitter Events
@@ -278,7 +278,161 @@ webMQClient.on('disconnected', () => console.log('Disconnected'));
 webMQClient.on('reconnecting', (event) => console.log('Reconnecting...', event));
 ```
 
-**Note:** The backend WebMQServer does not currently emit custom events. For backend monitoring, use the built-in logging system by setting `server.logLevel = 'debug'`.
+**Note:** The backend WebMQServer does not currently emit custom events. For backend monitoring, use the built-in logging system by setting `server.logLevel = 'debug'` or Prometheus metrics integration.
+
+### Health Check & Metrics
+
+WebMQ provides built-in support for health check and Prometheus metrics endpoints. There are three ways to set them up depending on your architecture.
+
+#### Pattern 1: Automatic Setup (Standalone Mode)
+
+When using `port` without an external HTTP server, WebMQ creates and manages the HTTP server automatically, setting up routing for you.
+
+```javascript
+const webMQServer = new WebMQServer({
+  rabbitmqUrl: 'amqp://localhost',
+  exchangeName: 'my_app',
+  port: 8080,
+  healthCheck: true,  // Creates /health endpoint
+  metrics: true       // Creates /metrics endpoint
+});
+await webMQServer.start();
+
+// Endpoints available at:
+// - http://localhost:8080/health
+// - http://localhost:8080/metrics
+```
+
+**Custom paths:**
+
+```javascript
+const webMQServer = new WebMQServer({
+  rabbitmqUrl: 'amqp://localhost',
+  exchangeName: 'my_app',
+  port: 8080,
+  healthCheck: '/api/health',  // Custom health endpoint
+  metrics: '/prometheus'        // Custom metrics endpoint
+});
+```
+
+#### Pattern 2: Manual Routing (External HTTP Server)
+
+When passing an external HTTP server via `server` option, you must manually wire up the endpoint handlers. This gives you full control over routing and middleware.
+
+```javascript
+import { createServer } from 'http';
+
+const httpServer = createServer((req, res) => {
+  if (req.url === '/health') {
+    webMQServer.healthCheckHandler(req, res);
+  } else if (req.url === '/metrics') {
+    webMQServer.metricsHandler(req, res);
+  } else {
+    res.writeHead(426);
+    res.end('Upgrade Required');
+  }
+});
+
+const webMQServer = new WebMQServer({
+  rabbitmqUrl: 'amqp://localhost',
+  exchangeName: 'my_app',
+  server: httpServer
+});
+
+await webMQServer.start();
+httpServer.listen(8080);
+```
+
+#### Pattern 3: Express Integration
+
+The most common production setup uses Express for routing, middleware, and additional endpoints.
+
+```javascript
+import express from 'express';
+import { createServer } from 'http';
+
+const app = express();
+const httpServer = createServer(app);
+
+const webMQServer = new WebMQServer({
+  rabbitmqUrl: 'amqp://localhost',
+  exchangeName: 'my_app',
+  server: httpServer
+});
+
+// Add endpoints with middleware
+app.get('/health', webMQServer.healthCheckHandler);
+app.get('/metrics', authMiddleware, webMQServer.metricsHandler);
+
+// Additional REST endpoints
+app.get('/api/stats', (req, res) => {
+  res.json({ uptime: process.uptime() });
+});
+
+await webMQServer.start();
+httpServer.listen(8080);
+```
+
+**Health Check Response:**
+
+```json
+{
+  "status": "healthy",
+  "rabbitmq": "connected",
+  "websocket": "running",
+  "connections": 42
+}
+```
+
+Returns HTTP 200 when healthy, 503 when unhealthy.
+
+### Prometheus Metrics
+
+WebMQ exposes Prometheus metrics for monitoring message throughput, latency, connections, and errors.
+
+**Available Metrics:**
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `webmq_connections_active` | Gauge | Current active WebSocket connections |
+| `webmq_rabbitmq_connected` | Gauge | RabbitMQ connection status (0=disconnected, 1=connected) |
+| `webmq_subscriptions_active` | Gauge | Current active subscriptions |
+| `webmq_messages_published_total` | Counter | Total messages published to RabbitMQ |
+| `webmq_messages_received_total` | Counter | Total messages received from RabbitMQ |
+| `webmq_errors_total{type}` | Counter | Total errors by type (rabbitmq_connection, websocket_error) |
+| `webmq_publish_duration_seconds` | Histogram | Time to publish message to RabbitMQ |
+| `webmq_messages_by_routing_key{routing_key}` | Counter | Messages published per routing key |
+| `webmq_subscriptions_by_binding_key{binding_key}` | Gauge | Subscriptions per binding key |
+
+**Prometheus Configuration:**
+
+```yaml
+# prometheus.yml
+scrape_configs:
+  - job_name: 'webmq'
+    scrape_interval: 15s
+    static_configs:
+      - targets: ['localhost:8080']
+```
+
+**Grafana Dashboard Example:**
+
+```promql
+# Messages per second
+rate(webmq_messages_published_total[1m])
+
+# Average publish latency
+rate(webmq_publish_duration_seconds_sum[5m]) / rate(webmq_publish_duration_seconds_count[5m])
+
+# 95th percentile latency
+histogram_quantile(0.95, rate(webmq_publish_duration_seconds_bucket[5m]))
+
+# Active connections over time
+webmq_connections_active
+
+# Error rate
+rate(webmq_errors_total[5m])
+```
 
 ## Features
 
@@ -332,6 +486,7 @@ new WebMQClient(options: WebMQClientOptions)
 ```
 
 Options:
+
 - `url` (string, optional): WebSocket server URL (e.g., 'ws://localhost:8080')
 - `hooks` (WebMQClientHooks, optional): Client-side middleware hooks
   - `pre` (HookFunction[]): Run before all actions
@@ -394,6 +549,7 @@ new WebMQServer(options: WebMQServerOptions)
 ```
 
 Options (extends ws ServerOptions):
+
 - `rabbitmqUrl` (string, **required**): AMQP connection URL (e.g., 'amqp://localhost' or 'amqp://user:pass@host:5672')
 - `exchangeName` (string, **required**): RabbitMQ exchange name (always created as durable topic exchange)
 - `port` (number, optional): Port to listen on for standalone WebSocket server
@@ -402,6 +558,10 @@ Options (extends ws ServerOptions):
   - `true`: Automatically creates endpoint at `/health`
   - `'/custom-path'`: Creates endpoint at specified path
   - Works with both standalone (`port`) and attached (`server`) modes
+- `metrics` (boolean | string, optional): Enable Prometheus metrics endpoint
+  - `true`: Automatically creates endpoint at `/metrics`
+  - `'/custom-path'`: Creates endpoint at specified path
+  - Exposes metrics in Prometheus text format
 - `hooks` (WebMQHooks, optional): Server-side middleware hooks
   - `pre` (HookFunction[]): Run before all actions
   - `onIdentify` (HookFunction[]): Run when client sends identify message
@@ -423,10 +583,16 @@ Options (extends ws ServerOptions):
   - Closes all RabbitMQ channels and connections
   - Removes graceful shutdown handlers
 
-- `healthCheckHandler(): (req, res) => void` - Returns health check handler for manual setup
+- `healthCheckHandler: (req, res) => void` - Health check handler for manual setup
+  - Bound arrow function property (use directly without calling)
   - Useful for integrating with Express or other frameworks
   - Returns HTTP 200 with health status when healthy
   - Returns HTTP 503 when unhealthy (RabbitMQ disconnected or WebSocket stopped)
+
+- `metricsHandler: (req, res) => void` - Prometheus metrics handler for manual setup
+  - Bound arrow function property (use directly without calling)
+  - Exposes metrics in Prometheus text format (version 0.0.4)
+  - Returns HTTP 200 with metrics data
 
 **Properties:**
 
@@ -434,83 +600,18 @@ Options (extends ws ServerOptions):
 
 **Examples:**
 
-Standalone mode:
+Basic standalone mode:
 
 ```javascript
-const server = new WebMQServer({
+const webMQServer = new WebMQServer({
   rabbitmqUrl: 'amqp://localhost',
   exchangeName: 'my_app',
   port: 8080
 });
-await server.start();
+await webMQServer.start();
 ```
 
-With automatic health check:
-
-```javascript
-const server = new WebMQServer({
-  rabbitmqUrl: 'amqp://localhost',
-  exchangeName: 'my_app',
-  port: 3000,
-  healthCheck: true  // Creates /health endpoint
-});
-await server.start();
-```
-
-Attached to Express with manual health check:
-
-```javascript
-import express from 'express';
-import { createServer } from 'http';
-
-const app = express();
-const httpServer = createServer(app);
-
-const webmq = new WebMQServer({
-  rabbitmqUrl: 'amqp://localhost',
-  exchangeName: 'my_app',
-  server: httpServer
-});
-
-// Manual health check setup
-app.get('/api/health', webmq.healthCheckHandler());
-
-await webmq.start();
-httpServer.listen(8080);
-```
-
-Attached to Express with automatic health check:
-
-```javascript
-import express from 'express';
-import { createServer } from 'http';
-
-const app = express();
-const httpServer = createServer(app);
-
-const webmq = new WebMQServer({
-  rabbitmqUrl: 'amqp://localhost',
-  exchangeName: 'my_app',
-  server: httpServer,
-  healthCheck: '/health'  // Adds request listener to httpServer
-});
-
-await webmq.start();
-httpServer.listen(8080);
-```
-
-**Health Check Response:**
-
-```json
-{
-  "status": "healthy",
-  "rabbitmq": "connected",
-  "websocket": "running",
-  "connections": 42
-}
-```
-
-Returns HTTP 200 when healthy, 503 when unhealthy (RabbitMQ disconnected or WebSocket server stopped).
+For health check and metrics setup examples, see the [Health Check & Metrics](#health-check--metrics) section in Core Concepts.
 
 ## Roadmap
 
@@ -520,7 +621,6 @@ Returns HTTP 200 when healthy, 503 when unhealthy (RabbitMQ disconnected or WebS
 
 - Better error handling in backend (channel errors, connection recovery)
 - Graceful degradation when RabbitMQ is down
-- Metrics/monitoring integration (Prometheus?)
 
 2. Performance
 
@@ -537,22 +637,19 @@ Returns HTTP 200 when healthy, 503 when unhealthy (RabbitMQ disconnected or WebS
 
 4. Advanced Patterns
 
-- Request-reply pattern (RPC over WebMQ)
 - Message persistence/replay
 - Priority queues
 
 5. Security
 
-- TLS/WSS support
 - Rate limiting per client
 - Message size limits
 - Better authentication examples
 
 6. Observability
 
-- Built-in metrics (msg/s, latency, queue depth)
 - Distributed tracing
-- Admin dashboard
+- Custom metric labels/dimensions
 
 ### Nice to Have
 

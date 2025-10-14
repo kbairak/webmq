@@ -1,8 +1,12 @@
 import { spawn } from 'child_process';
 import { Command } from 'commander';
 import getPort from 'get-port';
-import { GenericContainer } from 'testcontainers';
+import { writeFileSync } from 'fs';
+import { WebSocket } from 'ws';
 import { BenchmarkClient } from './client.js';
+
+// Polyfill WebSocket for Node.js
+global.WebSocket = WebSocket;
 
 const program = new Command();
 
@@ -23,7 +27,7 @@ const config = {
   backends: parseInt(opts.backends),
   listens: parseInt(opts.listens),
   publishRate: parseInt(opts.publishRate),
-  keyPoolSize: opts.keyPoolSize ? parseInt(opts.keyPoolSize) : numClients / 2,
+  keyPoolSize: opts.keyPoolSize ? parseInt(opts.keyPoolSize) : Math.max(5, Math.floor(numClients / 2)),
   duration: parseInt(opts.duration),
   messageSize: parseInt(opts.messageSize)
 };
@@ -38,7 +42,6 @@ console.log(`  Duration: ${config.duration}s`);
 console.log(`  Message size: ${config.messageSize} bytes`);
 console.log();
 
-let rabbitmqContainer;
 let backendProcesses = [];
 let clients = [];
 
@@ -50,11 +53,6 @@ async function cleanup() {
     proc.kill();
   }
 
-  // Stop RabbitMQ
-  if (rabbitmqContainer) {
-    await rabbitmqContainer.stop();
-  }
-
   process.exit(0);
 }
 
@@ -62,15 +60,9 @@ process.on('SIGINT', cleanup);
 process.on('SIGTERM', cleanup);
 
 try {
-  // Start RabbitMQ
-  console.log('🐰 Starting RabbitMQ...');
-  rabbitmqContainer = await new GenericContainer('rabbitmq:3.11-management')
-    .withExposedPorts(5672)
-    .start();
-
-  const rabbitmqPort = rabbitmqContainer.getMappedPort(5672);
-  const rabbitmqUrl = `amqp://localhost:${rabbitmqPort}`;
-  console.log(`✅ RabbitMQ started on port ${rabbitmqPort}`);
+  // RabbitMQ is started by docker-compose, use fixed port
+  const rabbitmqUrl = 'amqp://localhost:5672';
+  console.log('🐰 Using RabbitMQ at amqp://localhost:5672 (from docker-compose)');
 
   // Find available ports for backends
   const backendPorts = [];
@@ -93,6 +85,31 @@ try {
   await new Promise(resolve => setTimeout(resolve, 2000));
   console.log(`✅ Backends started on ports ${backendPorts.join(', ')}`);
 
+  // Update Prometheus config with backend targets
+  const prometheusConfig = `global:
+  scrape_interval: 1s
+  evaluation_interval: 1s
+
+scrape_configs:
+  - job_name: 'webmq-backends'
+    static_configs:
+      - targets: [${backendPorts.map(p => `'host.docker.internal:${p}'`).join(', ')}]
+
+  - job_name: 'rabbitmq'
+    static_configs:
+      - targets: ['rabbitmq:15692']
+`;
+  writeFileSync('prometheus.yml', prometheusConfig);
+  console.log(`📊 Updated Prometheus config with ${backendPorts.length} backend target(s) + RabbitMQ`);
+
+  // Reload Prometheus config
+  try {
+    await fetch('http://localhost:9090/-/reload', { method: 'POST' });
+    console.log('✅ Prometheus config reloaded');
+  } catch (e) {
+    console.log('⚠️  Could not reload Prometheus (will use config on next restart)');
+  }
+
   // Create clients
   console.log(`\n👥 Creating ${config.clients} client(s)...`);
   const listenersPerKey = new Map(); // Track which clients listen to which keys
@@ -100,7 +117,21 @@ try {
   for (let i = 0; i < config.clients; i++) {
     const port = backendPorts[i % config.backends];
     const client = new BenchmarkClient(`ws://localhost:${port}`, config.keyPoolSize, config.listens);
-    await client.connect();
+    console.log(`  Connecting client ${i + 1}/${config.clients} to port ${port}...`);
+    try {
+      // Add timeout wrapper
+      await Promise.race([
+        client.connect(),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('Connection timeout after 15s')), 15000)
+        )
+      ]);
+      console.log(`  ✓ Client ${i + 1} connected`);
+    } catch (error) {
+      console.error(`  ✗ Client ${i + 1} failed:`, error.message);
+      console.error('  Stack:', error.stack);
+      throw error;
+    }
     clients.push(client);
 
     // Build listenersPerKey map
@@ -112,7 +143,7 @@ try {
       listenersPerKey.get(keyStr).add(i);
     }
   }
-  console.log(`✅ Clients connected`);
+  console.log(`✅ All ${config.clients} clients connected`);
 
   // Start publishing
   console.log(`\n📤 Publishing messages for ${config.duration}s...`);

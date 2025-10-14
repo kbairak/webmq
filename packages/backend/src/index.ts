@@ -1,6 +1,8 @@
 import WebSocket, { WebSocketServer, ServerOptions } from 'ws';
 import amqplib, { Channel, ChannelModel } from 'amqplib';
 import { HookFunction, runWithHooks } from './hooks';
+import { MetricsCollector } from './metrics';
+import { createServer } from 'http';
 
 export type ClientMessage = {
   action: 'identify' | 'publish' | 'listen' | 'unlisten';
@@ -24,6 +26,7 @@ export type WebMQServerOptions = ServerOptions & {
   exchangeName: string;
   hooks?: WebMQHooks;
   healthCheck?: boolean | string;
+  metrics?: boolean | string;
 }
 
 /**
@@ -37,6 +40,7 @@ export class WebMQServer {
   private _rabbitmqConnection: ChannelModel | null = null;
   private _rabbitmqChannel: Channel | null = null;
   private _wss: WebSocketServer | null = null;
+  private _httpServer: any = null;
   private _hooks = {
     pre: [] as HookFunction[],
     onIdentify: [] as HookFunction[],
@@ -48,27 +52,21 @@ export class WebMQServer {
   private readonly exchangeName: string;
   private readonly wsOptions: ServerOptions;
   private readonly _healthCheckPath: string | null = null;
+  private readonly _metricsPath: string | null = null;
+  private readonly _metrics: MetricsCollector = new MetricsCollector();
 
   constructor(options: WebMQServerOptions) {
-    const { rabbitmqUrl, exchangeName, hooks, healthCheck, ...wsOptions } = options;
+    const { rabbitmqUrl, exchangeName, hooks, healthCheck, metrics, ...wsOptions } = options;
 
     this.rabbitmqUrl = rabbitmqUrl;
     this.exchangeName = exchangeName;
     this.wsOptions = wsOptions;
-
-    // TODO: Can we `Object.assign(this._hooks, hooks)`?
-    if (hooks) {
-      this._hooks = {
-        pre: hooks.pre || [],
-        onIdentify: hooks.onIdentify || [],
-        onPublish: hooks.onPublish || [],
-        onListen: hooks.onListen || [],
-        onUnlisten: hooks.onUnlisten || []
-      };
-    }
-
+    Object.assign(this._hooks, hooks)
     if (healthCheck) {
       this._healthCheckPath = typeof healthCheck === 'string' ? healthCheck : '/health';
+    }
+    if (metrics) {
+      this._metricsPath = typeof metrics === 'string' ? metrics : '/metrics';
     }
   }
 
@@ -76,17 +74,32 @@ export class WebMQServer {
     this._log('info', 'Starting WebMQ server');
     await this._getRabbitmqChannel();
 
-    this._wss = new WebSocketServer(this.wsOptions);
-
-    // Setup health check endpoint if requested
-    if (this._healthCheckPath) {
-      const server = (this._wss as any).options?.server || (this._wss as any)._server;
-      server.on('request', (req: any, res: any) => {
-        if (req.url === this._healthCheckPath) {
+    // If we need HTTP endpoints and don't have a server option, create one
+    if ((this._healthCheckPath || this._metricsPath) && !this.wsOptions.server && this.wsOptions.port) {
+      this._httpServer = createServer((req, res) => {
+        // Handle our HTTP endpoints before WebSocket upgrade
+        if (this._healthCheckPath && req.url === this._healthCheckPath) {
           this._handleHealthCheck(req, res);
+        } else if (this._metricsPath && req.url === this._metricsPath) {
+          this._handleMetrics(req, res);
+        } else {
+          // Regular HTTP request to unknown path - reject it
+          res.writeHead(426, { 'Content-Type': 'text/plain' });
+          res.end('Upgrade Required');
         }
       });
-      this._log('info', `Health check endpoint enabled at ${this._healthCheckPath}`);
+      this._httpServer.listen(this.wsOptions.port);
+      this._wss = new WebSocketServer({ ...this.wsOptions, server: this._httpServer, port: undefined });
+
+      if (this._healthCheckPath) {
+        this._log('info', `Health check endpoint enabled at ${this._healthCheckPath}`);
+      }
+      if (this._metricsPath) {
+        this._log('info', `Metrics endpoint enabled at ${this._metricsPath}`);
+      }
+    } else {
+      // Original behavior for when server is provided or no HTTP endpoints needed
+      this._wss = new WebSocketServer(this.wsOptions);
     }
 
     // Track this instance for graceful shutdown
@@ -94,6 +107,7 @@ export class WebMQServer {
 
     this._wss.on('connection', (ws: WebSocket) => {
       this._log('info', 'Client connected');
+      this._metrics.incrementConnections();
       const hookContext = { ws, sessionId: null as string | null };
       let clientChannel: Channel | null = null;
       let consumerTag: string | null = null;
@@ -105,14 +119,18 @@ export class WebMQServer {
             this._log('debug', `Connecting to RabbitMQ: ${this.rabbitmqUrl}`);
             this._rabbitmqConnection = await amqplib.connect(this.rabbitmqUrl);
             this._log('info', 'RabbitMQ connection established');
+            this._metrics.setRabbitmqConnected(true);
 
             this._rabbitmqConnection.on('close', () => {
               this._log('warn', 'RabbitMQ connection closed');
+              this._metrics.setRabbitmqConnected(false);
               this._rabbitmqChannel = null;
               this._rabbitmqConnection = null;
             });
             this._rabbitmqConnection.on('error', (err) => {
               this._log('error', `RabbitMQ connection error: ${err.message}`);
+              this._metrics.setRabbitmqConnected(false);
+              this._metrics.incrementErrors('rabbitmq_connection');
               this._rabbitmqChannel = null;
               this._rabbitmqConnection = null;
             });
@@ -202,6 +220,7 @@ export class WebMQServer {
                               payload: payload,
                             }));
                             this._log('debug', `ws.send() completed successfully for client ${context.sessionId}`);
+                            this._metrics.incrementReceived();
                             channel.ack(rabbitMsg);
                           } catch (error: any) {
                             this._log('error', `ws.send() failed for client ${context.sessionId}: ${error.message}, readyState=${ws.readyState}`);
@@ -249,11 +268,14 @@ export class WebMQServer {
                       this._log('debug', `Message payload: ${JSON.stringify(msg.payload)}`);
 
                       const channel = await getChannel();
+                      const startTime = Date.now();
                       channel.publish(
                         this.exchangeName,
                         msg.routingKey,
                         Buffer.from(JSON.stringify(msg.payload))
                       );
+                      this._metrics.recordPublishLatency((Date.now() - startTime) / 1000);
+                      this._metrics.incrementPublished(msg.routingKey);
 
                       this._log(
                         'debug',
@@ -301,6 +323,7 @@ export class WebMQServer {
                     await channel.bindQueue(
                       context.sessionId, this.exchangeName, msg.bindingKey
                     );
+                    this._metrics.incrementSubscriptions(msg.bindingKey);
 
                     this._log(
                       'debug',
@@ -339,6 +362,7 @@ export class WebMQServer {
                         this.exchangeName,
                         msg.bindingKey
                       );
+                      this._metrics.decrementSubscriptions(msg.bindingKey);
                       this._log(
                         'debug',
                         `Unbound queue '${context.sessionId}' from bindingKey '${msg.bindingKey}'`
@@ -402,6 +426,7 @@ export class WebMQServer {
           'error',
           `WebSocket error: sessionId=${hookContext.sessionId || 'unknown'}, error=${error.message}`
         );
+        this._metrics.incrementErrors('websocket_error');
       });
 
       ws.on('close', async (code, reason) => {
@@ -410,6 +435,7 @@ export class WebMQServer {
           'info',
           `Client disconnected: sessionId=${hookContext.sessionId}, code=${code}, reason=${reason}`
         );
+        this._metrics.decrementConnections();
 
         if (consumerTag && clientChannel) {
           try {
@@ -467,6 +493,13 @@ export class WebMQServer {
       this._log('debug', 'WebSocket server stopped');
     }
 
+    // Close HTTP server if we created one
+    if (this._httpServer) {
+      this._httpServer.close();
+      this._httpServer = null;
+      this._log('debug', 'HTTP server stopped');
+    }
+
     // Close RabbitMQ channel and connection
     if (this._rabbitmqChannel) {
       try {
@@ -489,22 +522,35 @@ export class WebMQServer {
   }
 
   /**
-   * Returns a health check handler for manual setup with Express or other frameworks.
+   * Health check handler for manual setup with Express or other frameworks.
    *
    * @example
    * ```typescript
    * const app = express();
    * const webmq = new WebMQServer({ httpServer: http.createServer(app), ... });
-   * app.get('/health', webmq.healthCheckHandler());
+   * app.get('/health', webmq.healthCheckHandler);
    * ```
    */
-  public healthCheckHandler() {
-    return (req: any, res: any) => {
-      this._handleHealthCheck(req, res);
-    };
-  }
+  public readonly healthCheckHandler = (req: any, res: any) => {
+    this._handleHealthCheck(req, res);
+  };
+
+  /**
+   * Prometheus metrics handler for manual setup with Express or other frameworks.
+   *
+   * @example
+   * ```typescript
+   * const app = express();
+   * const webmq = new WebMQServer({ httpServer: http.createServer(app), ... });
+   * app.get('/metrics', webmq.metricsHandler);
+   * ```
+   */
+  public readonly metricsHandler = (req: any, res: any) => {
+    this._handleMetrics(req, res);
+  };
 
   private _handleHealthCheck(req: any, res: any): void {
+    if (res.headersSent) return;
     const isHealthy = this._rabbitmqConnection !== null && this._wss !== null;
     const statusCode = isHealthy ? 200 : 503;
 
@@ -519,19 +565,29 @@ export class WebMQServer {
     res.end(JSON.stringify(health));
   }
 
+  private _handleMetrics(req: any, res: any): void {
+    if (res.headersSent) return;
+    res.writeHead(200, { 'Content-Type': 'text/plain; version=0.0.4; charset=utf-8' });
+    res.end(this._metrics.toPrometheusFormat());
+  }
+
   private async _getRabbitmqChannel(): Promise<Channel> {
     if (!this._rabbitmqConnection) {
       this._log('debug', `Connecting to RabbitMQ: ${this.rabbitmqUrl}`);
       this._rabbitmqConnection = await amqplib.connect(this.rabbitmqUrl);
       this._log('info', 'RabbitMQ connection established');
+      this._metrics.setRabbitmqConnected(true);
 
       this._rabbitmqConnection.on('close', () => {
         this._log('warn', 'RabbitMQ connection closed');
+        this._metrics.setRabbitmqConnected(false);
         this._rabbitmqChannel = null;
         this._rabbitmqConnection = null;
       })
       this._rabbitmqConnection.on('error', (err) => {
         this._log('error', `RabbitMQ connection error: ${err.message}`);
+        this._metrics.setRabbitmqConnected(false);
+        this._metrics.incrementErrors('rabbitmq_connection');
         this._rabbitmqChannel = null;
         this._rabbitmqConnection = null;
       })

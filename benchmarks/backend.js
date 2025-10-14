@@ -11,10 +11,11 @@ if (!port || !rabbitmqUrl) {
 const server = new WebMQServer({
   rabbitmqUrl,
   exchangeName: 'benchmark',
-  port
+  port,
+  metrics: true  // Enable Prometheus metrics
 });
 
 server.logLevel = 'silent';
 
 await server.start();
-console.log(`Backend started on port ${port}`);
+console.log(`Backend started on port ${port} with metrics at /metrics`);

@@ -1,23 +1,45 @@
 # WebMQ Benchmarks
 
-Performance benchmarking tool for WebMQ framework.
+Performance benchmarking tool for WebMQ framework with real-time Prometheus metrics and Grafana dashboards.
 
 ## Features
 
-- **Automated Setup**: RabbitMQ via testcontainers, auto-finds available ports
+- **Real-time Monitoring**: Prometheus metrics + Grafana dashboards with 1s refresh
+- **Automated Setup**: RabbitMQ, Prometheus, and Grafana via Docker Compose
 - **Horizontal Scaling**: Test multiple backend processes with round-robin client distribution
-- **Real Metrics**: Latency percentiles (p50/p95/p99), throughput, message loss
+- **Performance Metrics**: Latency percentiles (p50/p95/p99), throughput, message loss, drain time
 - **Configurable Load**: Control clients, backends, subscriptions, publish rate, key pool size
 
-## Setup
+## Quick Start
 
 ```bash
 cd benchmarks
 npm install
+
+# Make script executable (if needed)
+chmod +x run-benchmark.sh
+
+# Run with Grafana dashboard (recommended)
+./run-benchmark.sh --clients 10 --duration 30
+
+# Or run standalone
+node benchmark.js --clients 10 --duration 5
 ```
+
+The `run-benchmark.sh` script:
+1. Starts Docker services (RabbitMQ, Prometheus, Grafana)
+2. Opens Grafana dashboard at http://localhost:3000
+3. Runs the benchmark
+4. Cleans up Docker services on exit
 
 ## Usage
 
+**With monitoring (recommended):**
+```bash
+./run-benchmark.sh [options]
+```
+
+**Standalone (no monitoring):**
 ```bash
 node benchmark.js [options]
 ```
@@ -36,30 +58,82 @@ node benchmark.js [options]
 
 ### Examples
 
-**Quick test:**
+**Quick test with monitoring:**
 ```bash
-node benchmark.js --clients 10 --duration 5
+./run-benchmark.sh --clients 10 --duration 30
 ```
 
-**High load:**
+**High load test:**
 ```bash
-node benchmark.js --clients 500 --backends 4 --publish-rate 10 --duration 30
+./run-benchmark.sh --clients 500 --backends 4 --publish-rate 10 --duration 60
 ```
 
 **Low contention (large key pool):**
 ```bash
-node benchmark.js --clients 100 --key-pool-size 500
+./run-benchmark.sh --clients 100 --key-pool-size 500 --duration 30
 ```
 
 **High contention (small key pool):**
 ```bash
-node benchmark.js --clients 100 --key-pool-size 5
+./run-benchmark.sh --clients 100 --key-pool-size 5 --duration 30
 ```
+
+**Standalone (no Grafana):**
+```bash
+node benchmark.js --clients 10 --duration 5
+```
+
+## Monitoring Setup
+
+The benchmark includes a complete observability stack:
+
+**Services:**
+- **RabbitMQ** (localhost:5672) - Message broker
+- **Prometheus** (localhost:9090) - Metrics collection (1s scrape interval)
+- **Grafana** (localhost:3000) - Visualization dashboard
+
+**Metrics Exposed:**
+
+*WebMQ Metrics:*
+- `webmq_connections_active` - Active WebSocket connections
+- `webmq_messages_published_total` - Total messages published
+- `webmq_messages_received_total` - Total messages received
+- `webmq_publish_duration_seconds` - Publish latency histogram
+- `webmq_messages_by_routing_key` - Per-key message counters
+- `webmq_subscriptions_active` - Active subscriptions
+- `webmq_rabbitmq_connected` - RabbitMQ connection status
+- `webmq_errors_total` - Error counters by type
+
+*RabbitMQ Metrics:*
+- `rabbitmq_queue_messages_ready` - Messages ready for delivery
+- `rabbitmq_queue_messages_unacknowledged` - Messages delivered but not acked
+- `rabbitmq_process_resident_memory_bytes` - RabbitMQ memory usage
+- `rabbitmq_channel_messages_published_total` - Total messages published to broker
+- `rabbitmq_channel_messages_delivered_total` - Total messages delivered by broker
+- `rabbitmq_channel_messages_acknowledged_total` - Total messages acknowledged
+- `rabbitmq_connections` - Active connections to RabbitMQ
+- `rabbitmq_channels` - Active channels in RabbitMQ
+
+**Grafana Dashboard:**
+- Real-time graphs with 1s refresh rate
+- Message throughput (publish/receive rates)
+- Latency distribution (p50/p95/p99)
+- Connection tracking
+- Per-backend metrics
+- RabbitMQ broker metrics (queue depth, memory usage, message rates, connections)
+
+Access points:
+- Grafana: http://localhost:3000 (auto-opens with `run-benchmark.sh`)
+- Prometheus: http://localhost:9090
+- RabbitMQ Management: http://localhost:15672 (guest/guest)
+- RabbitMQ Metrics: http://localhost:15692/metrics
 
 ## How It Works
 
-1. **Starts RabbitMQ** via testcontainers
-2. **Spawns N backend processes** on auto-discovered ports
+1. **Starts infrastructure** (when using `run-benchmark.sh`):
+   - RabbitMQ, Prometheus, Grafana via Docker Compose
+   - Configures Prometheus to scrape backend metrics
+2. **Spawns N backend processes** on auto-discovered ports with metrics enabled
 3. **Creates M clients** distributed round-robin across backends
 4. **Each client**:
    - Picks random keys from pool to listen to
@@ -140,6 +214,36 @@ Backend Distribution:
 - Shows load balancing across backend processes
 - Should be roughly equal for round-robin distribution
 
+### Using WebMQ + RabbitMQ Metrics Together
+
+The benchmark exposes metrics from both WebMQ backends and the RabbitMQ broker, providing end-to-end visibility into your message flow. Comparing these metrics helps identify bottlenecks:
+
+**Scenario 1: Low WebMQ latency, growing RabbitMQ queue depth**
+- **Symptom:** `webmq_publish_duration_seconds` is low (< 50ms) but `rabbitmq_queue_messages_ready` keeps growing
+- **Diagnosis:** WebMQ backends are publishing faster than consumers can process
+- **Action:** Scale consumers or optimize message processing
+
+**Scenario 2: High WebMQ latency, stable RabbitMQ queues**
+- **Symptom:** `webmq_publish_duration_seconds` is high (> 500ms) but `rabbitmq_queue_messages_ready` stays low
+- **Diagnosis:** WebMQ backends are the bottleneck (CPU/memory saturation)
+- **Action:** Add more backend processes or reduce client count per backend
+
+**Scenario 3: Message count mismatches**
+- **Symptom:** `webmq_messages_published_total` ≠ `rabbitmq_channel_messages_published_total`
+- **Diagnosis:** Messages dropped before reaching RabbitMQ (connection issues, serialization errors)
+- **Action:** Check `webmq_errors_total` and backend logs
+
+**Scenario 4: High RabbitMQ memory usage**
+- **Symptom:** `rabbitmq_process_resident_memory_bytes` growing rapidly
+- **Diagnosis:** Queue buildup due to slow consumers or high message size
+- **Action:** Increase message processing rate or reduce message size
+
+**Key Correlation Points:**
+- `webmq_messages_published_total` should match `rabbitmq_channel_messages_published_total` (no drops)
+- `rabbitmq_channel_messages_delivered_total` should match `webmq_messages_received_total` (successful delivery)
+- `rabbitmq_queue_messages_ready` staying at 0 indicates healthy throughput
+- `rabbitmq_connections` should equal number of backend processes
+
 ## Benchmark Results
 
 **Test System:** Apple M4, 16GB RAM, macOS 15.7
@@ -177,3 +281,36 @@ Backend Distribution:
 **Key pool size effects:**
 - **Small pool** (< clients/5): High contention, extreme fan-out (40x+)
 - **Large pool** (> clients): Low contention, point-to-point messaging (1-2x fan-out)
+
+## Troubleshooting
+
+**Port already in use:**
+```bash
+# Stop existing Docker services
+docker-compose down
+
+# Or stop specific containers
+docker stop $(docker ps -q --filter ancestor=rabbitmq)
+docker stop $(docker ps -q --filter ancestor=prom/prometheus)
+docker stop $(docker ps -q --filter ancestor=grafana/grafana)
+```
+
+**Grafana dashboard not loading:**
+- Wait 10-15 seconds after startup for Grafana to initialize
+- Check service status: `docker-compose ps`
+- View logs: `docker-compose logs grafana`
+
+**Metrics not appearing in Grafana:**
+- Verify Prometheus is scraping: http://localhost:9090/targets
+- Check backend logs for metrics endpoint errors
+- Ensure `prometheus.yml` has correct backend ports
+
+**Clean reset:**
+```bash
+# Remove all containers and volumes
+docker-compose down -v
+rm prometheus.yml
+
+# Restart from scratch
+./run-benchmark.sh
+```

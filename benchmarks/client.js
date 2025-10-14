@@ -8,33 +8,36 @@ export class BenchmarkClient {
     this.receivedMessages = [];
     this.publishedCount = 0;
     this.listenKeys = new Set();
-    this.client = new WebMQClient();
+    this.client = new WebMQClient({
+      url: wsUrl,
+      ackTimeoutDelay: 30000 // 30 seconds for benchmarks
+    });
     this.client.logLevel = 'silent'; // Reduce noise
   }
 
   async connect() {
-    return new Promise((resolve) => {
-      this.client.setup(this.wsUrl);
-
-      // Pick random keys to listen to
-      while (this.listenKeys.size < this.numListens) {
-        const key = Math.floor(Math.random() * this.keyPoolSize);
-        this.listenKeys.add(key);
+    // Pick random keys to listen to
+    // Safety: can't have more listens than keys available
+    const maxListens = Math.min(this.numListens, this.keyPoolSize);
+    let attempts = 0;
+    while (this.listenKeys.size < maxListens) {
+      const key = Math.floor(Math.random() * this.keyPoolSize);
+      this.listenKeys.add(key);
+      attempts++;
+      if (attempts > this.keyPoolSize * 100) {
+        throw new Error('Too many attempts to generate unique keys');
       }
+    }
 
-      // Listen to selected keys
-      for (const key of this.listenKeys) {
-        this.client.listen(String(key), (msg) => {
-          this.receivedMessages.push({
-            ...msg,
-            receivedAt: Date.now()
-          });
+    // Listen to selected keys one at a time to avoid overwhelming the backend
+    for (const key of this.listenKeys) {
+      await this.client.listen(String(key), (msg) => {
+        this.receivedMessages.push({
+          ...msg,
+          receivedAt: Date.now()
         });
-      }
-
-      // Give a moment for setup to complete
-      setTimeout(resolve, 200);
-    });
+      });
+    }
   }
 
   publishMessage(messageSize, listenersPerKey) {

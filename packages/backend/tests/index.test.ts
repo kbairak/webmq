@@ -44,6 +44,20 @@ jest.mock('amqplib', () => {
   };
 });
 
+// Mock the http module to prevent real HTTP servers from being created
+jest.mock('http', () => {
+  const mockHttpServer = {
+    listen: jest.fn(),
+    close: jest.fn(),
+    on: jest.fn()
+  };
+
+  return {
+    createServer: jest.fn(() => mockHttpServer),
+    mockHttpServer // Export for use in tests
+  };
+});
+
 // Import the mocked connection and channel for type safety and direct access
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { mockConnection, mockChannel } = require('amqplib');
@@ -110,6 +124,12 @@ describe('WebMQServer', () => {
       close: jest.fn(),
     };
     (WebSocketServer as unknown as jest.Mock).mockImplementation(() => mockWSS);
+  });
+
+  afterEach(async () => {
+    if (server) {
+      await server.stop();
+    }
   });
 
   describe('Lifecycle', () => {
@@ -831,21 +851,8 @@ describe('WebMQServer', () => {
 
   describe('Health Check', () => {
     it('should set up health check endpoint when port provided', async () => {
-      const mockHttpServer = {
-        on: jest.fn(),
-        listen: jest.fn()
-      };
-
-      (WebSocketServer as unknown as jest.Mock).mockImplementation((options) => {
-        const wss = {
-          on: jest.fn(),
-          close: jest.fn(),
-          clients: new Set(),
-          options,
-          _server: mockHttpServer // Simulate internal HTTP server
-        };
-        return wss;
-      });
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const http = require('http');
 
       const server = new WebMQServer({
         rabbitmqUrl: 'amqp://localhost',
@@ -857,26 +864,19 @@ describe('WebMQServer', () => {
 
       await server.start();
 
-      // Should register request listener for health checks
-      expect(mockHttpServer.on).toHaveBeenCalledWith('request', expect.any(Function));
+      // Should create HTTP server with request handler
+      expect(http.createServer).toHaveBeenCalledWith(expect.any(Function));
+      // Should listen on the specified port
+      expect(http.mockHttpServer.listen).toHaveBeenCalledWith(8080);
+      // Should create WebSocketServer with the HTTP server
+      expect(WebSocketServer).toHaveBeenCalledWith(expect.objectContaining({
+        server: http.mockHttpServer
+      }));
     });
 
     it('should use custom health check path when string provided', async () => {
-      const mockHttpServer = {
-        on: jest.fn(),
-        listen: jest.fn()
-      };
-
-      (WebSocketServer as unknown as jest.Mock).mockImplementation((options) => {
-        const wss = {
-          on: jest.fn(),
-          close: jest.fn(),
-          clients: new Set(),
-          options,
-          _server: mockHttpServer
-        };
-        return wss;
-      });
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const http = require('http');
 
       const server = new WebMQServer({
         rabbitmqUrl: 'amqp://localhost',
@@ -888,7 +888,9 @@ describe('WebMQServer', () => {
 
       await server.start();
 
-      expect(mockHttpServer.on).toHaveBeenCalledWith('request', expect.any(Function));
+      // Should create HTTP server with request handler
+      expect(http.createServer).toHaveBeenCalledWith(expect.any(Function));
+      expect(http.mockHttpServer.listen).toHaveBeenCalledWith(8080);
     });
 
     it('should return healthy status when server is running', async () => {
@@ -912,8 +914,7 @@ describe('WebMQServer', () => {
 
       await server.start();
 
-      const handler = server.healthCheckHandler();
-      handler({}, mockRes);
+      server.healthCheckHandler({}, mockRes);
 
       expect(mockRes.writeHead).toHaveBeenCalledWith(200, { 'Content-Type': 'application/json' });
       expect(mockRes.end).toHaveBeenCalledWith(expect.stringContaining('"status":"healthy"'));
@@ -943,8 +944,7 @@ describe('WebMQServer', () => {
       await server.start();
       await server.stop();
 
-      const handler = server.healthCheckHandler();
-      handler({}, mockRes);
+      server.healthCheckHandler({}, mockRes);
 
       expect(mockRes.writeHead).toHaveBeenCalledWith(503, { 'Content-Type': 'application/json' });
       expect(mockRes.end).toHaveBeenCalledWith(expect.stringContaining('"status":"unhealthy"'));
@@ -975,8 +975,7 @@ describe('WebMQServer', () => {
 
       await server.start();
 
-      const handler = server.healthCheckHandler();
-      handler({}, mockRes);
+      server.healthCheckHandler({}, mockRes);
 
       expect(mockRes.end).toHaveBeenCalledWith(expect.stringContaining('"connections":3'));
     });
