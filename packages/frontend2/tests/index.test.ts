@@ -32,9 +32,15 @@ describe('WebMQClient', () => {
     mockWs.dispatchEvent(new Event('open'));
 
     // Verify identify was sent
-    expect(mockWs.send).toHaveBeenCalledWith(bundleData({
+    expect(mockWs.send).toHaveBeenCalledTimes(1);
+    const sentData = mockWs.send.mock.calls.at(-1)[0];
+    expect(sentData).toBeInstanceOf(ArrayBuffer);
+    const [header, payload] = unbundleData(sentData);
+    expect(header).toEqual({
       action: 'identify', messageId: 'uuid_1', sessionId: 'dumb_sessionid'
-    }));
+    });
+    const payloadText = new TextDecoder().decode(payload);
+    expect(payloadText).toEqual('');
 
     // Simulate ack response to resolve the promise
     mockWs.dispatchEvent(new MessageEvent('message', {
@@ -299,4 +305,99 @@ describe('WebMQClient', () => {
     // Use Jest's rejects matcher to properly handle async rejection
     await expect(publishPromise).rejects.toThrow('Message timeout');
   })
+
+  it('should apply identify hook', async () => {
+    const c = new WebMQClient();
+
+    const onIdentify = (header: object) => ({ ...header, identify: 'hook' })
+    c.addHook('identify', onIdentify);
+    expect((c as any)._hooks.identify).toContain(onIdentify);
+
+    c.connect('dumb_url', 'dumb_sessionid');
+    mockWs.dispatchEvent(new Event('open'));
+
+    // Wait for async hooks to complete
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(mockWs.send).toHaveBeenCalledTimes(1);
+    const sentData = mockWs.send.mock.calls.at(-1)[0];
+    expect(sentData).toBeInstanceOf(ArrayBuffer);
+    const [header, payload] = unbundleData(sentData);
+    expect(header).toEqual({
+      action: 'identify', messageId: 'uuid_1', sessionId: 'dumb_sessionid', identify: 'hook'
+    });
+    const payloadText = new TextDecoder().decode(payload);
+    expect(payloadText).toEqual('');
+  });
+
+  it('should apply all hook to identify', async () => {
+    const c = new WebMQClient();
+
+    const onIdentify = (header: object) => ({ ...header, all: 'hook' })
+    c.addHook('all', onIdentify);
+    expect((c as any)._hooks.all).toContain(onIdentify);
+
+    c.connect('dumb_url', 'dumb_sessionid');
+    mockWs.dispatchEvent(new Event('open'));
+
+    // Wait for async hooks to complete
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(mockWs.send).toHaveBeenCalledTimes(1);
+    const sentData = mockWs.send.mock.calls.at(-1)[0];
+    expect(sentData).toBeInstanceOf(ArrayBuffer);
+    const [header, payload] = unbundleData(sentData);
+    expect(header).toEqual({
+      action: 'identify', messageId: 'uuid_1', sessionId: 'dumb_sessionid', all: 'hook'
+    });
+    const payloadText = new TextDecoder().decode(payload);
+    expect(payloadText).toEqual('');
+  });
+
+  it('should should apply publish hook', async () => {
+    const c = await getIdentifiedClient();
+    const onPublish = (header: object) => ({ ...header, publish: 'hook' })
+    c.addHook('publish', onPublish);
+    expect((c as any)._hooks.publish).toContain(onPublish);
+
+    c.publish('dumb_routing_key', { data: 'dumb_payload' });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(mockWs.send).toHaveBeenCalledTimes(2);
+    const sentData = mockWs.send.mock.calls.at(-1)[0];
+    expect(sentData).toBeInstanceOf(ArrayBuffer);
+    const [header, payload] = unbundleData(sentData);
+    expect(header).toEqual({
+      action: 'publish', routingKey: 'dumb_routing_key', messageId: 'uuid_2', publish: 'hook'
+    });
+    const payloadText = new TextDecoder().decode(payload);
+    expect(JSON.parse(payloadText)).toEqual({ data: 'dumb_payload' });
+  });
+
+  it('should should apply all hook to publish', async () => {
+    const c = await getIdentifiedClient();
+    const onPublish = (header: object) => ({ ...header, all: 'hook' })
+    c.addHook('all', onPublish);
+    expect((c as any)._hooks.all).toContain(onPublish);
+
+    c.publish('dumb_routing_key', { data: 'dumb_payload' });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(mockWs.send).toHaveBeenCalledTimes(2);
+    const sentData = mockWs.send.mock.calls.at(-1)[0];
+    expect(sentData).toBeInstanceOf(ArrayBuffer);
+    const [header, payload] = unbundleData(sentData);
+    expect(header).toEqual({
+      action: 'publish', routingKey: 'dumb_routing_key', messageId: 'uuid_2', all: 'hook'
+    });
+    const payloadText = new TextDecoder().decode(payload);
+    expect(JSON.parse(payloadText)).toEqual({ data: 'dumb_payload' });
+  });
+
+  it('should remove hook', () => {
+    const c = new WebMQClient();
+    const onIdentify = jest.fn();
+    c.addHook('identify', onIdentify);
+    expect((c as any)._hooks.identify).toContain(onIdentify);
+    c.removeHook('identify', onIdentify);
+    expect((c as any)._hooks.identify).not.toContain(onIdentify);
+  });
 });

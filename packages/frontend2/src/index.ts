@@ -4,12 +4,13 @@ import ReconnectingWebSocket from './ReconnectingWebSocket';
 import { bundleData, unbundleData } from './bundle';
 
 // TODOs:
-//   - hooks
 //   - graceful shutdown
 //   - logs
 //   - more events for EventEmitter
 //   - session management (get-or-create session ID on window.sessionStorage)
 //   - ack back on message
+
+type HeaderTransformer = (header: object) => object | Promise<object>;
 
 export default class WebMQClient extends EventEmitter {
   private _ws: ReconnectingWebSocket | null = null;
@@ -18,6 +19,19 @@ export default class WebMQClient extends EventEmitter {
   private _identified: boolean = false;
   private _timeoutDelay: number;
   private _messageQueue: { header: object, payload?: ArrayBuffer }[] = [];
+  private _hooks: {
+    identify: Set<HeaderTransformer>;
+    publish: Set<HeaderTransformer>;
+    listen: Set<HeaderTransformer>;
+    unlisten: Set<HeaderTransformer>;
+    all: Set<HeaderTransformer>;
+  } = {
+      identify: new Set(),
+      publish: new Set(),
+      listen: new Set(),
+      unlisten: new Set(),
+      all: new Set(),
+    };
 
   constructor({ timeoutDelay = 10000 } = {}) {
     super();
@@ -58,10 +72,30 @@ export default class WebMQClient extends EventEmitter {
             this._ws?.addEventListener('close', this._onClose);
             this._ws?.removeEventListener('close', onClose);
             this._identified = true;
-            this._messageQueue.forEach(({ header, payload }) => {
-              this._ws?.send(bundleData(header, payload));
-            });
-            this._messageQueue.length = 0; // Clear the queue
+
+            (async () => {
+              for (const { header, payload } of this._messageQueue) {
+                const headerWithAction = header as { action: string;[key: string]: any };
+                let transformedHeader = header;
+
+                // Run action-specific hooks
+                const action = headerWithAction.action;
+                if (action === 'identify' || action === 'publish' || action === 'listen' || action === 'unlisten') {
+                  for (const hook of this._hooks[action]) {
+                    transformedHeader = await hook(transformedHeader);
+                  }
+                }
+
+                // Run 'all' hooks
+                for (const hook of this._hooks.all) {
+                  transformedHeader = await hook(transformedHeader);
+                }
+
+                this._ws?.send(bundleData(transformedHeader, payload));
+              }
+              this._messageQueue.length = 0; // Clear the queue
+            })();
+
             resolveConnect();
           } else if (this._pendingMessages.has(header.messageId)) {
             this._pendingMessages.get(header.messageId)?.resolve();
@@ -92,14 +126,28 @@ export default class WebMQClient extends EventEmitter {
         }
       });
 
-      this._ws?.addEventListener('open', () => {
-        this._ws?.send(bundleData({ action: 'identify', messageId: identifyMessageId, sessionId }));
+      this._ws?.addEventListener('open', async () => {
+        let header: object = { action: 'identify', messageId: identifyMessageId, sessionId };
+        for (const hook of this._hooks.identify) {
+          header = await hook(header);
+        }
+        for (const hook of this._hooks.all) {
+          header = await hook(header);
+        }
+        this._ws?.send(bundleData(header));
       });
 
       this._ws?.addEventListener('reconnecting', () => { this._identified = false; })
-      this._ws?.addEventListener('reconnected', () => {
+      this._ws?.addEventListener('reconnected', async () => {
         identifyMessageId = uuid();
-        this._ws?.send(bundleData({ action: 'identify', messageId: identifyMessageId, sessionId }));
+        let header: object = { action: 'identify', messageId: identifyMessageId, sessionId };
+        for (const hook of this._hooks.identify) {
+          header = await hook(header);
+        }
+        for (const hook of this._hooks.all) {
+          header = await hook(header);
+        }
+        this._ws?.send(bundleData(header));
       })
     });
   }
@@ -189,11 +237,32 @@ export default class WebMQClient extends EventEmitter {
       });
 
       if (this._identified) {
-        this._ws?.send(bundleData({ ...header, messageId }, payload));
+        (async () => {
+          const headerWithAction = header as { action: string;[key: string]: any };
+          let transformedHeader: object = { ...header, messageId };
+          const action = headerWithAction.action;
+          if (action === 'identify' || action === 'publish' || action === 'listen' || action === 'unlisten') {
+            for (const hook of this._hooks[action]) {
+              transformedHeader = await hook(transformedHeader);
+            }
+          }
+          for (const hook of this._hooks.all) {
+            transformedHeader = await hook(transformedHeader);
+          }
+          this._ws?.send(bundleData(transformedHeader, payload));
+        })();
       } else {
         this._messageQueue.push({ header: { ...header, messageId }, payload });
       }
     });
+  }
+
+  public addHook(action: keyof typeof this._hooks, hook: HeaderTransformer): void {
+    this._hooks[action].add(hook);
+  }
+
+  public removeHook(action: keyof typeof this._hooks, hook: HeaderTransformer): void {
+    this._hooks[action].delete(hook);
   }
 }
 
