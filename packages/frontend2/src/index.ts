@@ -1,23 +1,22 @@
-import { EventEmitter } from 'eventemitter3';
 import { v4 as uuid } from 'uuid';
 import ReconnectingWebSocket from './ReconnectingWebSocket';
 import { bundleData, unbundleData } from './bundle';
 
 // TODOs:
-//   - graceful shutdown
-//   - logs
-//   - more events for EventEmitter
-//   - session management (get-or-create session ID on window.sessionStorage)
-//   - ack back on message
+//   - more emits
+//   - logs (no, in favor of emits)
+//   - ack back on message (?)
+//   - Helpers for session vs localStorage vs React Native vs vanilla JS vs React
+//   - Configure reconnection retry attempts
 
 type HeaderTransformer = (header: object) => object | Promise<object>;
 
-export default class WebMQClient extends EventEmitter {
+export default class WebMQClient extends EventTarget {
+  public timeoutDelay: number;
   private _ws: ReconnectingWebSocket | null = null;
   private _pendingMessages = new Map<string, { resolve: Function, reject: Function }>();
   private _messageListeners = new Map<string, Map<(payload: any) => void, boolean>>();
   private _identified: boolean = false;
-  private _timeoutDelay: number;
   private _messageQueue: { header: object, payload?: ArrayBuffer }[] = [];
   private _hooks: {
     identify: Set<HeaderTransformer>;
@@ -33,13 +32,20 @@ export default class WebMQClient extends EventEmitter {
       all: new Set(),
     };
 
-  constructor({ timeoutDelay = 10000 } = {}) {
+  constructor(readonly url: string, readonly sessionId: string, { timeoutDelay = 10000 } = {}) {
     super();
-    this._timeoutDelay = timeoutDelay;
+    this.timeoutDelay = timeoutDelay;
+
+    // Graceful shutdown on page unload
+    if (typeof window !== 'undefined' && window.addEventListener) {
+      window.addEventListener('beforeunload', () => {
+        this._ws?.close();
+      });
+    }
   }
 
-  public connect(url: string, sessionId: string): Promise<void> {
-    this._ws = new ReconnectingWebSocket(url);
+  public connect(): Promise<void> {
+    this._ws = new ReconnectingWebSocket(this.url);
     this._ws.binaryType = 'arraybuffer';
 
     let identifyMessageId = uuid();
@@ -47,7 +53,7 @@ export default class WebMQClient extends EventEmitter {
     return new Promise((resolveConnect, rejectConnect) => {
       const onError = (err: Event) => {
         rejectConnect();
-        this.emit('error', err);
+        this.dispatchEvent(err);
       };
       this._ws?.addEventListener('error', onError);
 
@@ -63,7 +69,9 @@ export default class WebMQClient extends EventEmitter {
         if (messageEvent.data instanceof ArrayBuffer) {
           [header, payload] = unbundleData(messageEvent.data);
         } else {
-          this.emit('error', new Error('Unsupported message format'));
+          this.dispatchEvent(new ErrorEvent('error', {
+            error: new Error('Unsupported message format')
+          }));
           return;
         }
 
@@ -101,7 +109,9 @@ export default class WebMQClient extends EventEmitter {
             this._pendingMessages.get(header.messageId)?.resolve();
             this._pendingMessages.delete(header.messageId);
           } else {
-            this.emit('error', new Error(`Received ack for unknown messageId: ${header.messageId}`));
+            this.dispatchEvent(new ErrorEvent('error', {
+              error: new Error(`Received ack for unknown messageId: ${header.messageId}`)
+            }));
           }
         } else if (header.action === 'nack') {
           if (this._pendingMessages.has(header.messageId)) {
@@ -127,7 +137,7 @@ export default class WebMQClient extends EventEmitter {
       });
 
       this._ws?.addEventListener('open', async () => {
-        let header: object = { action: 'identify', messageId: identifyMessageId, sessionId };
+        let header: object = { action: 'identify', messageId: identifyMessageId, sessionId: this.sessionId };
         for (const hook of this._hooks.identify) {
           header = await hook(header);
         }
@@ -140,7 +150,7 @@ export default class WebMQClient extends EventEmitter {
       this._ws?.addEventListener('reconnecting', () => { this._identified = false; })
       this._ws?.addEventListener('reconnected', async () => {
         identifyMessageId = uuid();
-        let header: object = { action: 'identify', messageId: identifyMessageId, sessionId };
+        let header: object = { action: 'identify', messageId: identifyMessageId, sessionId: this.sessionId };
         for (const hook of this._hooks.identify) {
           header = await hook(header);
         }
@@ -214,7 +224,7 @@ export default class WebMQClient extends EventEmitter {
   private _onClose = (event: Event) => {
     this._pendingMessages.forEach(({ reject }) => reject(new Error('Connection closed')));
     this._pendingMessages.clear();
-    this.emit('close', event);
+    this.dispatchEvent(event);
   };
 
   private _sendWithAck(header: object, payload?: ArrayBuffer): Promise<void> {
@@ -223,7 +233,7 @@ export default class WebMQClient extends EventEmitter {
       const timeout = setTimeout(() => {
         this._pendingMessages.delete(messageId);
         reject(new Error('Message timeout'));
-      }, this._timeoutDelay);
+      }, this.timeoutDelay);
 
       this._pendingMessages.set(messageId, {
         resolve: () => {

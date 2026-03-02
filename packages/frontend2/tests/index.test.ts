@@ -23,8 +23,8 @@ describe('WebMQClient', () => {
   });
 
   it('should connect', async () => {
-    const c = new WebMQClient();
-    const connectPromise = c.connect('dumb_url', 'dumb_sessionid');
+    const c = new WebMQClient('dumb_url', 'dumb_sessionid');
+    const connectPromise = c.connect();
     expect(MockReconnectingWebSocket).toHaveBeenCalledWith('dumb_url');
     expect(mockWs.addEventListener).toHaveBeenCalledTimes(6);
 
@@ -52,8 +52,8 @@ describe('WebMQClient', () => {
   });
 
   it('should reject connect on error', async () => {
-    const c = new WebMQClient();
-    const connectPromise = c.connect('dumb_url', 'dumb_sessionid');
+    const c = new WebMQClient('dumb_url', 'dumb_sessionid');
+    const connectPromise = c.connect();
     mockWs.dispatchEvent(new Event('error'));
     let raised = false;
     try {
@@ -65,8 +65,8 @@ describe('WebMQClient', () => {
   });
 
   it('should reject connect on close', async () => {
-    const c = new WebMQClient();
-    const connectPromise = c.connect('dumb_url', 'dumb_sessionid');
+    const c = new WebMQClient('dumb_url', 'dumb_sessionid');
+    const connectPromise = c.connect();
     mockWs.dispatchEvent(new Event('close'));
     let raised = false;
     try {
@@ -78,8 +78,8 @@ describe('WebMQClient', () => {
   });
 
   async function getIdentifiedClient() {
-    const c = new WebMQClient();
-    const connectPromise = c.connect('dumb_url', 'dumb_sessionid');
+    const c = new WebMQClient('dumb_url', 'dumb_sessionid');
+    const connectPromise = c.connect();
     mockWs.dispatchEvent(new Event('open'));
     mockWs.dispatchEvent(new MessageEvent('message', {
       data: bundleData({ action: 'ack', messageId: 'uuid_1' })
@@ -292,8 +292,8 @@ describe('WebMQClient', () => {
   });
 
   it('rejects because of timeout', async () => {
-    const c = new WebMQClient({ timeoutDelay: 1 });
-    const connectPromise = c.connect('dumb_url', 'dumb_sessionid');
+    const c = new WebMQClient('dumb_url', 'dumb_sessionid', { timeoutDelay: 1 });
+    const connectPromise = c.connect();
     mockWs.dispatchEvent(new Event('open'));
     mockWs.dispatchEvent(new MessageEvent('message', {
       data: bundleData({ action: 'ack', messageId: 'uuid_1' })
@@ -307,13 +307,13 @@ describe('WebMQClient', () => {
   })
 
   it('should apply identify hook', async () => {
-    const c = new WebMQClient();
+    const c = new WebMQClient('dumb_url', 'dumb_sessionid');
 
     const onIdentify = (header: object) => ({ ...header, identify: 'hook' })
     c.addHook('identify', onIdentify);
     expect((c as any)._hooks.identify).toContain(onIdentify);
 
-    c.connect('dumb_url', 'dumb_sessionid');
+    c.connect();
     mockWs.dispatchEvent(new Event('open'));
 
     // Wait for async hooks to complete
@@ -331,13 +331,13 @@ describe('WebMQClient', () => {
   });
 
   it('should apply all hook to identify', async () => {
-    const c = new WebMQClient();
+    const c = new WebMQClient('dumb_url', 'dumb_sessionid');
 
     const onIdentify = (header: object) => ({ ...header, all: 'hook' })
     c.addHook('all', onIdentify);
     expect((c as any)._hooks.all).toContain(onIdentify);
 
-    c.connect('dumb_url', 'dumb_sessionid');
+    c.connect();
     mockWs.dispatchEvent(new Event('open'));
 
     // Wait for async hooks to complete
@@ -393,7 +393,7 @@ describe('WebMQClient', () => {
   });
 
   it('should remove hook', () => {
-    const c = new WebMQClient();
+    const c = new WebMQClient('dumb_url', 'dumb_sessionid');
     const onIdentify = jest.fn();
     c.addHook('identify', onIdentify);
     expect((c as any)._hooks.identify).toContain(onIdentify);
