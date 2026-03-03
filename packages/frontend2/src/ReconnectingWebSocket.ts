@@ -3,14 +3,15 @@ export default class ReconnectingWebSocket extends EventTarget {
   private _reconnectAttempts = 0;
   private _shouldReconnect = true;
 
-  constructor(readonly url: string) {
+  constructor(
+    readonly url: string, private reconnectDelays = [0, 1000, 2000, 4000, 8000]
+  ) {
     super()
     this._connect();
   }
 
   private _connect(): void {
     this._ws = new WebSocket(this.url);
-    this._ws.binaryType = 'arraybuffer'
 
     this._ws.addEventListener('open', (event: Event) => {
       if (this._reconnectAttempts > 0) {
@@ -22,15 +23,14 @@ export default class ReconnectingWebSocket extends EventTarget {
     });
 
     this._ws.addEventListener('close', async (event: CloseEvent) => {
-      if (!this._shouldReconnect || this._reconnectAttempts >= 5) {
+      if (!this._shouldReconnect || this._reconnectAttempts >= this.reconnectDelays.length) {
         this.dispatchEvent(event);
       } else {
         if (this._reconnectAttempts === 0) {
           this.dispatchEvent(new Event('reconnecting'))
         }
         await new Promise((resolve) => setTimeout(
-          resolve,
-          (Math.pow(2, this._reconnectAttempts) - 1) * 1000,
+          resolve, this.reconnectDelays[this._reconnectAttempts]
         )); // Exponential backoff
         this._connect();
         this._reconnectAttempts++;

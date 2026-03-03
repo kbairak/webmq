@@ -3,20 +3,10 @@ import ReconnectingWebSocket from './ReconnectingWebSocket';
 import { bundleData, unbundleData } from './bundle';
 
 // TODOs:
-//   - task queue
-//   - do something with nack error
-//   - more emits
-//   - logs (no, in favor of emits)
-//   - ack back on message (?)
 //   - Helpers for session vs localStorage vs React Native vs vanilla JS vs React
-//   - Configure reconnection retry attempts
+//   - ack back on message (?)
 
 // Types
-interface WebMQClientOptions {
-  url: string;
-  sessionId: string;
-  timeoutDelay?: number;
-};
 interface ClientMessageHeader {
   action: 'identify' | 'publish' | 'listen' | 'unlisten';
   messageId?: string;
@@ -34,15 +24,20 @@ type MessageHeader = ClientMessageHeader | ServerMessageHeader;
 
 type HookName = 'pre' | 'identify' | 'publish' | 'listen' | 'unlisten' | 'message' | 'post';
 type HookFunction<T extends MessageHeader> = (header: T) => Promise<T>;
+type LogLevel = 'DEBUG' | 'INFO' | 'WARNING' | 'ERROR' | 'SILENT';
+interface WebMQClientOptions {
+  url: string;
+  sessionId: string;
+  timeoutDelay?: number;
+  reconnectDelays?: number[];
+  logLevel?: LogLevel;
+};
 
 export { ClientMessageHeader, ServerMessageHeader, MessageHeader, HookName, HookFunction };
 
 export default class WebMQClient extends EventTarget {
-  public timeoutDelay = 10000;
-  readonly url: string;
-  readonly sessionId: string;
+  public logLevel: LogLevel = 'INFO';
 
-  private _queue = Promise.resolve();
   private _ws: ReconnectingWebSocket | null = null;
   private _pendingMessages = new Map<string, { resolve: Function, reject: Function }>();
   private _messageListeners = new Map<string, Map<(payload: any) => void, boolean>>();
@@ -58,11 +53,19 @@ export default class WebMQClient extends EventTarget {
     post: new Set<HookFunction<MessageHeader>>(),
   };
 
+  // Options
+  readonly url: string;
+  readonly sessionId: string;
+  public timeoutDelay = 10000;
+  public reconnectDelays = [0, 1000, 2000, 4000, 8000];
+
   constructor(options: WebMQClientOptions) {
     super();
     this.url = options.url;
     this.sessionId = options.sessionId;
     if (options.timeoutDelay) { this.timeoutDelay = options.timeoutDelay; }
+    if (options.reconnectDelays) { this.reconnectDelays = options.reconnectDelays; }
+    if (options.logLevel) { this.logLevel = options.logLevel; }
 
     // Graceful shutdown on page unload
     if (typeof window !== 'undefined' && window.addEventListener) {
@@ -73,7 +76,8 @@ export default class WebMQClient extends EventTarget {
   }
 
   public connect(): Promise<void> {
-    this._ws = new ReconnectingWebSocket(this.url);
+    this._log('INFO', `WebMQClient connecting to ${this.url}`);
+    this._ws = new ReconnectingWebSocket(this.url, this.reconnectDelays);
     this._ws.binaryType = 'arraybuffer';
 
     let identifyMessageId = uuid();
@@ -86,6 +90,11 @@ export default class WebMQClient extends EventTarget {
       this._ws?.addEventListener('error', onError);
 
       const onClose = (event: Event) => {
+        this._log(
+          'WARNING',
+          'WebMQClient connection closed before being established: '
+          + `${event instanceof CloseEvent ? event.reason : 'unknown reason'}`,
+        )
         rejectConnect();
         this._onClose(event);
       }
@@ -96,6 +105,7 @@ export default class WebMQClient extends EventTarget {
         let header: ServerMessageHeader, payload: ArrayBuffer | undefined;
         if (messageEvent.data instanceof ArrayBuffer) {
           [header, payload] = unbundleData(messageEvent.data);
+          this._log('DEBUG', `Received message: ${JSON.stringify(header)}`)
         } else {
           this.dispatchEvent(new ErrorEvent('error', {
             error: new Error('Unsupported message format')
@@ -113,12 +123,21 @@ export default class WebMQClient extends EventTarget {
             this._ws?.removeEventListener('close', onClose);
             this._identified = true;
 
+            if (this._messageQueue.length > 0) {
+              this._log(
+                'INFO',
+                `Flushing ${this._messageQueue.length} queued messages after reconnect`,
+              );
+            }
             for (const { header, payload } of this._messageQueue) {
-              let actualHeader = await this._runHooks('pre', header);
-              actualHeader = await this._runHooks(header.action, header);
-              actualHeader = await this._runHooks('post', header);
-
-              this._ws?.send(bundleData(actualHeader, payload));
+              try {
+                let actualHeader = await this._runHooks('pre', header);
+                actualHeader = await this._runHooks(header.action, header);
+                actualHeader = await this._runHooks('post', header);
+                this._ws?.send(bundleData(actualHeader, payload));
+              } catch (error) {
+                this.dispatchEvent(new ErrorEvent('error', { error }));
+              }
             }
             this._messageQueue.length = 0; // Clear the queue
 
@@ -134,10 +153,10 @@ export default class WebMQClient extends EventTarget {
         } else if (header.action === 'nack') {
           if (!header.messageId) {
             this.dispatchEvent(new ErrorEvent('error', {
-              error: new Error('Received ack without messageId')
+              error: new Error('Received nack without messageId')
             }));
           } else if (this._pendingMessages.has(header.messageId)) {
-            this._pendingMessages.get(header.messageId)?.reject();
+            this._pendingMessages.get(header.messageId)?.reject(header.error || null);
             this._pendingMessages.delete(header.messageId);
           }
         } else if (header.action === 'message') {
@@ -165,28 +184,44 @@ export default class WebMQClient extends EventTarget {
       });
 
       this._ws?.addEventListener('open', async () => {
-        let header = await this._runHooks('pre', {
-          action: 'identify', messageId: identifyMessageId, sessionId: this.sessionId
-        } as ClientMessageHeader);
-        header = await this._runHooks('identify', header);
-        header = await this._runHooks('post', header);
-        this._ws?.send(bundleData(header));
+        this._log(
+          'INFO', 'WebMQClient connection established, sending identify'
+        );
+        try {
+          let header = await this._runHooks('pre', {
+            action: 'identify', messageId: identifyMessageId, sessionId: this.sessionId
+          } as ClientMessageHeader);
+          header = await this._runHooks('identify', header);
+          header = await this._runHooks('post', header);
+          this._ws?.send(bundleData(header));
+        } catch (error) {
+          this.dispatchEvent(new ErrorEvent('error', { error }));
+        }
       });
 
-      this._ws?.addEventListener('reconnecting', () => { this._identified = false; })
+      this._ws?.addEventListener('reconnecting', () => {
+        this._log('WARNING', 'WebMQClient connection lost, attempting to reconnect');
+        this._identified = false;
+      })
       this._ws?.addEventListener('reconnected', async () => {
+        this._log('INFO', 'WebMQClient reconnected, sending identify');
         identifyMessageId = uuid();
-        let header = await this._runHooks('pre', {
-          action: 'identify', messageId: identifyMessageId, sessionId: this.sessionId
-        });
-        header = await this._runHooks('identify', header);
-        header = await this._runHooks('post', header);
-        this._ws?.send(bundleData(header));
+        try {
+          let header = await this._runHooks('pre', {
+            action: 'identify', messageId: identifyMessageId, sessionId: this.sessionId
+          });
+          header = await this._runHooks('identify', header);
+          header = await this._runHooks('post', header);
+          this._ws?.send(bundleData(header));
+        } catch (error) {
+          this.dispatchEvent(new ErrorEvent('error', { error }));
+        }
       })
     });
   }
 
   public disconnect(): Promise<void> {
+    this._log('INFO', 'WebMQClient disconnecting');
     return new Promise((resolve) => {
       const onClose = (event: Event) => {
         this._ws?.removeEventListener('close', onClose);
@@ -200,6 +235,7 @@ export default class WebMQClient extends EventTarget {
   }
 
   public async publish(routingKey: string, payload: ArrayBuffer | object | any[]): Promise<void> {
+    this._log('DEBUG', `Publishing message with routingKey: ${routingKey}`);
     const actualPayload = payload instanceof ArrayBuffer
       ? payload
       : (new TextEncoder()).encode(JSON.stringify(payload)).buffer;
@@ -207,25 +243,26 @@ export default class WebMQClient extends EventTarget {
     await this._sendWithAck({ action: 'publish', routingKey }, actualPayload);
   }
 
-  public listen(
+  public async listen(
     bindingKey: string, callback: (payload: any) => void, isJson: boolean = true
   ): Promise<void> {
-    return this._queue = this._queue.then(async () => {
-      let callbacks = this._messageListeners.get(bindingKey);
-      if (!callbacks) {
-        callbacks = new Map<(payload: any) => void, boolean>();
-        this._messageListeners.set(bindingKey, callbacks);
-      }
+    this._log('INFO', `Adding listener for bindingKey: ${bindingKey}`);
+    let callbacks = this._messageListeners.get(bindingKey);
+    if (!callbacks) {
+      callbacks = new Map<(payload: any) => void, boolean>();
+      this._messageListeners.set(bindingKey, callbacks);
+    }
 
-      if (!callbacks.has(callback)) {
-        callbacks.set(callback, isJson);
-        // Only send to backend if this is the first listener for this bindingKey
-        if (callbacks.size === 1) {
-          await this._sendWithAck({ action: 'listen', bindingKey });
-        }
+    if (!callbacks.has(callback)) {
+      callbacks.set(callback, isJson);
+      // Only send to backend if this is the first listener for this bindingKey
+      if (callbacks.size === 1) {
+        this._log(
+          'INFO', `First callback for bindingKey ${bindingKey}; sending listen request`
+        );
+        await this._sendWithAck({ action: 'listen', bindingKey });
       }
-    });
-    return this._queue;
+    }
   }
 
   public listenRaw(bindingKey: string, callback: (payload: any) => void): Promise<void> {
@@ -237,12 +274,16 @@ export default class WebMQClient extends EventTarget {
   }
 
   public async unlisten(bindingKey: string, callback: (payload: any) => void): Promise<void> {
+    this._log('INFO', `Removing listener for bindingKey: ${bindingKey}`);
     const callbacks = this._messageListeners.get(bindingKey);
     if (!callbacks || !callbacks.has(callback)) {
       return;
     }
     callbacks.delete(callback);
     if (callbacks.size === 0) {
+      this._log(
+        'INFO', `No more callbacks for bindingKey ${bindingKey}; sending unlisten request`
+      )
       this._messageListeners.delete(bindingKey);  // Clean up empty Map
       await this._sendWithAck({ action: 'unlisten', bindingKey });
     }
@@ -275,10 +316,14 @@ export default class WebMQClient extends EventTarget {
 
       if (this._identified) {
         let actualHeader: ClientMessageHeader = { ...header, messageId };
-        actualHeader = await this._runHooks('pre', actualHeader);
-        actualHeader = await this._runHooks(header.action, actualHeader);
-        actualHeader = await this._runHooks('post', actualHeader);
-        this._ws?.send(bundleData(actualHeader, payload));
+        try {
+          actualHeader = await this._runHooks('pre', actualHeader);
+          actualHeader = await this._runHooks(header.action, actualHeader);
+          actualHeader = await this._runHooks('post', actualHeader);
+          this._ws?.send(bundleData(actualHeader, payload));
+        } catch (error) {
+          this.dispatchEvent(new ErrorEvent('error', { error }));
+        }
       } else {
         this._messageQueue.push({ header: { ...header, messageId }, payload });
       }
@@ -289,6 +334,7 @@ export default class WebMQClient extends EventTarget {
   public addHook(action: 'identify' | 'publish' | 'listen' | 'unlisten', hook: HookFunction<ClientMessageHeader>): void;
   public addHook(action: 'message', hook: HookFunction<ServerMessageHeader>): void;
   public addHook(action: HookName, hook: HookFunction<any>): void {
+    this._log('INFO', `Adding hook for action: ${action}`);
     this._hooks[action].add(hook);
   }
 
@@ -296,6 +342,7 @@ export default class WebMQClient extends EventTarget {
   public removeHook(action: 'identify' | 'publish' | 'listen' | 'unlisten', hook: HookFunction<ClientMessageHeader>): void;
   public removeHook(action: 'message', hook: HookFunction<ServerMessageHeader>): void;
   public removeHook(action: HookName, hook: HookFunction<any>): void {
+    this._log('INFO', `Removing hook for action: ${action}`);
     this._hooks[action].delete(hook);
   }
 
@@ -309,6 +356,15 @@ export default class WebMQClient extends EventTarget {
       }
     }
     return actualHeader as T;
+  }
+
+  private _log(logLevel: string, message: string) {
+    const levels = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'SILENT']
+    const instanceLevelIndex = levels.indexOf(this.logLevel);
+    const messageLevelIndex = levels.indexOf(logLevel);
+    if (messageLevelIndex >= instanceLevelIndex) {
+      this.dispatchEvent(new CustomEvent('log', { detail: { logLevel, message } }));
+    }
   }
 }
 

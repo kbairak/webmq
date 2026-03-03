@@ -25,7 +25,7 @@ describe('WebMQClient', () => {
   it('should connect', async () => {
     const c = new WebMQClient({ url: 'dumb_url', sessionId: 'dumb_sessionid' });
     const connectPromise = c.connect();
-    expect(MockReconnectingWebSocket).toHaveBeenCalledWith('dumb_url');
+    expect(MockReconnectingWebSocket).toHaveBeenCalledWith('dumb_url', [0, 1000, 2000, 4000, 8000]);
     expect(mockWs.addEventListener).toHaveBeenCalledTimes(6);
 
     // Simulate WebSocket open

@@ -7,17 +7,13 @@ import ws from 'ws';
 import * as metrics from './metrics';
 import { bundleData, unbundleData, retry } from './utils';
 
+// TODOs:
+//   - Check whether we need to pass options to RabbitMQ
+//   - Tests
+
 promClient.collectDefaultMetrics();
 
 // Types
-interface WebMQServerOptions {
-  rmqUrl: string;
-  exchange: string;
-  port: number;
-  healthEndpoint?: string;
-  metricsEndpoint?: string;
-  queueTimeout?: number;
-};
 interface MessageHeader {
   action: 'identify' | 'publish' | 'listen' | 'unlisten' | 'message';
   messageId?: string;
@@ -35,6 +31,16 @@ type HookFunction = (
 ) => Promise<MessageHeader>;
 type LogLevel = 'DEBUG' | 'INFO' | 'WARNING' | 'ERROR' | 'SILENT';
 interface HealthCheckResponse { healthy: boolean; rabbitMQQueues: number; websockets: number; };
+
+interface WebMQServerOptions {
+  rmqUrl: string;
+  exchange: string;
+  port: number;
+  healthEndpoint?: string;
+  metricsEndpoint?: string;
+  queueTimeout?: number;
+  logLevel?: LogLevel;
+};
 
 export { MessageHeader, HookContext, HookName, HookFunction };
 
@@ -74,6 +80,7 @@ export default class WebMQServer {
     if (options.healthEndpoint) { this._healthEndpoint = options.healthEndpoint; }
     if (options.metricsEndpoint) { this._metricsEndpoint = options.metricsEndpoint; }
     if (options.queueTimeout) { this._queueTimeout = options.queueTimeout; }
+    if (options.logLevel) { this.logLevel = options.logLevel; }
   }
 
   public async start(): Promise<void> {
