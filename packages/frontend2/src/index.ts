@@ -3,6 +3,8 @@ import ReconnectingWebSocket from './ReconnectingWebSocket';
 import { bundleData, unbundleData } from './bundle';
 
 // TODOs:
+//   - task queue
+//   - do something with nack error
 //   - more emits
 //   - logs (no, in favor of emits)
 //   - ack back on message (?)
@@ -137,7 +139,9 @@ export default class WebMQClient extends EventTarget {
       });
 
       this._ws?.addEventListener('open', async () => {
-        let header: object = { action: 'identify', messageId: identifyMessageId, sessionId: this.sessionId };
+        let header: object = {
+          action: 'identify', messageId: identifyMessageId, sessionId: this.sessionId
+        };
         for (const hook of this._hooks.identify) {
           header = await hook(header);
         }
