@@ -9,6 +9,15 @@ import { bundleData, unbundleData, retry } from './utils';
 
 promClient.collectDefaultMetrics();
 
+// Types
+interface WebMQServerOptions {
+  rmqUrl: string;
+  exchange: string;
+  port: number;
+  healthEndpoint?: string;
+  metricsEndpoint?: string;
+  queueTimeout?: number;
+};
 interface MessageHeader {
   action: 'identify' | 'publish' | 'listen' | 'unlisten' | 'message';
   messageId?: string;
@@ -18,17 +27,16 @@ interface MessageHeader {
   rmqOptions?: amqplib.Options.Publish;
   [key: string]: any;
 };
-interface HookContext {
-  ws: ws.WebSocket;
-  sessionId?: string;
-  [key: string]: any;
-}
+interface HookContext { ws: ws.WebSocket; sessionId?: string;[key: string]: any; };
 type HookName =
   'pre' | 'wsMessage' | 'identify' | 'publish' | 'listen' | 'unlisten' | 'rmqMessage' | 'post';
 type HookFunction = (
   header: MessageHeader, context: HookContext, rmqMessage?: amqplib.ConsumeMessage
 ) => Promise<MessageHeader>;
 type LogLevel = 'DEBUG' | 'INFO' | 'WARNING' | 'ERROR' | 'SILENT';
+interface HealthCheckResponse { healthy: boolean; rabbitMQQueues: number; websockets: number; };
+
+export { MessageHeader, HookContext, HookName, HookFunction };
 
 export default class WebMQServer {
   public logLevel: LogLevel = 'INFO';
@@ -59,27 +67,13 @@ export default class WebMQServer {
   private _metricsEndpoint = '/metrics';
   private _queueTimeout = 5 * 60 * 1000; // 5 minutes
 
-  constructor({
-    rmqUrl,
-    exchange,
-    port,
-    healthEndpoint = '/health',
-    metricsEndpoint = '/metrics',
-    queueTimeout = 5 * 60 * 1000,
-  }: {
-    rmqUrl: string,
-    exchange: string,
-    port: number,
-    healthEndpoint?: string,
-    metricsEndpoint?: string,
-    queueTimeout?: number
-  }) {
-    this._rmqUrl = rmqUrl;
-    this._exchangeName = exchange;
-    this._port = port;
-    this._healthEndpoint = healthEndpoint;
-    this._metricsEndpoint = metricsEndpoint;
-    this._queueTimeout = queueTimeout;
+  constructor(options: WebMQServerOptions) {
+    this._rmqUrl = options.rmqUrl;
+    this._exchangeName = options.exchange;
+    this._port = options.port;
+    if (options.healthEndpoint) { this._healthEndpoint = options.healthEndpoint; }
+    if (options.metricsEndpoint) { this._metricsEndpoint = options.metricsEndpoint; }
+    if (options.queueTimeout) { this._queueTimeout = options.queueTimeout; }
   }
 
   public async start(): Promise<void> {
@@ -91,19 +85,21 @@ export default class WebMQServer {
     );
 
     if (this._healthEndpoint || this._metricsEndpoint) {
-      const server = http.createServer(async (req, res) => {
-        if (req.url === this._healthEndpoint) {
-          const health = await this._healthCheck();
-          res.writeHead(health.healthy ? 200 : 503, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify(health));
-        } else if (req.url === this._metricsEndpoint) {
-          res.writeHead(200, { 'Content-Type': promClient.register.contentType });
-          res.end(await promClient.register.metrics());
-        } else {
-          res.writeHead(404, { 'Content-Type': 'text/plain' });
-          res.end('WebSocket server - use ws:// protocol');
+      const server = http.createServer(
+        async (req: http.IncomingMessage, res: http.ServerResponse): Promise<void> => {
+          if (req.url === this._healthEndpoint) {
+            const health = await this._healthCheck();
+            res.writeHead(health.healthy ? 200 : 503, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(health));
+          } else if (req.url === this._metricsEndpoint) {
+            res.writeHead(200, { 'Content-Type': promClient.register.contentType });
+            res.end(await promClient.register.metrics());
+          } else {
+            res.writeHead(404, { 'Content-Type': 'text/plain' });
+            res.end('WebSocket server - use ws:// protocol');
+          }
         }
-      });
+      );
       server.listen(this._port);
       this._webSocketServer = new ws.WebSocketServer({ server });
     } else {
@@ -221,7 +217,7 @@ export default class WebMQServer {
     );
   }
 
-  public async stop() {
+  public async stop(): Promise<void> {
     // Stop **receiving** from rmq and ws
     this._webSockets.forEach((ws) => {
       ws.removeAllListeners('message');
@@ -499,7 +495,7 @@ export default class WebMQServer {
     };
   }
 
-  private async _healthCheck() {
+  private async _healthCheck(): Promise<HealthCheckResponse> {
     const oneMinuteAgo = new Date(Date.now() - 60 * 1000);
     if (
       !this._lastSuccessfulConnectionAttempt
@@ -552,9 +548,7 @@ export default class WebMQServer {
 
 const shutdownHandler = async (signal: string) => {
   console.log(`Received ${signal}, shutting down all WebMQ servers gracefully...`);
-  await Promise.all(
-    (WebMQServer as any)._instances.map((instance: WebMQServer) => instance.stop())
-  );
+  Array.from(WebMQServer['_instances']).map((instance) => instance.stop())
   process.exit(0);
 };
 process.on('SIGTERM', shutdownHandler);

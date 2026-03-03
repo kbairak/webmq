@@ -1,6 +1,6 @@
 import { v4 as uuid } from 'uuid';
 import ReconnectingWebSocket from '../src/ReconnectingWebSocket';
-import WebMQClient from '../src';
+import WebMQClient, { ClientMessageHeader, MessageHeader } from '../src';
 import { bundleData, unbundleData } from '../src/bundle';
 import { createMockWebSocket } from './utils'
 
@@ -23,13 +23,16 @@ describe('WebMQClient', () => {
   });
 
   it('should connect', async () => {
-    const c = new WebMQClient('dumb_url', 'dumb_sessionid');
+    const c = new WebMQClient({ url: 'dumb_url', sessionId: 'dumb_sessionid' });
     const connectPromise = c.connect();
     expect(MockReconnectingWebSocket).toHaveBeenCalledWith('dumb_url');
     expect(mockWs.addEventListener).toHaveBeenCalledTimes(6);
 
     // Simulate WebSocket open
     mockWs.dispatchEvent(new Event('open'));
+
+    // Wait for async hooks to complete
+    await new Promise(resolve => setTimeout(resolve, 0));
 
     // Verify identify was sent
     expect(mockWs.send).toHaveBeenCalledTimes(1);
@@ -52,7 +55,7 @@ describe('WebMQClient', () => {
   });
 
   it('should reject connect on error', async () => {
-    const c = new WebMQClient('dumb_url', 'dumb_sessionid');
+    const c = new WebMQClient({ url: 'dumb_url', sessionId: 'dumb_sessionid' });
     const connectPromise = c.connect();
     mockWs.dispatchEvent(new Event('error'));
     let raised = false;
@@ -65,7 +68,7 @@ describe('WebMQClient', () => {
   });
 
   it('should reject connect on close', async () => {
-    const c = new WebMQClient('dumb_url', 'dumb_sessionid');
+    const c = new WebMQClient({ url: 'dumb_url', sessionId: 'dumb_sessionid' });
     const connectPromise = c.connect();
     mockWs.dispatchEvent(new Event('close'));
     let raised = false;
@@ -78,7 +81,7 @@ describe('WebMQClient', () => {
   });
 
   async function getIdentifiedClient() {
-    const c = new WebMQClient('dumb_url', 'dumb_sessionid');
+    const c = new WebMQClient({ url: 'dumb_url', sessionId: 'dumb_sessionid' });
     const connectPromise = c.connect();
     mockWs.dispatchEvent(new Event('open'));
     mockWs.dispatchEvent(new MessageEvent('message', {
@@ -93,6 +96,9 @@ describe('WebMQClient', () => {
 
     const publishPromise = c.publish('dumb_routing_key', { data: 'dumb_payload' });
     expect((c as any)._pendingMessages.has('uuid_2')).toBeTruthy();
+
+    // Wait for async hooks to complete
+    await new Promise(resolve => setTimeout(resolve, 0));
 
     // Verify send was called
     expect(mockWs.send).toHaveBeenCalledTimes(2);
@@ -138,7 +144,12 @@ describe('WebMQClient', () => {
 
     const callback = jest.fn();
     const listenPromise = c.listen('dumb_binding_key', callback)
+    await new Promise(resolve => setTimeout(resolve, 0));
     expect([...(c as any)._messageListeners.get('dumb_binding_key')][0]).toEqual([callback, true]);
+
+    // Wait for async hooks to complete
+    await new Promise(resolve => setTimeout(resolve, 0));
+
     expect(mockWs.send).toHaveBeenCalledTimes(2);
     const sentData = mockWs.send.mock.calls.at(-1)[0];
     expect(sentData).toBeInstanceOf(ArrayBuffer);
@@ -171,6 +182,10 @@ describe('WebMQClient', () => {
     (c as any)._messageListeners.set('dumb_binding_key', new Map([[callback, true]]));
     const unlistenPromise = c.unlisten('dumb_binding_key', callback);
     expect((c as any)._messageListeners.size).toEqual(0);
+
+    // Wait for async hooks to complete
+    await new Promise(resolve => setTimeout(resolve, 0));
+
     expect(mockWs.send).toHaveBeenCalledTimes(2);
     const sentData = mockWs.send.mock.calls.at(-1)[0];
     expect(sentData).toBeInstanceOf(ArrayBuffer);
@@ -225,6 +240,10 @@ describe('WebMQClient', () => {
     mockWs.dispatchEvent(new Event('reconnecting'));
     expect((c as any)._identified).toBeFalsy();
     mockWs.dispatchEvent(new Event('reconnected'));
+
+    // Wait for async hooks to complete
+    await new Promise(resolve => setTimeout(resolve, 0));
+
     expect(mockWs.send).toHaveBeenCalledTimes(2); // identify message should be resent
     const sentData = mockWs.send.mock.calls.at(-1)[0];
     expect(sentData).toBeInstanceOf(ArrayBuffer);
@@ -257,6 +276,10 @@ describe('WebMQClient', () => {
     expect(JSON.parse(payloadText)).toEqual({ hello: 'world' });
     // Complete reconnect
     mockWs.dispatchEvent(new Event('reconnected'));
+
+    // Wait for async hooks to complete
+    await new Promise(resolve => setTimeout(resolve, 0));
+
     // Verify identify is resent
     expect(mockWs.send).toHaveBeenCalledTimes(2); // identify x2
     let sentData = mockWs.send.mock.calls.at(-1)[0];
@@ -272,6 +295,10 @@ describe('WebMQClient', () => {
     mockWs.dispatchEvent(new MessageEvent('message', {
       data: bundleData({ action: 'ack', messageId: 'uuid_3' })
     }));
+
+    // Wait for queued messages to be sent
+    await new Promise(resolve => setTimeout(resolve, 0));
+
     // Verify queued publish is sent
     expect((c as any)._identified).toBeTruthy();
     expect(mockWs.send).toHaveBeenCalledTimes(3); // identifyx2 + publish
@@ -292,7 +319,7 @@ describe('WebMQClient', () => {
   });
 
   it('rejects because of timeout', async () => {
-    const c = new WebMQClient('dumb_url', 'dumb_sessionid', { timeoutDelay: 1 });
+    const c = new WebMQClient({ url: 'dumb_url', sessionId: 'dumb_sessionid', timeoutDelay: 1 });
     const connectPromise = c.connect();
     mockWs.dispatchEvent(new Event('open'));
     mockWs.dispatchEvent(new MessageEvent('message', {
@@ -307,9 +334,11 @@ describe('WebMQClient', () => {
   })
 
   it('should apply identify hook', async () => {
-    const c = new WebMQClient('dumb_url', 'dumb_sessionid');
+    const c = new WebMQClient({ url: 'dumb_url', sessionId: 'dumb_sessionid' });
 
-    const onIdentify = (header: object) => ({ ...header, identify: 'hook' })
+    const onIdentify = async (header: ClientMessageHeader): Promise<ClientMessageHeader> => {
+      return { ...header, identify: 'hook' };
+    }
     c.addHook('identify', onIdentify);
     expect((c as any)._hooks.identify).toContain(onIdentify);
 
@@ -330,12 +359,14 @@ describe('WebMQClient', () => {
     expect(payloadText).toEqual('');
   });
 
-  it('should apply all hook to identify', async () => {
-    const c = new WebMQClient('dumb_url', 'dumb_sessionid');
+  it('should apply pre hook to identify', async () => {
+    const c = new WebMQClient({ url: 'dumb_url', sessionId: 'dumb_sessionid' });
 
-    const onIdentify = (header: object) => ({ ...header, all: 'hook' })
-    c.addHook('all', onIdentify);
-    expect((c as any)._hooks.all).toContain(onIdentify);
+    const onIdentify = async (header: MessageHeader): Promise<MessageHeader> => {
+      return { ...header, pre: 'hook' };
+    }
+    c.addHook('pre', onIdentify);
+    expect((c as any)._hooks.pre).toContain(onIdentify);
 
     c.connect();
     mockWs.dispatchEvent(new Event('open'));
@@ -348,7 +379,7 @@ describe('WebMQClient', () => {
     expect(sentData).toBeInstanceOf(ArrayBuffer);
     const [header, payload] = unbundleData(sentData);
     expect(header).toEqual({
-      action: 'identify', messageId: 'uuid_1', sessionId: 'dumb_sessionid', all: 'hook'
+      action: 'identify', messageId: 'uuid_1', sessionId: 'dumb_sessionid', pre: 'hook'
     });
     const payloadText = new TextDecoder().decode(payload);
     expect(payloadText).toEqual('');
@@ -356,7 +387,9 @@ describe('WebMQClient', () => {
 
   it('should should apply publish hook', async () => {
     const c = await getIdentifiedClient();
-    const onPublish = (header: object) => ({ ...header, publish: 'hook' })
+    const onPublish = async (header: ClientMessageHeader): Promise<ClientMessageHeader> => {
+      return { ...header, publish: 'hook' };
+    }
     c.addHook('publish', onPublish);
     expect((c as any)._hooks.publish).toContain(onPublish);
 
@@ -373,11 +406,13 @@ describe('WebMQClient', () => {
     expect(JSON.parse(payloadText)).toEqual({ data: 'dumb_payload' });
   });
 
-  it('should should apply all hook to publish', async () => {
+  it('should should apply pre hook to publish', async () => {
     const c = await getIdentifiedClient();
-    const onPublish = (header: object) => ({ ...header, all: 'hook' })
-    c.addHook('all', onPublish);
-    expect((c as any)._hooks.all).toContain(onPublish);
+    const onPublish = async (header: MessageHeader): Promise<MessageHeader> => {
+      return { ...header, pre: 'hook' };
+    }
+    c.addHook('pre', onPublish);
+    expect((c as any)._hooks.pre).toContain(onPublish);
 
     c.publish('dumb_routing_key', { data: 'dumb_payload' });
     await new Promise(resolve => setTimeout(resolve, 0));
@@ -386,14 +421,14 @@ describe('WebMQClient', () => {
     expect(sentData).toBeInstanceOf(ArrayBuffer);
     const [header, payload] = unbundleData(sentData);
     expect(header).toEqual({
-      action: 'publish', routingKey: 'dumb_routing_key', messageId: 'uuid_2', all: 'hook'
+      action: 'publish', routingKey: 'dumb_routing_key', messageId: 'uuid_2', pre: 'hook'
     });
     const payloadText = new TextDecoder().decode(payload);
     expect(JSON.parse(payloadText)).toEqual({ data: 'dumb_payload' });
   });
 
   it('should remove hook', () => {
-    const c = new WebMQClient('dumb_url', 'dumb_sessionid');
+    const c = new WebMQClient({ url: 'dumb_url', sessionId: 'dumb_sessionid' });
     const onIdentify = jest.fn();
     c.addHook('identify', onIdentify);
     expect((c as any)._hooks.identify).toContain(onIdentify);

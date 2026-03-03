@@ -1,8 +1,9 @@
+import { MessageHeader } from './index';
 /**
  * Bundles a JSON header and an optional binary payload into a single ArrayBuffer.
  * Structure: [4 bytes (Header Length)] + [Header (JSON)] + [Optional Payload]
  */
-export function bundleData(header: object, payload?: ArrayBuffer): ArrayBuffer {
+export function bundleData(header: MessageHeader, payload?: ArrayBuffer): ArrayBuffer {
   // 1. Convert JSON Header to bytes
   const encoder = new TextEncoder();
   const headerBytes = encoder.encode(JSON.stringify(header));
