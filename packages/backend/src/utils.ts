@@ -2,7 +2,10 @@
  * Bundles a JSON header and an optional binary payload into a single ArrayBuffer.
  * Structure: [4 bytes (Header Length)] + [Header (JSON)] + [Optional Payload]
  */
-export function bundleData(header: object, payload?: ArrayBuffer | Buffer): ArrayBuffer {
+export function bundleData(
+  header: object,
+  payload?: ArrayBuffer | Buffer
+): ArrayBuffer {
   // 1. Convert JSON Header to bytes
   const encoder = new TextEncoder();
   const headerBytes = encoder.encode(JSON.stringify(header));
@@ -28,7 +31,9 @@ export function bundleData(header: object, payload?: ArrayBuffer | Buffer): Arra
   if (payload) {
     const payloadOffset = 4 + headerBytes.byteLength;
     // Handle both ArrayBuffer and Buffer
-    const payloadBytes = Buffer.isBuffer(payload) ? payload : new Uint8Array(payload);
+    const payloadBytes = Buffer.isBuffer(payload)
+      ? payload
+      : new Uint8Array(payload);
     view.set(payloadBytes, payloadOffset);
   }
 
@@ -47,7 +52,9 @@ export function unbundleData(buffer: ArrayBuffer): [any, ArrayBuffer?] {
   const headerLength = dataView.getUint32(0, false);
 
   if (headerLength > 1024 * 1024) {
-    throw new Error(`Header length ${headerLength} exceeds maximum allowed size`);
+    throw new Error(
+      `Header length ${headerLength} exceeds maximum allowed size`
+    );
   }
 
   // 2. Extract and parse Header (JSON)
@@ -58,14 +65,16 @@ export function unbundleData(buffer: ArrayBuffer): [any, ArrayBuffer?] {
 
   // 3. Extract Payload (if any exists after header)
   const payloadOffset = 4 + headerLength;
-  const payload = payloadOffset < buffer.byteLength
-    ? buffer.slice(payloadOffset)
-    : undefined;
+  const payload =
+    payloadOffset < buffer.byteLength ? buffer.slice(payloadOffset) : undefined;
 
   return [header, payload];
 }
 
-export async function retry<T>(fn: () => Promise<T>, delays = [0, 100, 200, 400]) {
+export async function retry<T>(
+  fn: () => Promise<T>,
+  delays = [0, 100, 200, 400]
+) {
   let error;
   for (let delay of delays) {
     await new Promise((resolve) => setTimeout(resolve, delay));

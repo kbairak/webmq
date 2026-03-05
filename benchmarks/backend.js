@@ -1,4 +1,4 @@
-import { WebMQServer } from 'webmq-backend';
+import { WebMQServer } from '@webmq-backend';
 
 const port = parseInt(process.argv[2]);
 const rabbitmqUrl = process.argv[3];
@@ -12,7 +12,7 @@ const server = new WebMQServer({
   rabbitmqUrl,
   exchangeName: 'benchmark',
   port,
-  metrics: true  // Enable Prometheus metrics
+  metrics: true, // Enable Prometheus metrics
 });
 
 server.logLevel = 'silent';

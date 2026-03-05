@@ -14,7 +14,7 @@ async function geocode(cityName) {
 
   return {
     lat: data.results[0].latitude,
-    lon: data.results[0].longitude
+    lon: data.results[0].longitude,
   };
 }
 
@@ -26,7 +26,9 @@ async function fetchWeather(lat, lon) {
 
   if (!data.current) {
     console.error('Weather API response:', data);
-    throw new Error(`Weather API error: ${data.reason || 'No current weather data'}`);
+    throw new Error(
+      `Weather API error: ${data.reason || 'No current weather data'}`
+    );
   }
 
   const weatherCodes = {
@@ -43,7 +45,7 @@ async function fetchWeather(lat, lon) {
     71: 'Light snow',
     73: 'Moderate snow',
     75: 'Heavy snow',
-    95: 'Thunderstorm'
+    95: 'Thunderstorm',
   };
 
   const current = data.current;
@@ -51,7 +53,7 @@ async function fetchWeather(lat, lon) {
     Temperature: `${Math.round(current.temperature_2m)}°C`,
     Conditions: weatherCodes[current.weather_code] || 'Unknown',
     'Wind Speed': `${Math.round(current.wind_speed_10m)} km/h`,
-    Humidity: `${current.relative_humidity_2m}%`
+    Humidity: `${current.relative_humidity_2m}%`,
   };
 }
 
@@ -85,7 +87,7 @@ async function startWorker() {
             id: `weather-${searchId}`,
             type: 'keyvalue',
             title: 'Current Weather',
-            data: weatherData
+            data: weatherData,
           },
           {
             id: `coordinates-${searchId}`,
@@ -93,10 +95,10 @@ async function startWorker() {
             title: 'Coordinates',
             data: {
               Latitude: lat.toFixed(4),
-              Longitude: lon.toFixed(4)
-            }
-          }
-        ]
+              Longitude: lon.toFixed(4),
+            },
+          },
+        ],
       };
 
       channel.publish(

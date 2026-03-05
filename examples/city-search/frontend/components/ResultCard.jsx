@@ -24,7 +24,10 @@ export default function ResultCard({ result }) {
       // Convert **bold** to <strong>
       text = text.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
       // Convert [text](url) to <a>
-      text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+      text = text.replace(
+        /\[([^\]]+)\]\(([^)]+)\)/g,
+        '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>'
+      );
       // Convert newlines to <br>
       text = text.replace(/\n/g, '<br/>');
       return text;
@@ -33,7 +36,10 @@ export default function ResultCard({ result }) {
     return (
       <div className="result-card">
         <h3>{title}</h3>
-        <div className="markdown-content" dangerouslySetInnerHTML={{ __html: renderMarkdown(data) }} />
+        <div
+          className="markdown-content"
+          dangerouslySetInnerHTML={{ __html: renderMarkdown(data) }}
+        />
       </div>
     );
   }
@@ -55,7 +61,12 @@ export default function ResultCard({ result }) {
         )}
         <div className="image-caption">
           <strong>{title}</strong>
-          {data.caption && <p>{data.caption.substring(0, 150)}{data.caption.length > 150 ? '...' : ''}</p>}
+          {data.caption && (
+            <p>
+              {data.caption.substring(0, 150)}
+              {data.caption.length > 150 ? '...' : ''}
+            </p>
+          )}
           {data.author && <p className="author">By {data.author}</p>}
         </div>
       </div>

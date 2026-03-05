@@ -3,7 +3,9 @@ export function createMockWebSocket() {
 
   return {
     addEventListener: jest.fn((type: string, listener: Function) => {
-      if (!listeners.has(type)) { listeners.set(type, new Set()); }
+      if (!listeners.has(type)) {
+        listeners.set(type, new Set());
+      }
       listeners.get(type)?.add(listener);
     }),
 

@@ -2,7 +2,7 @@ import { useContext, useRef } from 'react';
 import UserContext from './UserContext';
 
 function UsernamePrompt() {
-  const { setUsername } = useContext(UserContext)
+  const { setUsername } = useContext(UserContext);
   const inputRef = useRef(null);
 
   const handleSubmit = (e) => {
@@ -17,12 +17,7 @@ function UsernamePrompt() {
         <h1>WebMQ Collaborative Todos</h1>
         <p>Enter your name to start collaborating:</p>
         <form onSubmit={handleSubmit}>
-          <input
-            ref={inputRef}
-            type="text"
-            placeholder="Your name"
-            autoFocus
-          />
+          <input ref={inputRef} type="text" placeholder="Your name" autoFocus />
           <button type="submit">Start</button>
         </form>
       </div>

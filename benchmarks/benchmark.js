@@ -15,7 +15,10 @@ program
   .option('--backends <number>', 'Number of backend processes', '1')
   .option('--listens <number>', 'Number of subscriptions per client', '10')
   .option('--publish-rate <number>', 'Messages per second per client', '5')
-  .option('--key-pool-size <number>', 'Size of routing key pool (default: clients/2)')
+  .option(
+    '--key-pool-size <number>',
+    'Size of routing key pool (default: clients/2)'
+  )
   .option('--duration <number>', 'Test duration in seconds', '10')
   .option('--message-size <number>', 'Message payload size in bytes', '1024')
   .parse();
@@ -27,9 +30,11 @@ const config = {
   backends: parseInt(opts.backends),
   listens: parseInt(opts.listens),
   publishRate: parseInt(opts.publishRate),
-  keyPoolSize: opts.keyPoolSize ? parseInt(opts.keyPoolSize) : Math.max(5, Math.floor(numClients / 2)),
+  keyPoolSize: opts.keyPoolSize
+    ? parseInt(opts.keyPoolSize)
+    : Math.max(5, Math.floor(numClients / 2)),
   duration: parseInt(opts.duration),
-  messageSize: parseInt(opts.messageSize)
+  messageSize: parseInt(opts.messageSize),
 };
 
 console.log('🚀 Starting benchmark...');
@@ -62,7 +67,9 @@ process.on('SIGTERM', cleanup);
 try {
   // RabbitMQ is started by docker-compose, use fixed port
   const rabbitmqUrl = 'amqp://localhost:5672';
-  console.log('🐰 Using RabbitMQ at amqp://localhost:5672 (from docker-compose)');
+  console.log(
+    '🐰 Using RabbitMQ at amqp://localhost:5672 (from docker-compose)'
+  );
 
   // Find available ports for backends
   const backendPorts = [];
@@ -76,13 +83,13 @@ try {
   for (const port of backendPorts) {
     const proc = spawn('node', ['backend.js', port, rabbitmqUrl], {
       cwd: process.cwd(),
-      stdio: 'inherit'
+      stdio: 'inherit',
     });
     backendProcesses.push(proc);
   }
 
   // Wait for backends to start
-  await new Promise(resolve => setTimeout(resolve, 2000));
+  await new Promise((resolve) => setTimeout(resolve, 2000));
   console.log(`✅ Backends started on ports ${backendPorts.join(', ')}`);
 
   // Update Prometheus config with backend targets
@@ -93,21 +100,25 @@ try {
 scrape_configs:
   - job_name: 'webmq-backends'
     static_configs:
-      - targets: [${backendPorts.map(p => `'host.docker.internal:${p}'`).join(', ')}]
+      - targets: [${backendPorts.map((p) => `'host.docker.internal:${p}'`).join(', ')}]
 
   - job_name: 'rabbitmq'
     static_configs:
       - targets: ['rabbitmq:15692']
 `;
   writeFileSync('prometheus.yml', prometheusConfig);
-  console.log(`📊 Updated Prometheus config with ${backendPorts.length} backend target(s) + RabbitMQ`);
+  console.log(
+    `📊 Updated Prometheus config with ${backendPorts.length} backend target(s) + RabbitMQ`
+  );
 
   // Reload Prometheus config
   try {
     await fetch('http://localhost:9090/-/reload', { method: 'POST' });
     console.log('✅ Prometheus config reloaded');
   } catch (e) {
-    console.log('⚠️  Could not reload Prometheus (will use config on next restart)');
+    console.log(
+      '⚠️  Could not reload Prometheus (will use config on next restart)'
+    );
   }
 
   // Create clients
@@ -116,15 +127,24 @@ scrape_configs:
 
   for (let i = 0; i < config.clients; i++) {
     const port = backendPorts[i % config.backends];
-    const client = new BenchmarkClient(`ws://localhost:${port}`, config.keyPoolSize, config.listens);
-    console.log(`  Connecting client ${i + 1}/${config.clients} to port ${port}...`);
+    const client = new BenchmarkClient(
+      `ws://localhost:${port}`,
+      config.keyPoolSize,
+      config.listens
+    );
+    console.log(
+      `  Connecting client ${i + 1}/${config.clients} to port ${port}...`
+    );
     try {
       // Add timeout wrapper
       await Promise.race([
         client.connect(),
         new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('Connection timeout after 15s')), 15000)
-        )
+          setTimeout(
+            () => reject(new Error('Connection timeout after 15s')),
+            15000
+          )
+        ),
       ]);
       console.log(`  ✓ Client ${i + 1} connected`);
     } catch (error) {
@@ -150,18 +170,21 @@ scrape_configs:
   const publishInterval = 1000 / config.publishRate; // ms between publishes
   let totalExpectedDeliveries = 0;
 
-  const publishTimers = clients.map(client => {
+  const publishTimers = clients.map((client) => {
     return setInterval(() => {
-      const expectedDeliveries = client.publishMessage(config.messageSize, listenersPerKey);
+      const expectedDeliveries = client.publishMessage(
+        config.messageSize,
+        listenersPerKey
+      );
       totalExpectedDeliveries += expectedDeliveries;
     }, publishInterval);
   });
 
   // Wait for duration
-  await new Promise(resolve => setTimeout(resolve, config.duration * 1000));
+  await new Promise((resolve) => setTimeout(resolve, config.duration * 1000));
 
   // Stop publishing
-  publishTimers.forEach(timer => clearInterval(timer));
+  publishTimers.forEach((timer) => clearInterval(timer));
 
   // Dynamic drain: wait for messages to stop arriving
   console.log('\n⏳ Draining queues...');
@@ -170,9 +193,12 @@ scrape_configs:
   const maxDrainTime = config.duration * 3; // Safety timeout
   const startDrain = Date.now();
 
-  while (stableSeconds < 3 && (Date.now() - startDrain) < maxDrainTime * 1000) {
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    const currentReceived = clients.reduce((sum, c) => sum + c.getStats().received, 0);
+  while (stableSeconds < 3 && Date.now() - startDrain < maxDrainTime * 1000) {
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    const currentReceived = clients.reduce(
+      (sum, c) => sum + c.getStats().received,
+      0
+    );
 
     if (currentReceived === lastReceivedCount) {
       stableSeconds++;
@@ -206,10 +232,18 @@ scrape_configs:
   const max = allLatencies[allLatencies.length - 1] || 0;
 
   const throughput = totalReceived / config.duration;
-  const actualLoss = totalExpectedDeliveries > 0 ?
-    ((totalExpectedDeliveries - totalReceived) / totalExpectedDeliveries * 100).toFixed(2) : 0;
-  const fanoutRatio = totalPublished > 0 ?
-    (totalExpectedDeliveries / totalPublished).toFixed(2) : 0;
+  const actualLoss =
+    totalExpectedDeliveries > 0
+      ? (
+          ((totalExpectedDeliveries - totalReceived) /
+            totalExpectedDeliveries) *
+          100
+        ).toFixed(2)
+      : 0;
+  const fanoutRatio =
+    totalPublished > 0
+      ? (totalExpectedDeliveries / totalPublished).toFixed(2)
+      : 0;
 
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
   console.log('📈 Results');
@@ -222,9 +256,15 @@ scrape_configs:
   console.log(`  max: ${max}ms`);
   console.log();
   console.log('Throughput:');
-  console.log(`  Published: ${totalPublished} msgs (${(totalPublished / config.duration).toFixed(0)} msg/s)`);
-  console.log(`  Expected: ${totalExpectedDeliveries} msgs (${(totalExpectedDeliveries / config.duration).toFixed(0)} msg/s)`);
-  console.log(`  Delivered: ${totalReceived} msgs (${throughput.toFixed(0)} msg/s)`);
+  console.log(
+    `  Published: ${totalPublished} msgs (${(totalPublished / config.duration).toFixed(0)} msg/s)`
+  );
+  console.log(
+    `  Expected: ${totalExpectedDeliveries} msgs (${(totalExpectedDeliveries / config.duration).toFixed(0)} msg/s)`
+  );
+  console.log(
+    `  Delivered: ${totalReceived} msgs (${throughput.toFixed(0)} msg/s)`
+  );
   console.log(`  Fan-out ratio: ${fanoutRatio}x`);
   console.log(`  Loss: ${actualLoss}%`);
   console.log(`  Drain time: ${drainTime}s`);
@@ -233,8 +273,13 @@ scrape_configs:
   if (config.backends > 1) {
     console.log('Backend Distribution:');
     for (let i = 0; i < config.backends; i++) {
-      const clientsForBackend = clients.filter((_, idx) => idx % config.backends === i);
-      const received = clientsForBackend.reduce((sum, c) => sum + c.getStats().received, 0);
+      const clientsForBackend = clients.filter(
+        (_, idx) => idx % config.backends === i
+      );
+      const received = clientsForBackend.reduce(
+        (sum, c) => sum + c.getStats().received,
+        0
+      );
       const rate = (received / config.duration).toFixed(0);
       console.log(`  Backend ${i} (port ${backendPorts[i]}): ${rate} msg/s`);
     }
@@ -242,7 +287,6 @@ scrape_configs:
   }
 
   await cleanup();
-
 } catch (error) {
   console.error('❌ Error:', error);
   await cleanup();

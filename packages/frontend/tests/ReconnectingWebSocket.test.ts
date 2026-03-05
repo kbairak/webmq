@@ -1,5 +1,5 @@
-import ReconnectingWebSocket from '../src/ReconnectingWebSocket'
-import { createMockWebSocket } from './utils'
+import ReconnectingWebSocket from '../src/ReconnectingWebSocket';
+import { createMockWebSocket } from './utils';
 
 describe('ReconnectingWebSocket', () => {
   let mockWs: ReturnType<typeof createMockWebSocket>;
@@ -21,7 +21,9 @@ describe('ReconnectingWebSocket', () => {
   it('should dispatch open', () => {
     const w = new ReconnectingWebSocket('ws://example.com');
     let received = false;
-    w.addEventListener('open', () => { received = true; });
+    w.addEventListener('open', () => {
+      received = true;
+    });
     mockWs.dispatchEvent(new Event('open'));
     expect(received).toBe(true);
   });
@@ -36,29 +38,35 @@ describe('ReconnectingWebSocket', () => {
   it('should attempt reconnect', async () => {
     const w = new ReconnectingWebSocket('ws://example.com');
     let received = false;
-    w.addEventListener('reconnecting', () => { received = true; });
+    w.addEventListener('reconnecting', () => {
+      received = true;
+    });
     mockWs.dispatchEvent(new CloseEvent('close'));
     expect(received).toBe(true);
     await new Promise((resolve) => setTimeout(resolve, 10));
     expect(MockWebSocketClass).toHaveBeenCalledTimes(2);
     expect((w as any)._reconnectAttempts).toBe(1);
-  })
+  });
 
   it('should succeed reconnect', async () => {
     const w = new ReconnectingWebSocket('ws://example.com');
     mockWs.dispatchEvent(new CloseEvent('close'));
     await new Promise((resolve) => setTimeout(resolve, 10));
     let received = false;
-    w.addEventListener('reconnected', () => { received = true; });
+    w.addEventListener('reconnected', () => {
+      received = true;
+    });
     mockWs.dispatchEvent(new Event('open'));
     expect(received).toBe(true);
     expect((w as any)._reconnectAttempts).toBe(0);
-  })
+  });
 
   it('should forward error event', () => {
     const w = new ReconnectingWebSocket('ws://example.com');
     let received = false;
-    w.addEventListener('error', () => { received = true; });
+    w.addEventListener('error', () => {
+      received = true;
+    });
     mockWs.dispatchEvent(new Event('error'));
     expect(received).toBe(true);
   });
@@ -66,7 +74,9 @@ describe('ReconnectingWebSocket', () => {
   it('should forward message event', () => {
     const w = new ReconnectingWebSocket('ws://example.com');
     let received = false;
-    w.addEventListener('message', () => { received = true; });
+    w.addEventListener('message', () => {
+      received = true;
+    });
     mockWs.dispatchEvent(new MessageEvent('message'));
     expect(received).toBe(true);
   });

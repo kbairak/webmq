@@ -33,7 +33,9 @@ async function fetchWikipedia(query) {
   }
 
   // Look for country
-  const countryMatch = extract.match(/\bin\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s*[,.]|is\s+(?:the\s+)?(?:capital|city|located)\s+(?:of|in)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/);
+  const countryMatch = extract.match(
+    /\bin\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s*[,.]|is\s+(?:the\s+)?(?:capital|city|located)\s+(?:of|in)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/
+  );
   if (countryMatch) {
     facts.Country = countryMatch[1] || countryMatch[2];
   }
@@ -42,7 +44,7 @@ async function fetchWikipedia(query) {
     title: firstResult.title,
     extract: extract.substring(0, 800) + (extract.length > 800 ? '...' : ''),
     url: `https://en.wikipedia.org/wiki/${encodeURIComponent(firstResult.title.replace(/ /g, '_'))}`,
-    facts
+    facts,
   };
 }
 
@@ -72,8 +74,8 @@ async function startWorker() {
             id: `wiki-${searchId}`,
             type: 'markdown',
             title: `About ${wikiData.title}`,
-            data: `${wikiData.extract}\n\n[Read more on Wikipedia](${wikiData.url})`
-          }
+            data: `${wikiData.extract}\n\n[Read more on Wikipedia](${wikiData.url})`,
+          },
         ];
 
         // Add city facts if we found any
@@ -82,14 +84,14 @@ async function startWorker() {
             id: `facts-${searchId}`,
             type: 'keyvalue',
             title: 'City Facts',
-            data: wikiData.facts
+            data: wikiData.facts,
           });
         }
 
         const result = {
           searchId,
           source: 'wikipedia',
-          results
+          results,
         };
 
         channel.publish(

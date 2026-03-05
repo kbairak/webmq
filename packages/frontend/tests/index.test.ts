@@ -1,920 +1,523 @@
-import { WebMQClient, setup, publish, listen, unlisten, close, webMQClient } from '../src/index';
+import { v4 as uuid } from 'uuid';
+import ReconnectingWebSocket from '../src/ReconnectingWebSocket';
+import WebMQClient, { ClientMessageHeader, MessageHeader } from '../src';
+import { bundleData, unbundleData } from '../src/bundle';
+import { createMockWebSocket } from './utils';
 
-// Create stub globals for Node.js environment
-if (!(global as any).WebSocket) {
-  (global as any).WebSocket = class WebSocket {
-    static CONNECTING = 0;
-    static OPEN = 1;
-    static CLOSING = 2;
-    static CLOSED = 3;
-  };
-}
+jest.mock('uuid');
+jest.mock('../src/ReconnectingWebSocket');
 
-if (!(global as any).window) {
-  (global as any).window = {};
-}
-
-// Mock instances
-const mockWebSocketInstance = {
-  send: jest.fn(),
-  close: jest.fn(),
-  addEventListener: jest.fn(),
-  removeEventListener: jest.fn(),
-  readyState: 1, // WebSocket.OPEN
-};
-
-const mockSessionStorage = {
-  getItem: jest.fn(),
-  setItem: jest.fn(),
-  removeItem: jest.fn(),
-  clear: jest.fn(),
-};
-
-// Helper function to establish WebSocket connection in tests
+const mockUuid = uuid as jest.Mock;
+const MockReconnectingWebSocket = ReconnectingWebSocket as jest.Mock;
 
 describe('WebMQClient', () => {
-  let client: WebMQClient;
+  let mockWs: ReturnType<typeof createMockWebSocket>;
+  let uuidCounter: number;
 
   beforeEach(() => {
-    // Clear all mocks first
     jest.clearAllMocks();
-
-    // Spy on global WebSocket constructor
-    jest.spyOn(global, 'WebSocket').mockImplementation(() => mockWebSocketInstance as any);
-
-    // Spy on window properties
-    jest.spyOn(global as any, 'window', 'get').mockReturnValue({
-      sessionStorage: mockSessionStorage,
-      addEventListener: jest.fn()
-    });
-
-    // Reset mock implementations
-    mockWebSocketInstance.readyState = (global as any).WebSocket.OPEN;
-    mockSessionStorage.getItem.mockReturnValue(null);
-
-    client = new WebMQClient({ url: 'ws://localhost:8080' });
-    client.logLevel = 'silent';
+    uuidCounter = 1;
+    mockUuid.mockImplementation(() => `uuid_${uuidCounter++}`);
+    mockWs = createMockWebSocket();
+    MockReconnectingWebSocket.mockImplementation(() => mockWs);
   });
 
-  afterEach(() => {
-    jest.restoreAllMocks();
+  it('should connect', async () => {
+    const c = new WebMQClient({ url: 'dumb_url', sessionId: 'dumb_sessionid' });
+    const connectPromise = c.connect();
+    expect(MockReconnectingWebSocket).toHaveBeenCalledWith(
+      'dumb_url',
+      [0, 1000, 2000, 4000, 8000]
+    );
+    expect(mockWs.addEventListener).toHaveBeenCalledTimes(6);
+
+    // Simulate WebSocket open
+    mockWs.dispatchEvent(new Event('open'));
+
+    // Wait for async hooks to complete
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // Verify identify was sent
+    expect(mockWs.send).toHaveBeenCalledTimes(1);
+    const sentData = mockWs.send.mock.calls.at(-1)[0];
+    expect(sentData).toBeInstanceOf(ArrayBuffer);
+    const [header, payload] = unbundleData(sentData);
+    expect(header).toEqual({
+      action: 'identify',
+      messageId: 'uuid_1',
+      sessionId: 'dumb_sessionid',
+    });
+    const payloadText = new TextDecoder().decode(payload);
+    expect(payloadText).toEqual('');
+
+    // Simulate ack response to resolve the promise
+    mockWs.dispatchEvent(
+      new MessageEvent('message', {
+        data: bundleData({ action: 'ack', messageId: 'uuid_1' }),
+      })
+    );
+
+    // Now the promise should resolve
+    await connectPromise;
   });
 
-  describe('setup', () => {
-    it('should save constructor options', () => {
-      // arrange
-      const preHook = () => Promise.resolve();
-      const onIdentifyHook = () => Promise.resolve();
-      const onPublishHook = () => Promise.resolve();
-      const onListenHook = () => Promise.resolve();
-      const onUnlistenHook = () => Promise.resolve();
-      const onMessageHook = () => Promise.resolve();
-
-      // act
-      const newClient = new WebMQClient({
-        url: 'myUrl',
-        hooks: {
-          pre: [preHook],
-          onIdentify: [onIdentifyHook],
-          onPublish: [onPublishHook],
-          onListen: [onListenHook],
-          onUnlisten: [onUnlistenHook],
-          onMessage: [onMessageHook],
-        },
-        ackTimeoutDelay: 123,
-        reconnectionDelay: 456,
-        maxReconnectionAttempts: 7,
-      });
-
-      // assert
-      expect((newClient as any)._url).toBe('myUrl');
-      expect((newClient as any)._hooks).toStrictEqual({
-        pre: [preHook],
-        onIdentify: [onIdentifyHook],
-        onPublish: [onPublishHook],
-        onListen: [onListenHook],
-        onUnlisten: [onUnlistenHook],
-        onMessage: [onMessageHook],
-      });
-      expect((newClient as any)._ackTimeoutDelay).toBe(123);
-      expect((newClient as any)._reconnectionDelay).toBe(456);
-      expect((newClient as any)._maxReconnectionAttempts).toBe(7);
-    });
-    it('should save setup options', () => {
-      // arrange
-      const preHook = () => Promise.resolve();
-      const onIdentifyHook = () => Promise.resolve();
-      const onPublishHook = () => Promise.resolve();
-      const onListenHook = () => Promise.resolve();
-      const onUnlistenHook = () => Promise.resolve();
-      const onMessageHook = () => Promise.resolve();
-
-      // act
-      client.setup({
-        url: 'myUrl',
-        hooks: {
-          pre: [preHook],
-          onIdentify: [onIdentifyHook],
-          onPublish: [onPublishHook],
-          onListen: [onListenHook],
-          onUnlisten: [onUnlistenHook],
-          onMessage: [onMessageHook],
-        },
-        ackTimeoutDelay: 123,
-        reconnectionDelay: 456,
-        maxReconnectionAttempts: 7,
-      });
-
-      // assert
-      expect((client as any)._url).toBe('myUrl');
-      expect((client as any)._hooks).toStrictEqual({
-        pre: [preHook],
-        onIdentify: [onIdentifyHook],
-        onPublish: [onPublishHook],
-        onListen: [onListenHook],
-        onUnlisten: [onUnlistenHook],
-        onMessage: [onMessageHook],
-      });
-      expect((client as any)._ackTimeoutDelay).toBe(123);
-      expect((client as any)._reconnectionDelay).toBe(456);
-      expect((client as any)._maxReconnectionAttempts).toBe(7);
-    });
+  it('should reject connect on error', async () => {
+    const c = new WebMQClient({ url: 'dumb_url', sessionId: 'dumb_sessionid' });
+    const connectPromise = c.connect();
+    mockWs.dispatchEvent(new Event('error'));
+    let raised = false;
+    try {
+      await connectPromise;
+    } catch (err) {
+      raised = true;
+    }
+    expect(raised).toBeTruthy();
   });
 
-  async function establishConnection() {
-    // Set up "websocket" and event listeners
-    const connectionPromise = (client as any)._ensureConnection();
-    // Find open and message handlers
-    const openHandler = mockWebSocketInstance.addEventListener.mock.calls.find(
-      ([name]) => name === 'open'
-    )[1];
-    const messageHandler = mockWebSocketInstance.addEventListener.mock.calls.find(
-      ([name]) => name === 'message'
-    )[1];
-    // Invoke 'open' handler, this will cause the client to send the identify message
-    openHandler?.({});
-    // Find the identify message
-    const identifySendCall = mockWebSocketInstance.send.mock.calls.at(-1)[0];
-    const identifyMessage = JSON.parse(identifySendCall);
-    // Invoke message handler, this will resolve the connection promise
-    messageHandler?.({
-      data: JSON.stringify({ action: 'ack', messageId: identifyMessage.messageId })
-    });
+  it('should reject connect on close', async () => {
+    const c = new WebMQClient({ url: 'dumb_url', sessionId: 'dumb_sessionid' });
+    const connectPromise = c.connect();
+    mockWs.dispatchEvent(new Event('close'));
+    let raised = false;
+    try {
+      await connectPromise;
+    } catch (err) {
+      raised = true;
+    }
+    expect(raised).toBeTruthy();
+  });
 
-    await connectionPromise;
-
-    return messageHandler;  // Return for sending acks to future messages
+  async function getIdentifiedClient() {
+    const c = new WebMQClient({ url: 'dumb_url', sessionId: 'dumb_sessionid' });
+    const connectPromise = c.connect();
+    mockWs.dispatchEvent(new Event('open'));
+    mockWs.dispatchEvent(
+      new MessageEvent('message', {
+        data: bundleData({ action: 'ack', messageId: 'uuid_1' }),
+      })
+    );
+    await connectPromise;
+    return c;
   }
 
-  describe('connection', () => {
-    it('should connect', async () => {
-      // act
-      await establishConnection();
+  it('should publish', async () => {
+    const c = await getIdentifiedClient();
 
-      // assert
-      expect(mockWebSocketInstance.addEventListener).toHaveBeenCalledWith('open', expect.any(Function));
-      expect(mockWebSocketInstance.addEventListener).toHaveBeenCalledWith('message', expect.any(Function));
-      expect(mockWebSocketInstance.addEventListener).toHaveBeenCalledWith('close', expect.any(Function));
-      expect(mockWebSocketInstance.addEventListener).toHaveBeenCalledWith('error', expect.any(Function));
+    const publishPromise = c.publish('dumb_routing_key', {
+      data: 'dumb_payload',
     });
+    expect((c as any)._pendingMessages.has('uuid_2')).toBeTruthy();
+
+    // Wait for async hooks to complete
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // Verify send was called
+    expect(mockWs.send).toHaveBeenCalledTimes(2);
+
+    // Extract and verify the actual sent data
+    const sentData = mockWs.send.mock.calls.at(-1)[0];
+    expect(sentData).toBeInstanceOf(ArrayBuffer);
+
+    // Unbundle to verify contents
+    const [header, payload] = unbundleData(sentData);
+
+    expect(header).toEqual({
+      action: 'publish',
+      routingKey: 'dumb_routing_key',
+      messageId: 'uuid_2',
+    });
+    const payloadText = new TextDecoder().decode(payload);
+    expect(JSON.parse(payloadText)).toEqual({ data: 'dumb_payload' });
+    mockWs.dispatchEvent(
+      new MessageEvent('message', {
+        data: bundleData({ action: 'ack', messageId: 'uuid_2' }),
+      })
+    );
+
+    await publishPromise;
   });
 
-  describe('publish', () => {
-    it('should send publish message via WebSocket', async () => {
-      // arrange
-      const messageHandler = await establishConnection();
-
-      // act
-      const publishPromise = client.publish('test.key', { data: 'hello' });
-      // Wait for next tick to allow publish to send
-      await Promise.resolve();
-
-      const publishMessage = JSON.parse(mockWebSocketInstance.send.mock.calls.at(-1)[0]);
-      messageHandler?.({
-        data: JSON.stringify({ action: 'ack', messageId: publishMessage.messageId })
-      });
-
+  it('should reject publish on nack', async () => {
+    const c = await getIdentifiedClient();
+    const publishPromise = c.publish('dumb_routing_key', {
+      data: 'dumb_payload',
+    });
+    mockWs.dispatchEvent(
+      new MessageEvent('message', {
+        data: bundleData({ action: 'nack', messageId: 'uuid_2' }),
+      })
+    );
+    let raised = false;
+    try {
       await publishPromise;
-
-      // assert
-      expect(publishMessage.action).toBe('publish');
-      expect(publishMessage.routingKey).toBe('test.key');
-      expect(publishMessage.payload).toEqual({ data: 'hello' });
-      expect(publishMessage.messageId).toBeDefined();
-    });
-
-    it('should reject if timeout', async () => {
-      // arrange
-      client.setup({ ackTimeoutDelay: 10 });
-      await establishConnection();
-
-      // act
-      const publishPromise = client.publish('test.key', { data: 'hello' });
-
-      // Don't send ack - let it timeout
-
-      // assert
-      await expect(publishPromise).rejects.toThrow('Message timeout');
-    });
-
-    it('should reject if receives nack', async () => {
-      // arrange
-      const messageHandler = await establishConnection();
-
-      // act
-      const publishPromise = client.publish('test.key', { data: 'hello' });
-
-      // Wait for next tick to allow publish to send
-      await Promise.resolve();
-
-      const publishMessage = JSON.parse(mockWebSocketInstance.send.mock.calls.at(-1)[0]);
-      messageHandler?.({
-        data: JSON.stringify({ action: 'nack', messageId: publishMessage.messageId, error: 'nack reason' })
-      });
-
-      // assert
-      let successfulPublish = false;
-      let error: any = null;
-      try {
-        await publishPromise;
-        successfulPublish = true;
-      } catch (e: any) {
-        error = e;
-      }
-      expect(successfulPublish).toBe(false);
-      expect(error).toStrictEqual(new Error('nack reason'));
-    });
+    } catch (err) {
+      raised = true;
+    }
+    expect(raised).toBeTruthy();
   });
 
-  describe('listen', () => {
-    it('should listen for new binding key', async () => {
-      // arrange
-      const messageHandler = await establishConnection();
-      const callback = jest.fn();
+  it('should listen', async () => {
+    const c = await getIdentifiedClient();
 
-      // act
-      const listenPromise = client.listen('test.key', callback);
+    const callback = jest.fn();
+    const listenPromise = c.listen('dumb_binding_key', callback);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(
+      [...(c as any)._messageListeners.get('dumb_binding_key')][0]
+    ).toEqual([callback, true]);
 
-      // Wait for next tick to allow listen to send
-      await Promise.resolve();
+    // Wait for async hooks to complete
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
-      const listenMessage = JSON.parse(mockWebSocketInstance.send.mock.calls.at(-1)[0]);
-      messageHandler?.({
-        data: JSON.stringify({ action: 'ack', messageId: listenMessage.messageId })
-      });
-
-      await listenPromise;
-
-      // assert
-      expect(listenMessage).toStrictEqual({
-        action: 'listen', bindingKey: 'test.key', messageId: expect.any(String)
-      });
-      expect((client as any)._messageListeners).toStrictEqual(
-        new Map([['test.key', new Set([callback])]])
-      );
+    expect(mockWs.send).toHaveBeenCalledTimes(2);
+    const sentData = mockWs.send.mock.calls.at(-1)[0];
+    expect(sentData).toBeInstanceOf(ArrayBuffer);
+    const [header, payload] = unbundleData(sentData);
+    expect(header).toEqual({
+      action: 'listen',
+      bindingKey: 'dumb_binding_key',
+      messageId: 'uuid_2',
     });
-
-    it('should not send duplicate listen message for same binding key', async () => {
-      // arrange
-      const [callback1, callback2] = [jest.fn(), jest.fn()];
-      (client as any)._messageListeners.set('test.key', new Set([callback1]))
-
-      // act
-      await client.listen('test.key', callback2);  // No need to ack
-
-      // assert
-      expect((client as any)._messageListeners).toStrictEqual(
-        new Map([['test.key', new Set([callback1, callback2])]])
-      );
-    });
-
-    it('should reject if listen times out', async () => {
-      // arrange
-      client.setup({ ackTimeoutDelay: 10 });
-      await establishConnection();
-
-      // act
-      const listenPromise = client.listen('test.key', jest.fn());
-
-      // Don't send ack - let it timeout
-
-      // assert
-      await expect(listenPromise).rejects.toThrow('Message timeout');
-    });
-
-    it('should reject if listen receives nack', async () => {
-      // arrange
-      const messageHandler = await establishConnection();
-
-      // act
-      const listenPromise = client.listen('test.key', jest.fn());
-
-      // Wait for next tick to allow publish to send
-      await Promise.resolve();
-
-      const listenMessage = JSON.parse(mockWebSocketInstance.send.mock.calls.at(-1)[0]);
-      messageHandler?.({
-        data: JSON.stringify({ action: 'nack', messageId: listenMessage.messageId, error: 'nack reason' })
-      });
-
-      // assert
-      let successfulListen = false;
-      let error: any = null;
-      try {
-        await listenPromise;
-        successfulListen = true;
-      } catch (e: any) {
-        error = e;
-      }
-      expect(successfulListen).toBe(false);
-      expect(error).toStrictEqual(new Error('nack reason'));
-    });
+    const payloadText = new TextDecoder().decode(payload);
+    expect(payloadText).toEqual('');
+    mockWs.dispatchEvent(
+      new MessageEvent('message', {
+        data: bundleData({ action: 'ack', messageId: 'uuid_2' }),
+      })
+    );
+    await listenPromise;
   });
 
-  describe('unlisten', () => {
-    it('should send unlisten message when no more listeners', async () => {
-      // arrange
-      const callback = jest.fn();
-      (client as any)._messageListeners.set('test.key', new Set([callback]))
-      const messageHandler = await establishConnection();
-
-      // act
-      const unlistenPromise = client.unlisten('test.key', callback);
-
-      // Wait for next tick to allow unlisten to send
-      await Promise.resolve();
-
-      const unlistenMessage = JSON.parse(mockWebSocketInstance.send.mock.calls.at(-1)[0]);
-      messageHandler?.({
-        data: JSON.stringify({ action: 'ack', messageId: unlistenMessage.messageId })
-      });
-
-      await unlistenPromise;
-
-      // assert
-      expect(unlistenMessage).toStrictEqual({
-        action: 'unlisten', bindingKey: 'test.key', messageId: expect.any(String)
-      });
-      expect((client as any)._messageListeners).toStrictEqual(new Map());
-    });
-
-    it('should not send unlisten if other listeners exist', async () => {
-      // arrange
-      const [callback1, callback2] = [jest.fn(), jest.fn()];
-      (client as any)._messageListeners.set('test.key', new Set([callback1, callback2]));
-
-      // act
-      await client.unlisten('test.key', callback2);  // No need to ack
-
-      // assert
-      expect((client as any)._messageListeners).toStrictEqual(
-        new Map([['test.key', new Set([callback1])]])
-      );
-    });
-
-    it('should do nothing if callback not found', async () => {
-      // arrange 1
-      const [callback1, callback2] = [jest.fn(), jest.fn()];
-
-      // act 1
-      await client.unlisten('test.key', callback1);  // No need to ack
-
-      // assert 1
-      expect((client as any)._messageListeners).toStrictEqual(new Map());
-
-      // arrange 2
-      (client as any)._messageListeners.set('test.key', new Set([callback1]));
-
-      // act 2
-      await client.unlisten('test.key', callback2);  // No need to ack
-
-      // assert 2
-      expect((client as any)._messageListeners).toStrictEqual(
-        new Map([['test.key', new Set([callback1])]])
-      );
-    });
+  it('should not send listen message if bindingKey already exists', async () => {
+    const c = await getIdentifiedClient();
+    const [callback1, callback2] = [jest.fn(), jest.fn()];
+    (c as any)._messageListeners.set(
+      'dumb_binding_key',
+      new Map([[callback1, true]])
+    );
+    await c.listen('dumb_binding_key', callback2);
+    expect(mockWs.send).toHaveBeenCalledTimes(1); // Only the identify message
+    expect((c as any)._messageListeners.get('dumb_binding_key').size).toEqual(
+      2
+    );
+    expect(
+      (c as any)._messageListeners.get('dumb_binding_key').get(callback2)
+    ).toBeTruthy();
   });
 
-  describe('message handling', () => {
-    it('should route incoming messages to registered callbacks', async () => {
-      // arrange
-      const [callback1, callback2] = [jest.fn(), jest.fn()];
-      (client as any)._messageListeners.set('test.key', new Set([callback1, callback2]))
-      const messageHandler = await establishConnection();
+  it('should unlisten', async () => {
+    const c = await getIdentifiedClient();
+    const callback = jest.fn();
+    (c as any)._messageListeners.set(
+      'dumb_binding_key',
+      new Map([[callback, true]])
+    );
+    const unlistenPromise = c.unlisten('dumb_binding_key', callback);
+    expect((c as any)._messageListeners.size).toEqual(0);
 
-      // act
-      messageHandler?.({
-        data: JSON.stringify({ action: 'message', routingKey: 'test.key', payload: 'hello world' })
-      });
+    // Wait for async hooks to complete
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
-      // assert
-      expect(callback1).toHaveBeenCalledWith('hello world');
-      expect(callback2).toHaveBeenCalledWith('hello world');
+    expect(mockWs.send).toHaveBeenCalledTimes(2);
+    const sentData = mockWs.send.mock.calls.at(-1)[0];
+    expect(sentData).toBeInstanceOf(ArrayBuffer);
+    const [header, payload] = unbundleData(sentData);
+    expect(header).toEqual({
+      action: 'unlisten',
+      bindingKey: 'dumb_binding_key',
+      messageId: 'uuid_2',
     });
-
-    it('should use topic wildcards', async () => {
-      // arrange
-      const [callback1, callback2] = [jest.fn(), jest.fn()];
-      (client as any)._messageListeners.set('test.key1', new Set([callback1]));
-      (client as any)._messageListeners.set('test.*', new Set([callback2]));
-      const messageHandler = await establishConnection();
-
-      // act 1
-      messageHandler?.({
-        data: JSON.stringify({ action: 'message', routingKey: 'test.key1', payload: 'message1' })
-      });
-
-      // assert 1
-      expect(callback1).toHaveBeenCalledWith('message1');
-      expect(callback2).toHaveBeenCalledWith('message1');
-
-      // act 2
-      messageHandler?.({
-        data: JSON.stringify({ action: 'message', routingKey: 'test.key2', payload: 'message2' })
-      });
-
-      // assert 1
-      expect(callback1).not.toHaveBeenCalledWith('message2');
-      expect(callback2).toHaveBeenCalledWith('message2');
-    });
+    const payloadText = new TextDecoder().decode(payload);
+    expect(payloadText).toEqual('');
+    mockWs.dispatchEvent(
+      new MessageEvent('message', {
+        data: bundleData({ action: 'ack', messageId: 'uuid_2' }),
+      })
+    );
+    await unlistenPromise;
   });
 
-  describe('Hooks', () => {
-    describe('onPublish', () => {
-      it('can modify the payload before it is sent', async () => {
-        // arrange
-        client.setup({
-          hooks: {
-            onPublish: [async (_, next, msg) => {
-              msg.payload.value += 1;
-              await next();
-            }]
-          }
-        })
-        await establishConnection();
-
-        // act
-        client.publish('test.key', { value: 1 });
-        // Wait for next tick to allow publish to send
-        await Promise.resolve();
-
-        // assert
-        const publishMessage = JSON.parse(mockWebSocketInstance.send.mock.calls.at(-1)[0]);
-        expect(publishMessage.payload.value).toBe(2);  // Hook should have modified payload
-      });
-
-      it('can stop the message if it does not call next', async () => {
-        // arrange
-        client.setup({
-          hooks: {
-            onPublish: [async (_, next, msg) => {
-              if (!msg.payload.abort) {
-                await next();
-              }
-            }]
-          }
-        })
-        await establishConnection();
-
-        // act 1
-        client.publish('test.key', { abort: true });
-        // Wait for next tick to allow publish to send
-        await Promise.resolve();
-
-        // assert 1
-        let lastMessage = JSON.parse(mockWebSocketInstance.send.mock.calls.at(-1)[0]);
-        expect(lastMessage.action).not.toBe('publish');  // publish was aborted
-
-        // act 2
-        client.publish('test.key', { abort: false });
-        // Wait for next tick to allow publish to send
-        await Promise.resolve();
-
-        // assert 2
-        lastMessage = JSON.parse(mockWebSocketInstance.send.mock.calls.at(-1)[0]);
-        expect(lastMessage.action).toBe('publish');
-        expect(lastMessage.payload).toEqual({ abort: false });
-      });
-    });
-
-    describe('onListen hooks', () => {
-      it('can modify the payload before it is sent', async () => {
-        // arrange
-        client.setup({
-          hooks: {
-            onListen: [async (_, next, msg) => {
-              msg.extra = 'extra';
-              await next();
-            }]
-          }
-        })
-        await establishConnection();
-
-        // act
-        const callback = jest.fn();
-        client.listen('test.key', callback);
-        // Wait for next tick to allow publish to send
-        await Promise.resolve();
-
-        // assert
-        const listenMessage = JSON.parse(mockWebSocketInstance.send.mock.calls.at(-1)[0]);
-        expect(listenMessage.extra).toBe('extra');  // Hook should have modified payload
-        expect((client as any)._messageListeners).toStrictEqual(
-          new Map([['test.key', new Set([callback])]])
-        );
-      });
-
-      it('can stop listening if it does not call next', async () => {
-        client.setup({
-          hooks: {
-            onListen: [async (_, next, msg) => {
-              if (msg.bindingKey !== 'forbidden') {
-                await next();
-              }
-            }]
-          }
-        })
-        await establishConnection();
-
-        // act 1
-        client.listen('forbidden', jest.fn());
-        // Wait for next tick to allow publish to send
-        await Promise.resolve();
-
-        // assert 1
-        let lastMessage = JSON.parse(mockWebSocketInstance.send.mock.calls.at(-1)[0]);
-        expect(lastMessage.action).not.toBe('listen');  // listen was aborted
-        expect((client as any)._messageListeners).toStrictEqual(new Map());
-
-        // act 2
-        const callback = jest.fn();
-        client.listen('test.key', callback);
-        // Wait for next tick to allow publish to send
-        await Promise.resolve();
-
-        // assert 2
-        lastMessage = JSON.parse(mockWebSocketInstance.send.mock.calls.at(-1)[0]);
-        expect(lastMessage.action).toBe('listen');
-        expect(lastMessage.bindingKey).toEqual('test.key');
-        expect((client as any)._messageListeners).toStrictEqual(
-          new Map([['test.key', new Set([callback])]])
-        );
-      });
-    });
-
-    describe('onUnlisten hooks', () => {
-      it('can modify the payload before it is sent', async () => {
-        // arrange
-        client.setup({
-          hooks: {
-            onUnlisten: [async (_, next, msg) => {
-              msg.extra = 'extra';
-              await next();
-            }]
-          }
-        });
-        const callback = jest.fn();
-        (client as any)._messageListeners.set('test.key', new Set([callback]));
-        await establishConnection();
-
-        // act
-        client.unlisten('test.key', callback);
-        // Wait for next tick to allow publish to send
-        await Promise.resolve();
-
-        // assert
-        const unlistenMessage = JSON.parse(mockWebSocketInstance.send.mock.calls.at(-1)[0]);
-        expect(unlistenMessage.extra).toBe('extra');  // Hook should have modified payload
-      });
-
-      it('can stop unlistening if it does not call next', async () => {
-        client.setup({
-          hooks: {
-            onUnlisten: [async (_c, _next) => { }]
-          }
-        })
-        const callback = jest.fn();
-        (client as any)._messageListeners.set('test.key', new Set([callback]));
-        await establishConnection();
-
-        // act
-        client.unlisten('test.key', callback);
-        // Wait for next tick to allow publish to send
-        await Promise.resolve();
-
-        // assert
-        let lastMessage = JSON.parse(mockWebSocketInstance.send.mock.calls.at(-1)[0]);
-        expect(lastMessage.action).not.toBe('unlisten');  // listen was aborted
-        expect((client as any)._messageListeners).toStrictEqual(
-          new Map([['test.key', new Set([callback])]])
-        );
-      });
-    });
-
-    describe('onMessage hooks', () => {
-      it('can enhance messages', async () => {
-        // arrange
-        client.setup({
-          hooks: {
-            onMessage: [async (_c, next, msg) => {
-              msg.payload.value += 1;
-              await next()
-            }]
-          }
-        });
-        const callback = jest.fn();
-        (client as any)._messageListeners.set('test.key', new Set([callback]));
-        const messageHandler = await establishConnection();
-
-        // act
-        messageHandler?.({
-          data: JSON.stringify({ action: 'message', routingKey: 'test.key', payload: { value: 1 } })
-        });
-
-        // assert
-        expect(callback).toHaveBeenCalledWith({ value: 2 });
-      });
-
-      it('can block messages if it does not call next', async () => {
-        // arrange
-        client.setup({
-          hooks: {
-            onMessage: [async (_c, next, msg) => {
-              if (msg.payload.allow) await next();
-            }]
-          }
-        });
-        const callback = jest.fn();
-        (client as any)._messageListeners.set('test.key', new Set([callback]));
-        const messageHandler = await establishConnection();
-
-        // act 1
-        messageHandler?.({
-          data: JSON.stringify({
-            action: 'message', routingKey: 'test.key', payload: { allow: false }
-          })
-        });
-
-        // assert 2
-        expect(callback).not.toHaveBeenCalled();
-
-        // act 1
-        messageHandler?.({
-          data: JSON.stringify({
-            action: 'message', routingKey: 'test.key', payload: { allow: true }
-          })
-        });
-
-        // assert 2
-        expect(callback).toHaveBeenCalledWith({ allow: true });
-      });
-    });
-
-    it('persists context', async () => {
-      // arrange
-      client.setup({
-        hooks: {
-          pre: [async (context, next, msg) => {
-            if (!('actionMap' in context)) context.actionMap = new Map<string, number>();
-            context.actionMap.set(msg.action, (context.actionMap.get(msg.action) || 0) + 1);
-            await next();
-          }]
-        }
-      });
-
-      // act 1
-      await establishConnection();
-
-      // assert 1
-      expect((client as any)._context.actionMap).toStrictEqual(new Map([['identify', 1]]));
-
-      // act 2
-      client.publish('test.key', { data: 'hello' });
-      // Wait for next tick to allow publish to send
-      await Promise.resolve();
-
-      // assert 2
-      expect((client as any)._context.actionMap).toStrictEqual(
-        new Map([['identify', 1], ['publish', 1]])
-      );
-
-      // act 3
-      client.publish('test.key', { data: 'hello' });
-      // Wait for next tick to allow publish to send
-      await Promise.resolve();
-
-      // assert 2
-      expect((client as any)._context.actionMap).toStrictEqual(
-        new Map([['identify', 1], ['publish', 2]])
-      );
-    });
+  it('should not send unlisten message if more than one callbacks', async () => {
+    const c = await getIdentifiedClient();
+    const [callback1, callback2] = [jest.fn(), jest.fn()];
+    (c as any)._messageListeners.set(
+      'dumb_binding_key',
+      new Map([
+        [callback1, true],
+        [callback2, true],
+      ])
+    );
+    await c.unlisten('dumb_binding_key', callback2);
+    expect(
+      (c as any)._messageListeners.get('dumb_binding_key').has(callback1)
+    ).toBeTruthy();
+    expect(
+      (c as any)._messageListeners.get('dumb_binding_key').has(callback2)
+    ).toBeFalsy();
+    expect(mockWs.send).toHaveBeenCalledTimes(1); // Only the identify message
   });
 
-  describe('Connection Management', () => {
-    // should create sessionId from sessionStorage if available
-    // should generate new sessionId if none exists
-    // should work in Node.js environment without sessionStorage
-    // should store URL correctly
+  it('should receive message', async () => {
+    const c = await getIdentifiedClient();
+    const callback = jest.fn();
+    (c as any)._messageListeners.set(
+      'dumb_binding_key',
+      new Map([[callback, true]])
+    );
+    mockWs.dispatchEvent(
+      new MessageEvent('message', {
+        data: bundleData(
+          { action: 'message', routingKey: 'dumb_binding_key' },
+          new TextEncoder().encode(JSON.stringify({ hello: 'world' })).buffer
+        ),
+      })
+    );
+    expect(callback).toHaveBeenCalledWith({ hello: 'world' });
   });
 
-  describe('Event Handling', () => {
-    it('should receive connected event', async () => {
-      // arrange
-      const callback = jest.fn();
-      client.on('connected', callback);
-
-      // act
-      await establishConnection();
-
-      // assert
-      expect(callback).toHaveBeenCalled();
-    });
-
-    it('should receive disconnected event', async () => {
-      // arrange
-      const callback = jest.fn();
-      client.on('disconnected', callback);
-      await establishConnection();
-
-      // act
-      client.close();
-
-      // Find and trigger the close handler
-      const closeHandler = mockWebSocketInstance.addEventListener.mock.calls.find(
-        ([name]) => name === 'close'
-      )[1];
-      closeHandler?.({});
-
-      // assert
-      expect(callback).toHaveBeenCalled();
-    });
-
-    it('should receive reconnecting event', async () => {
-      // arrange
-      const callback = jest.fn();
-      client.on('reconnecting', callback);
-      await establishConnection();
-
-      // act
-      // Find and trigger the close handler (with _shouldReconnect still true)
-      const closeHandler = mockWebSocketInstance.addEventListener.mock.calls.find(
-        ([name]) => name === 'close'
-      )[1];
-      closeHandler?.({});
-
-      // assert
-      expect(callback).toHaveBeenCalled();
-    });
-
-    it('should emit error event on error', async () => {
-      // arrange
-      const callback = jest.fn();
-      client.on('error', callback);
-      await establishConnection();
-
-      // act
-      // Find and trigger the error handler to cache the error
-      const errorHandler = mockWebSocketInstance.addEventListener.mock.calls.find(
-        ([name]) => name === 'error'
-      )[1];
-      const mockError = new Event('error');
-      errorHandler?.(mockError);
-
-      // Close the connection (sets _shouldReconnect = false)
-      client.close();
-
-      // Trigger the close handler (which will emit the cached error)
-      const closeHandler = mockWebSocketInstance.addEventListener.mock.calls.find(
-        ([name]) => name === 'close'
-      )[1];
-      closeHandler?.({});
-
-      // assert
-      expect(callback).toHaveBeenCalledWith(mockError);
-    });
-
-    it('should only cache the first error', async () => {
-      // arrange
-      const callback = jest.fn();
-      client.on('error', callback);
-      await establishConnection();
-
-      // act
-      // Find and trigger the error handler multiple times
-      const errorHandler = mockWebSocketInstance.addEventListener.mock.calls.find(
-        ([name]) => name === 'error'
-      )[1];
-      const firstError = { type: 'error', message: 'first error' };
-      const secondError = { type: 'error', message: 'second error' };
-
-      errorHandler?.(firstError);
-      errorHandler?.(secondError); // This should be ignored
-
-      // Close the connection (sets _shouldReconnect = false)
-      client.close();
-
-      // Trigger the close handler (which will emit only the first cached error)
-      const closeHandler = mockWebSocketInstance.addEventListener.mock.calls.find(
-        ([name]) => name === 'close'
-      )[1];
-      closeHandler?.({});
-
-      // assert
-      expect(callback).toHaveBeenCalledTimes(1);
-      expect(callback).toHaveBeenCalledWith(firstError);
-    });
+  it('should disconnect', async () => {
+    const c = await getIdentifiedClient();
+    const disconnectPromise = c.disconnect();
+    expect(mockWs.close).toHaveBeenCalledTimes(1);
+    mockWs.dispatchEvent(new Event('close'));
+    await disconnectPromise;
   });
 
-  describe('Reconnection', () => {
-    it('should not reconnect if shouldReconnect is false', async () => {
-      // arrange
-      const disconnectedCallback = jest.fn();
-      client.on('disconnected', disconnectedCallback);
-      await establishConnection();
-      client.close(); // sets _shouldReconnect = false
+  it('should reconnect', async () => {
+    const c = await getIdentifiedClient();
+    mockWs.dispatchEvent(new Event('reconnecting'));
+    expect((c as any)._identified).toBeFalsy();
+    mockWs.dispatchEvent(new Event('reconnected'));
 
-      // act
-      const closeHandler = mockWebSocketInstance.addEventListener.mock.calls.find(
-        ([name]) => name === 'close'
-      )[1];
-      closeHandler?.({});
+    // Wait for async hooks to complete
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
-      // assert
-      expect(disconnectedCallback).toHaveBeenCalled();
-      expect((client as any)._isReconnecting).toBe(false);
+    expect(mockWs.send).toHaveBeenCalledTimes(2); // identify message should be resent
+    const sentData = mockWs.send.mock.calls.at(-1)[0];
+    expect(sentData).toBeInstanceOf(ArrayBuffer);
+    const [header, payload] = unbundleData(sentData);
+    expect(header).toEqual({
+      action: 'identify',
+      sessionId: 'dumb_sessionid',
+      messageId: 'uuid_2',
     });
-
-    it('should set _isReconnecting when close triggered', async () => {
-      // arrange
-      await establishConnection();
-
-      // act - trigger close to start reconnection (don't await, just check state change)
-      const closeHandler = mockWebSocketInstance.addEventListener.mock.calls.find(
-        ([name]) => name === 'close'
-      )[1];
-      const closePromise = closeHandler?.({});
-
-      // Wait a tick for the async close handler to start
-      await Promise.resolve();
-
-      // assert - _isReconnecting should be set to true during reconnection
-      expect((client as any)._isReconnecting).toBe(true);
-    });
-
-    it('should emit reconnecting event with attempt number', async () => {
-      // arrange
-      await establishConnection();
-      const reconnectingCallback = jest.fn();
-      client.on('reconnecting', reconnectingCallback);
-
-      // act - trigger close to start reconnection
-      const closeHandler = mockWebSocketInstance.addEventListener.mock.calls.find(
-        ([name]) => name === 'close'
-      )[1];
-      const closePromise = closeHandler?.({});
-
-      // Wait for first reconnection attempt
-      await Promise.resolve();
-
-      // assert
-      expect(reconnectingCallback).toHaveBeenCalledWith(1);
-    });
+    const payloadText = new TextDecoder().decode(payload);
+    expect(payloadText).toEqual('');
+    mockWs.dispatchEvent(
+      new MessageEvent('message', {
+        data: bundleData({ action: 'ack', messageId: 'uuid_2' }),
+      })
+    );
+    expect((c as any)._identified).toBeTruthy();
   });
 
-  describe('beforeunload', () => {
-    it('should disable reconnection on page unload', async () => {
-      // arrange
-      await establishConnection();
-
-      // Get the beforeunload handler
-      const windowMock = (global as any).window;
-      const beforeunloadHandler = windowMock.addEventListener.mock.calls.find(
-        ([name]: [string]) => name === 'beforeunload'
-      )[1];
-
-      // act
-      beforeunloadHandler?.();
-
-      // assert
-      expect((client as any)._shouldReconnect).toBe(false);
-      expect(mockWebSocketInstance.close).toHaveBeenCalled();
+  it('should queue messages while reconnecting', async () => {
+    const c = await getIdentifiedClient();
+    // Start reconnect
+    mockWs.dispatchEvent(new Event('reconnecting'));
+    // Attempt publish
+    const publishPromise = c.publish('dumb_routing_key', { hello: 'world' });
+    // Verify message is queued
+    expect((c as any)._messageQueue.length).toEqual(1);
+    expect((c as any)._messageQueue[0].header).toEqual({
+      action: 'publish',
+      messageId: 'uuid_2',
+      routingKey: 'dumb_routing_key',
     });
+    let payload = (c as any)._messageQueue[0].payload;
+    let payloadText = new TextDecoder().decode(payload);
+    expect(JSON.parse(payloadText)).toEqual({ hello: 'world' });
+    // Complete reconnect
+    mockWs.dispatchEvent(new Event('reconnected'));
 
-    it('should set connection promise to rejected on page unload', async () => {
-      // arrange
-      await establishConnection();
+    // Wait for async hooks to complete
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
-      // Get the beforeunload handler
-      const windowMock = (global as any).window;
-      const beforeunloadHandler = windowMock.addEventListener.mock.calls.find(
-        ([name]: [string]) => name === 'beforeunload'
-      )[1];
-
-      // act
-      beforeunloadHandler?.();
-
-      // assert - connection promise should be rejected
-      await expect((client as any)._connectionPromise).rejects.toThrow('Page unloading');
+    // Verify identify is resent
+    expect(mockWs.send).toHaveBeenCalledTimes(2); // identify x2
+    let sentData = mockWs.send.mock.calls.at(-1)[0];
+    expect(sentData).toBeInstanceOf(ArrayBuffer);
+    let header;
+    [header, payload] = unbundleData(sentData);
+    expect(header).toEqual({
+      action: 'identify',
+      sessionId: 'dumb_sessionid',
+      messageId: 'uuid_3',
     });
+    payloadText = new TextDecoder().decode(payload);
+    expect(payloadText).toEqual('');
+    // Ack identify
+    mockWs.dispatchEvent(
+      new MessageEvent('message', {
+        data: bundleData({ action: 'ack', messageId: 'uuid_3' }),
+      })
+    );
+
+    // Wait for queued messages to be sent
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // Verify queued publish is sent
+    expect((c as any)._identified).toBeTruthy();
+    expect(mockWs.send).toHaveBeenCalledTimes(3); // identifyx2 + publish
+    sentData = mockWs.send.mock.calls.at(-1)[0];
+    expect(sentData).toBeInstanceOf(ArrayBuffer);
+    [header, payload] = unbundleData(sentData);
+    expect(header).toEqual({
+      action: 'publish',
+      routingKey: 'dumb_routing_key',
+      messageId: 'uuid_2',
+    });
+    payloadText = new TextDecoder().decode(payload);
+    expect(JSON.parse(payloadText)).toEqual({ hello: 'world' });
+    // Ack publish
+    mockWs.dispatchEvent(
+      new MessageEvent('message', {
+        data: bundleData({ action: 'ack', messageId: 'uuid_2' }),
+      })
+    );
+    // Verify publish promise resolves
+    await publishPromise;
+  });
+
+  it('rejects because of timeout', async () => {
+    const c = new WebMQClient({
+      url: 'dumb_url',
+      sessionId: 'dumb_sessionid',
+      timeoutDelay: 1,
+    });
+    const connectPromise = c.connect();
+    mockWs.dispatchEvent(new Event('open'));
+    mockWs.dispatchEvent(
+      new MessageEvent('message', {
+        data: bundleData({ action: 'ack', messageId: 'uuid_1' }),
+      })
+    );
+    await connectPromise;
+
+    const publishPromise = c.publish('dumb_routing_key', { hello: 'world' });
+
+    // Use Jest's rejects matcher to properly handle async rejection
+    await expect(publishPromise).rejects.toThrow('Message timeout');
+  });
+
+  it('should apply identify hook', async () => {
+    const c = new WebMQClient({ url: 'dumb_url', sessionId: 'dumb_sessionid' });
+
+    const onIdentify = async (
+      header: ClientMessageHeader
+    ): Promise<ClientMessageHeader> => {
+      return { ...header, identify: 'hook' };
+    };
+    c.addHook('identify', onIdentify);
+    expect((c as any)._hooks.identify).toContain(onIdentify);
+
+    c.connect();
+    mockWs.dispatchEvent(new Event('open'));
+
+    // Wait for async hooks to complete
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(mockWs.send).toHaveBeenCalledTimes(1);
+    const sentData = mockWs.send.mock.calls.at(-1)[0];
+    expect(sentData).toBeInstanceOf(ArrayBuffer);
+    const [header, payload] = unbundleData(sentData);
+    expect(header).toEqual({
+      action: 'identify',
+      messageId: 'uuid_1',
+      sessionId: 'dumb_sessionid',
+      identify: 'hook',
+    });
+    const payloadText = new TextDecoder().decode(payload);
+    expect(payloadText).toEqual('');
+  });
+
+  it('should apply pre hook to identify', async () => {
+    const c = new WebMQClient({ url: 'dumb_url', sessionId: 'dumb_sessionid' });
+
+    const onIdentify = async (
+      header: MessageHeader
+    ): Promise<MessageHeader> => {
+      return { ...header, pre: 'hook' };
+    };
+    c.addHook('pre', onIdentify);
+    expect((c as any)._hooks.pre).toContain(onIdentify);
+
+    c.connect();
+    mockWs.dispatchEvent(new Event('open'));
+
+    // Wait for async hooks to complete
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(mockWs.send).toHaveBeenCalledTimes(1);
+    const sentData = mockWs.send.mock.calls.at(-1)[0];
+    expect(sentData).toBeInstanceOf(ArrayBuffer);
+    const [header, payload] = unbundleData(sentData);
+    expect(header).toEqual({
+      action: 'identify',
+      messageId: 'uuid_1',
+      sessionId: 'dumb_sessionid',
+      pre: 'hook',
+    });
+    const payloadText = new TextDecoder().decode(payload);
+    expect(payloadText).toEqual('');
+  });
+
+  it('should should apply publish hook', async () => {
+    const c = await getIdentifiedClient();
+    const onPublish = async (
+      header: ClientMessageHeader
+    ): Promise<ClientMessageHeader> => {
+      return { ...header, publish: 'hook' };
+    };
+    c.addHook('publish', onPublish);
+    expect((c as any)._hooks.publish).toContain(onPublish);
+
+    c.publish('dumb_routing_key', { data: 'dumb_payload' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(mockWs.send).toHaveBeenCalledTimes(2);
+    const sentData = mockWs.send.mock.calls.at(-1)[0];
+    expect(sentData).toBeInstanceOf(ArrayBuffer);
+    const [header, payload] = unbundleData(sentData);
+    expect(header).toEqual({
+      action: 'publish',
+      routingKey: 'dumb_routing_key',
+      messageId: 'uuid_2',
+      publish: 'hook',
+    });
+    const payloadText = new TextDecoder().decode(payload);
+    expect(JSON.parse(payloadText)).toEqual({ data: 'dumb_payload' });
+  });
+
+  it('should should apply pre hook to publish', async () => {
+    const c = await getIdentifiedClient();
+    const onPublish = async (header: MessageHeader): Promise<MessageHeader> => {
+      return { ...header, pre: 'hook' };
+    };
+    c.addHook('pre', onPublish);
+    expect((c as any)._hooks.pre).toContain(onPublish);
+
+    c.publish('dumb_routing_key', { data: 'dumb_payload' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(mockWs.send).toHaveBeenCalledTimes(2);
+    const sentData = mockWs.send.mock.calls.at(-1)[0];
+    expect(sentData).toBeInstanceOf(ArrayBuffer);
+    const [header, payload] = unbundleData(sentData);
+    expect(header).toEqual({
+      action: 'publish',
+      routingKey: 'dumb_routing_key',
+      messageId: 'uuid_2',
+      pre: 'hook',
+    });
+    const payloadText = new TextDecoder().decode(payload);
+    expect(JSON.parse(payloadText)).toEqual({ data: 'dumb_payload' });
+  });
+
+  it('should remove hook', () => {
+    const c = new WebMQClient({ url: 'dumb_url', sessionId: 'dumb_sessionid' });
+    const onIdentify = jest.fn();
+    c.addHook('identify', onIdentify);
+    expect((c as any)._hooks.identify).toContain(onIdentify);
+    c.removeHook('identify', onIdentify);
+    expect((c as any)._hooks.identify).not.toContain(onIdentify);
   });
 });

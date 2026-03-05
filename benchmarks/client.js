@@ -10,7 +10,7 @@ export class BenchmarkClient {
     this.listenKeys = new Set();
     this.client = new WebMQClient({
       url: wsUrl,
-      ackTimeoutDelay: 30000 // 30 seconds for benchmarks
+      ackTimeoutDelay: 30000, // 30 seconds for benchmarks
     });
     this.client.logLevel = 'silent'; // Reduce noise
   }
@@ -34,7 +34,7 @@ export class BenchmarkClient {
       await this.client.listen(String(key), (msg) => {
         this.receivedMessages.push({
           ...msg,
-          receivedAt: Date.now()
+          receivedAt: Date.now(),
         });
       });
     }
@@ -47,7 +47,7 @@ export class BenchmarkClient {
     const message = {
       id: `${Date.now()}-${Math.random()}`,
       timestamp: Date.now(),
-      payload: padding
+      payload: padding,
     };
 
     this.client.publish(key, message);
@@ -61,7 +61,9 @@ export class BenchmarkClient {
     return {
       published: this.publishedCount,
       received: this.receivedMessages.length,
-      latencies: this.receivedMessages.map(msg => msg.receivedAt - msg.timestamp)
+      latencies: this.receivedMessages.map(
+        (msg) => msg.receivedAt - msg.timestamp
+      ),
     };
   }
 

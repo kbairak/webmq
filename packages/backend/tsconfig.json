@@ -2,9 +2,9 @@
   "extends": "../../tsconfig.json",
   "compilerOptions": {
     "outDir": "./dist",
-    "esModuleInterop": true,
-    "downlevelIteration": true
+    "module": "ESNext",
+    "moduleResolution": "node"
   },
-  "include": ["src/index.ts"],
+  "include": ["src"],
   "exclude": ["src/**/*.test.ts"]
 }

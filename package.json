@@ -23,7 +23,7 @@
     "backend",
     "frontend"
   ],
-  "author": "Gemini",
+  "author": "Konstantinos Bairaktaris <ikijob@gmail.com>",
   "license": "ISC",
   "workspaces": [
     "packages/*",

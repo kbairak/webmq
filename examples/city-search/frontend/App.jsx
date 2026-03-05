@@ -11,7 +11,7 @@ export default function CitySearch() {
   const [currentSearchId, setCurrentSearchId] = useState(null);
 
   const handleResults = useCallback((message) => {
-    setResults(prev => [...prev, ...message.results]);
+    setResults((prev) => [...prev, ...message.results]);
   }, []);
 
   useEffect(() => {
@@ -34,7 +34,7 @@ export default function CitySearch() {
     // Publish search request
     publish(`search.request.${searchId}`, {
       searchId,
-      query: query.trim()
+      query: query.trim(),
     });
 
     // Stop showing loading after 5 seconds
@@ -45,7 +45,10 @@ export default function CitySearch() {
     <div className="container">
       <div className="header">
         <h1>🌍 City Explorer</h1>
-        <p>Search for a city to discover weather, info, and images from multiple sources</p>
+        <p>
+          Search for a city to discover weather, info, and images from multiple
+          sources
+        </p>
       </div>
 
       <form onSubmit={handleSearch}>

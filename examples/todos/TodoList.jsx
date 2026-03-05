@@ -4,13 +4,13 @@ import Todo from './Todo';
 import UserContext from './UserContext';
 
 function TodoList() {
-  const { username } = useContext(UserContext)
+  const { username } = useContext(UserContext);
   const [todos, setTodos] = useState({});
   const [newTodoText, setNewTodoText] = useState('');
 
   const handleTodoAdded = useCallback((payload) => {
     setTodos((prev) => ({ ...prev, [payload.id]: payload }));
-  }, [])
+  }, []);
 
   useEffect(() => {
     listen('todos.added', handleTodoAdded);

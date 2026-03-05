@@ -1,650 +1,750 @@
-import WebSocket, { WebSocketServer, ServerOptions } from 'ws';
-import amqplib, { Channel, ChannelModel } from 'amqplib';
-import { HookFunction, runWithHooks } from './hooks';
-import { MetricsCollector } from './metrics';
-import { createServer } from 'http';
+import http from 'http';
 
-export type ClientMessage = {
-  action: 'identify' | 'publish' | 'listen' | 'unlisten';
-  routingKey?: string;
-  payload?: any;
-  bindingKey?: string;
-  sessionId?: string;
+import amqplib from 'amqplib';
+import promClient from 'prom-client';
+import * as ws from 'ws';
+
+import * as metrics from './metrics';
+import { bundleData, unbundleData, retry } from './utils';
+
+// TODOs:
+//   - Check whether we need to pass options to RabbitMQ
+//   - Tests
+
+promClient.collectDefaultMetrics();
+
+// Types
+interface MessageHeader {
+  action: 'identify' | 'publish' | 'listen' | 'unlisten' | 'message';
   messageId?: string;
-};
-
-export type WebMQHooks = {
-  pre?: HookFunction[];
-  onIdentify?: HookFunction[];
-  onPublish?: HookFunction[];
-  onListen?: HookFunction[];
-  onUnlisten?: HookFunction[];
+  sessionId?: string;
+  routingKey?: string;
+  bindingKey?: string;
+  rmqOptions?: amqplib.Options.Publish;
+  [key: string]: any;
+}
+interface HookContext {
+  ws: ws.WebSocket;
+  sessionId?: string;
+  [key: string]: any;
+}
+type HookName =
+  | 'pre'
+  | 'wsMessage'
+  | 'identify'
+  | 'publish'
+  | 'listen'
+  | 'unlisten'
+  | 'rmqMessage'
+  | 'post';
+type HookFunction = (
+  header: MessageHeader,
+  context: HookContext,
+  rmqMessage?: amqplib.ConsumeMessage
+) => Promise<MessageHeader>;
+type LogLevel = 'DEBUG' | 'INFO' | 'WARNING' | 'ERROR' | 'SILENT';
+interface HealthCheckResponse {
+  healthy: boolean;
+  rabbitMQQueues: number;
+  websockets: number;
 }
 
-export type WebMQServerOptions = ServerOptions & {
-  rabbitmqUrl: string;
-  exchangeName: string;
-  hooks?: WebMQHooks;
-  healthCheck?: boolean | string;
-  metrics?: boolean | string;
+interface WebMQServerOptions {
+  rmqUrl: string;
+  exchange: string;
+  port: number;
+  healthEndpoint?: string;
+  metricsEndpoint?: string;
+  queueTimeout?: number;
+  logLevel?: LogLevel;
 }
 
-/**
- * WebMQ backend server that bridges WebSocket connections with RabbitMQ message broker.
- */
-export class WebMQServer {
-  private static _serverInstances = new Set<WebMQServer>();
+export { MessageHeader, HookContext, HookName, HookFunction };
 
-  public logLevel: 'silent' | 'error' | 'warn' | 'info' | 'debug' = 'info';
+export default class WebMQServer {
+  public logLevel: LogLevel = 'INFO';
 
-  private _rabbitmqConnection: ChannelModel | null = null;
-  private _rabbitmqChannel: Channel | null = null;
-  private _wss: WebSocketServer | null = null;
-  private _httpServer: any = null;
+  private static _instances = new Set<WebMQServer>();
+  private _queues = new Map<ws.WebSocket, Promise<void>>();
+  private _webSocketServer: ws.WebSocketServer | null = null;
+  private _consumerTags = new Map<ws.WebSocket, string>();
+  private _webSockets = new Set<ws.WebSocket>();
+  private _consecutiveChannelFailures = 0;
+  private _lastSuccessfulConnectionAttempt: Date | null = null;
   private _hooks = {
-    pre: [] as HookFunction[],
-    onIdentify: [] as HookFunction[],
-    onPublish: [] as HookFunction[],
-    onListen: [] as HookFunction[],
-    onUnlisten: [] as HookFunction[]
+    pre: new Set<HookFunction>(),
+    identify: new Set<HookFunction>(),
+    publish: new Set<HookFunction>(),
+    listen: new Set<HookFunction>(),
+    unlisten: new Set<HookFunction>(),
+    wsMessage: new Set<HookFunction>(),
+    rmqMessage: new Set<HookFunction>(),
+    post: new Set<HookFunction>(),
   };
-  private readonly rabbitmqUrl: string;
-  private readonly exchangeName: string;
-  private readonly wsOptions: ServerOptions;
-  private readonly _healthCheckPath: string | null = null;
-  private readonly _metricsPath: string | null = null;
-  private readonly _metrics: MetricsCollector = new MetricsCollector();
+
+  // Options
+  private _rmqUrl = '';
+  private _exchangeName = '';
+  private _port = 0;
+  private _healthEndpoint = '/health';
+  private _metricsEndpoint = '/metrics';
+  private _queueTimeout = 5 * 60 * 1000; // 5 minutes
 
   constructor(options: WebMQServerOptions) {
-    const { rabbitmqUrl, exchangeName, hooks, healthCheck, metrics, ...wsOptions } = options;
-
-    this.rabbitmqUrl = rabbitmqUrl;
-    this.exchangeName = exchangeName;
-    this.wsOptions = wsOptions;
-    Object.assign(this._hooks, hooks)
-    if (healthCheck) {
-      this._healthCheckPath = typeof healthCheck === 'string' ? healthCheck : '/health';
+    this._rmqUrl = options.rmqUrl;
+    this._exchangeName = options.exchange;
+    this._port = options.port;
+    if (options.healthEndpoint) {
+      this._healthEndpoint = options.healthEndpoint;
     }
-    if (metrics) {
-      this._metricsPath = typeof metrics === 'string' ? metrics : '/metrics';
+    if (options.metricsEndpoint) {
+      this._metricsEndpoint = options.metricsEndpoint;
+    }
+    if (options.queueTimeout) {
+      this._queueTimeout = options.queueTimeout;
+    }
+    if (options.logLevel) {
+      this.logLevel = options.logLevel;
     }
   }
 
   public async start(): Promise<void> {
-    this._log('info', 'Starting WebMQ server');
-    await this._getRabbitmqChannel();
+    WebMQServer._instances.add(this);
 
-    // If we need HTTP endpoints and don't have a server option, create one
-    if ((this._healthCheckPath || this._metricsPath) && !this.wsOptions.server && this.wsOptions.port) {
-      this._httpServer = createServer((req, res) => {
-        // Handle our HTTP endpoints before WebSocket upgrade
-        if (this._healthCheckPath && req.url === this._healthCheckPath) {
-          this._handleHealthCheck(req, res);
-        } else if (this._metricsPath && req.url === this._metricsPath) {
-          this._handleMetrics(req, res);
-        } else {
-          // Regular HTTP request to unknown path - reject it
-          res.writeHead(426, { 'Content-Type': 'text/plain' });
-          res.end('Upgrade Required');
+    const [channel, connection] = await this._getChannelFunc()();
+    await channel.assertExchange(this._exchangeName, 'topic', {
+      durable: true,
+    });
+
+    if (this._healthEndpoint || this._metricsEndpoint) {
+      const server = http.createServer(
+        async (
+          req: http.IncomingMessage,
+          res: http.ServerResponse
+        ): Promise<void> => {
+          if (req.url === this._healthEndpoint) {
+            const health = await this._healthCheck();
+            res.writeHead(health.healthy ? 200 : 503, {
+              'Content-Type': 'application/json',
+            });
+            res.end(JSON.stringify(health));
+          } else if (req.url === this._metricsEndpoint) {
+            res.writeHead(200, {
+              'Content-Type': promClient.register.contentType,
+            });
+            res.end(await promClient.register.metrics());
+          } else {
+            res.writeHead(404, { 'Content-Type': 'text/plain' });
+            res.end('WebSocket server - use ws:// protocol');
+          }
         }
-      });
-      this._httpServer.listen(this.wsOptions.port);
-      this._wss = new WebSocketServer({ ...this.wsOptions, server: this._httpServer, port: undefined });
-
-      if (this._healthCheckPath) {
-        this._log('info', `Health check endpoint enabled at ${this._healthCheckPath}`);
-      }
-      if (this._metricsPath) {
-        this._log('info', `Metrics endpoint enabled at ${this._metricsPath}`);
-      }
+      );
+      server.listen(this._port);
+      this._webSocketServer = new ws.WebSocketServer({ server });
     } else {
-      // Original behavior for when server is provided or no HTTP endpoints needed
-      this._wss = new WebSocketServer(this.wsOptions);
+      this._webSocketServer = new ws.WebSocketServer({ port: this._port });
     }
 
-    // Track this instance for graceful shutdown
-    WebMQServer._serverInstances.add(this);
+    this._webSocketServer.on('connection', async (ws: ws.WebSocket) => {
+      this._log('INFO', 'New WebSocket connection established');
+      metrics.wsConnections.inc();
+      const hookContext: HookContext = { ws };
+      this._webSockets.add(ws);
+      this._queues.set(ws, Promise.resolve());
+      const getChannel = this._getChannelFunc(connection);
+      ws.binaryType = 'arraybuffer';
 
-    this._wss.on('connection', (ws: WebSocket) => {
-      this._log('info', 'Client connected');
-      this._metrics.incrementConnections();
-      const hookContext = { ws, sessionId: null as string | null };
-      let clientChannel: Channel | null = null;
-      let consumerTag: string | null = null;
-      let messageQueue = Promise.resolve();
-
-      const getChannel = async (): Promise<Channel> => {
-        if (!clientChannel) {
-          if (!this._rabbitmqConnection) {
-            this._log('debug', `Connecting to RabbitMQ: ${this.rabbitmqUrl}`);
-            this._rabbitmqConnection = await amqplib.connect(this.rabbitmqUrl);
-            this._log('info', 'RabbitMQ connection established');
-            this._metrics.setRabbitmqConnected(true);
-
-            this._rabbitmqConnection.on('close', () => {
-              this._log('warn', 'RabbitMQ connection closed');
-              this._metrics.setRabbitmqConnected(false);
-              this._rabbitmqChannel = null;
-              this._rabbitmqConnection = null;
-            });
-            this._rabbitmqConnection.on('error', (err) => {
-              this._log('error', `RabbitMQ connection error: ${err.message}`);
-              this._metrics.setRabbitmqConnected(false);
-              this._metrics.incrementErrors('rabbitmq_connection');
-              this._rabbitmqChannel = null;
-              this._rabbitmqConnection = null;
-            });
-          }
-
-          this._log('debug', `Creating client channel for session ${hookContext.sessionId || 'unidentified'}`);
-          clientChannel = await this._rabbitmqConnection.createChannel();
-
-          clientChannel.on('close', () => {
-            this._log('warn', `Client channel closed for session ${hookContext.sessionId}`);
-            clientChannel = null;
-          });
-
-          clientChannel.on('error', (err) => {
-            this._log('error', `Client channel error for session ${hookContext.sessionId}: ${err.message}`);
-            clientChannel = null;
-          });
-
-          await clientChannel.assertExchange(this.exchangeName, 'topic', { durable: true });
-          this._log('debug', `Exchange '${this.exchangeName}' ready for client ${hookContext.sessionId || 'unidentified'}`);
-        }
-        return clientChannel;
-      };
-
-      ws.on('message', (data: WebSocket.RawData) => {
-        return messageQueue = messageQueue.then(async () => {
-          try {
-            const message: ClientMessage = JSON.parse(data.toString());
-            this._log('debug', `Received message: ${message.action}`);
-            switch (message.action) {
-              case 'identify':
-                await runWithHooks(
-                  hookContext,
-                  [...this._hooks.pre, ...this._hooks.onIdentify, async (context, next, msg) => {
-                    if (!msg.sessionId) {
-                      throw new Error('identify requires a sessionId');
-                    }
-
-                    try {
-                      context.sessionId = msg.sessionId; // Queue name equals sessionId
-                      this._log('info', `Identifying client with sessionId: ${msg.sessionId}`);
-
-                      const channel = await getChannel();
-                      await channel.assertQueue(context.sessionId, { expires: 5 * 60 * 1000 });
-                      this._log(
-                        'debug',
-                        `Created session queue: ${context.sessionId} with 5min TTL`
-                      );
-
-                      // Check if WebSocket is still open after async operations
-                      if (ws.readyState !== WebSocket.OPEN) {
-                        this._log(
-                          'warn',
-                          `WebSocket closed during identify (readyState=${ws.readyState}), skipping consumer creation for ${context.sessionId}`
-                        );
-                        return;
-                      }
-
-                      consumerTag = (await channel.consume(context.sessionId, (rabbitMsg: any) => {
-                        if (rabbitMsg) {
-                          this._log(
-                            'debug',
-                            `Received message from RabbitMQ: routingKey=${rabbitMsg.fields.routingKey}`
-                          );
-
-                          const payload = JSON.parse(rabbitMsg.content.toString());
-                          this._log(
-                            'debug',
-                            `Forwarding message to client ${context.sessionId} with routingKey: ${rabbitMsg.fields.routingKey}`,
-                          );
-
-                          try {
-                            this._log('debug', `Calling ws.send() for client ${context.sessionId}, ws.readyState=${ws.readyState}`);
-
-                            if (ws.readyState !== WebSocket.OPEN) {
-                              this._log(
-                                'warn',
-                                `Cannot send to closed socket (readyState=${ws.readyState}), nacking message for requeue: ${context.sessionId}`
-                              );
-                              channel.nack(rabbitMsg, false, true); // requeue=true
-                              return;
-                            }
-
-                            ws.send(JSON.stringify({
-                              action: 'message',
-                              routingKey: rabbitMsg.fields.routingKey,
-                              payload: payload,
-                            }));
-                            this._log('debug', `ws.send() completed successfully for client ${context.sessionId}`);
-                            this._metrics.incrementReceived();
-                            channel.ack(rabbitMsg);
-                          } catch (error: any) {
-                            this._log('error', `ws.send() failed for client ${context.sessionId}: ${error.message}, readyState=${ws.readyState}`);
-                            channel.nack(rabbitMsg, false, true); // requeue=true on error
-                          }
-                        }
-                      })).consumerTag;
-
-                      this._log(
-                        'debug',
-                        `Started consuming from queue ${context.sessionId} with consumerTag: ${consumerTag}`
-                      );
-
-                      if (msg.messageId) {
-                        ws.send(JSON.stringify({ action: 'ack', messageId: msg.messageId }));
-                        this._log('debug', `Sent ack for identify message: ${msg.messageId}`);
-                      }
-                    } catch (error: any) {
-                      if (msg.messageId) {
-                        ws.send(JSON.stringify({
-                          action: 'nack',
-                          messageId: msg.messageId,
-                          error: error.message
-                        }));
-                      }
-                      throw error;
-                    }
-                  }],
-                  message
-                );
-                break;
-              case 'publish':
-                await runWithHooks(
-                  hookContext,
-                  [...this._hooks.pre, ...this._hooks.onPublish, async (context, next, msg) => {
-                    if (!msg.routingKey || !msg.payload) {
-                      throw new Error('publish requires routingKey and payload');
-                    }
-
-                    try {
-                      this._log(
-                        'info',
-                        `Publishing message: routingKey=${msg.routingKey}, sessionId=${context.sessionId}`
-                      );
-                      this._log('debug', `Message payload: ${JSON.stringify(msg.payload)}`);
-
-                      const channel = await getChannel();
-                      const startTime = Date.now();
-                      channel.publish(
-                        this.exchangeName,
-                        msg.routingKey,
-                        Buffer.from(JSON.stringify(msg.payload))
-                      );
-                      this._metrics.recordPublishLatency((Date.now() - startTime) / 1000);
-                      this._metrics.incrementPublished(msg.routingKey);
-
-                      this._log(
-                        'debug',
-                        `Message published to exchange '${this.exchangeName}' with routingKey '${msg.routingKey}'`
-                      );
-
-                      // Send ack if messageId present
-                      if (msg.messageId) {
-                        ws.send(JSON.stringify({ action: 'ack', messageId: msg.messageId }));
-                        this._log('debug', `Sent ack for publish message: ${msg.messageId}`);
-                      }
-                    } catch (error: any) {
-                      // Send nack if messageId present
-                      if (msg.messageId) {
-                        ws.send(JSON.stringify({
-                          action: 'nack',
-                          messageId: msg.messageId,
-                          error: error.message
-                        }));
-                      }
-                      throw error;
-                    }
-                  }],
-                  message
-                );
-                break;
-              case 'listen':
-                await runWithHooks(
-                  hookContext,
-                  [...this._hooks.pre, ...this._hooks.onListen, async (context, next, msg) => {
-                    if (!msg.bindingKey) {
-                      throw new Error('listen requires a bindingKey');
-                    }
-                    if (!context.sessionId) {
-                      throw new Error('Must identify with sessionId before listening');
-                    }
-
-                    this._log(
-                      'info',
-                      `Client listening: bindingKey=${msg.bindingKey}, sessionId=${context.sessionId}`
-                    );
-
-                    // Bind the session queue to this binding key
-                    const channel = await getChannel();
-                    await channel.bindQueue(
-                      context.sessionId, this.exchangeName, msg.bindingKey
-                    );
-                    this._metrics.incrementSubscriptions(msg.bindingKey);
-
-                    this._log(
-                      'debug',
-                      `Bound queue '${context.sessionId}' to exchange '${this.exchangeName}' with bindingKey '${msg.bindingKey}'`
-                    );
-
-                    // Send ack if messageId present
-                    if (msg.messageId) {
-                      ws.send(JSON.stringify({ action: 'ack', messageId: msg.messageId }));
-                      this._log('debug', `Sent ack for listen message: ${msg.messageId}`);
-                    }
-                  }],
-                  message
-                );
-                break;
-              case 'unlisten':
-                await runWithHooks(
-                  hookContext,
-                  [...this._hooks.pre, ...this._hooks.onUnlisten, async (context, next, msg) => {
-                    if (!msg.bindingKey) {
-                      throw new Error('unlisten requires a bindingKey');
-                    }
-                    if (!context.sessionId) {
-                      throw new Error('Must identify with sessionId before unlistening');
-                    }
-
-                    this._log(
-                      'info',
-                      `Client unlistening: bindingKey=${msg.bindingKey}, sessionId=${context.sessionId}`
-                    );
-
-                    try {
-                      const channel = await getChannel();
-                      await channel.unbindQueue(
-                        context.sessionId,
-                        this.exchangeName,
-                        msg.bindingKey
-                      );
-                      this._metrics.decrementSubscriptions(msg.bindingKey);
-                      this._log(
-                        'debug',
-                        `Unbound queue '${context.sessionId}' from bindingKey '${msg.bindingKey}'`
-                      );
-                    } catch (error: any) {
-                      this._log(
-                        'warn',
-                        `Failed to unbind queue during unlisten (ignoring): ${error.message}`
-                      );
-                      // If channel recovery fails, ignore the error during cleanup
-                      // The binding will be cleaned up when the client reconnects
-                    }
-
-                    // Send ack if messageId present
-                    if (msg.messageId) {
-                      ws.send(JSON.stringify({ action: 'ack', messageId: msg.messageId }));
-                      this._log('debug', `Sent ack for unlisten message: ${msg.messageId}`);
-                    }
-                  }],
-                  message
-                );
-                break;
-              default:
-                throw new Error(`Unknown action: ${(message as any).action}`);
+      ws.on('message', (data: ws.RawData) => {
+        this._queues.set(
+          ws,
+          this._queues.get(ws)!.then(async () => {
+            if (
+              !data ||
+              !(data instanceof ArrayBuffer || Buffer.isBuffer(data))
+            ) {
+              metrics.wsMessagesReceived.inc({ action: '' });
+              metrics.errors.inc({
+                type: 'invalid_message_format',
+                action: '',
+              });
+              this._log('WARNING', 'Received non-binary message, ignoring');
+              return;
             }
-          } catch (error: any) {
-            this._log('error', `Message processing failed: ${error.message}`);
-
-            // Send nack for failed message
+            let header: MessageHeader, payload: ArrayBuffer | undefined;
             try {
-              const message: ClientMessage = JSON.parse(data.toString());
+              [header, payload] = unbundleData(data as ArrayBuffer);
+              metrics.wsMessagesReceived.inc({ action: header.action || '' });
+            } catch (err) {
+              metrics.wsMessagesReceived.inc({ action: '' });
+              metrics.errors.inc({
+                type: 'invalid_message_format',
+                action: '',
+              });
               this._log(
-                'debug',
-                `Sending nack/error for failed message: action=${message.action}, messageId=${message.messageId}`
+                'WARNING',
+                'Failed to unbundle incoming message, ignoring',
+                err as Error
               );
-
-              if (message.action === 'publish' && message.messageId) {
+              return;
+            }
+            this._log(
+              'DEBUG',
+              `WebSocket message received: ${JSON.stringify(header)}`
+            );
+            if (!('messageId' in header)) {
+              this._log(
+                'WARNING',
+                'Received message without messageId, ignoring'
+              );
+              metrics.errors.inc({
+                type: 'invalid_message_format',
+                action: '',
+              });
+              return;
+            }
+            try {
+              switch (header.action) {
+                case 'identify':
+                  await this._handleIdentify(
+                    header,
+                    hookContext,
+                    getChannel,
+                    ws
+                  );
+                  break;
+                case 'publish':
+                  await this._handlePublish(
+                    header,
+                    hookContext,
+                    getChannel,
+                    payload
+                  );
+                  break;
+                case 'listen':
+                  await this._handleListen(header, hookContext, getChannel);
+                  break;
+                case 'unlisten':
+                  await this._handleUnlisten(header, hookContext, getChannel);
+                  break;
+                default:
+                  throw new Error(`Unknown action: ${header.action}`);
+              }
+              if (ws.readyState !== ws.OPEN) {
+                metrics.errors.inc({ type: 'failed_websocket', action: 'ack' });
+                this._log('WARNING', 'WebSocket is not open, cannot send ack');
+                return;
+              }
+              try {
                 ws.send(
-                  JSON.stringify({
+                  bundleData({ action: 'ack', messageId: header.messageId })
+                );
+              } catch (err) {
+                metrics.errors.inc({ type: 'failed_websocket', action: 'ack' });
+                this._log('ERROR', 'Failed to send ack', err as Error);
+                return;
+              }
+              metrics.wsMessagesAcked.inc({ action: header.action || '' });
+            } catch (err) {
+              this._log('ERROR', 'Error processing message', err as Error);
+              if (ws.readyState !== ws.OPEN) {
+                metrics.errors.inc({
+                  type: 'failed_websocket',
+                  action: 'nack',
+                });
+                this._log('WARNING', 'WebSocket is not open, cannot send nack');
+                return;
+              }
+              try {
+                ws.send(
+                  bundleData({
                     action: 'nack',
-                    messageId: message.messageId,
-                    error: error.message,
+                    messageId: header.messageId,
+                    error: `${err}`,
                   })
                 );
-              } else {
-                ws.send(JSON.stringify({ action: 'error', message: error.message }));
-              }
-            } catch (parseError) {
-              this._log(
-                'error', `Failed to parse error message, sending generic error: ${parseError}`
-              );
-              // If we can't parse the message, send a generic error
-              ws.send(JSON.stringify({ action: 'error', message: error.message }));
-            }
-          }
-        });
-      });
-
-      ws.on('error', (error) => {
-        this._log(
-          'error',
-          `WebSocket error: sessionId=${hookContext.sessionId || 'unknown'}, error=${error.message}`
-        );
-        this._metrics.incrementErrors('websocket_error');
-      });
-
-      ws.on('close', async (code, reason) => {
-        // TODO: Add ping/pong heartbeat mechanism to better detect network issues
-        this._log(
-          'info',
-          `Client disconnected: sessionId=${hookContext.sessionId}, code=${code}, reason=${reason}`
-        );
-        this._metrics.decrementConnections();
-
-        if (consumerTag && clientChannel) {
-          try {
-            await clientChannel.cancel(consumerTag);
-            this._log('debug', `Cancelled consumer: ${consumerTag}`);
-
-            if ([1000, 1001].includes(code) && hookContext.sessionId) { // Normal closure or going away
-              try {
-                await clientChannel.deleteQueue(hookContext.sessionId);
+                metrics.wsMessagesNacked.inc({ action: header.action || '' });
+              } catch (err) {
                 this._log(
-                  'info', `Deleted session queue on normal close: ${hookContext.sessionId}`
+                  'ERROR',
+                  'Failed to send nack to client',
+                  err as Error
                 );
-              } catch (deleteError: any) {
-                this._log('debug', `Queue deletion failed (ignoring): ${deleteError.message}`);
-                // Queue might not exist or already be deleted - ignore error
+                metrics.errors.inc({
+                  type: 'failed_websocket',
+                  action: 'nack',
+                });
               }
-            } else {
-              this._log(
-                'info',
-                `Keeping session queue for potential reconnection: ${hookContext.sessionId} (TTL: 5min)`
-              );
-              // Note: Queue remains with TTL for potential reconnection
             }
-          } catch (error: any) {
-            this._log('warn', `Cleanup failed during disconnect (ignoring): ${error.message}`);
-            // If channel recovery fails during cleanup, ignore the error
-            // Resources will be cleaned up when connection/channel is reestablished
-          }
-        }
+          })
+        );
+      });
 
-        // Close the client's channel
-        if (clientChannel) {
-          try {
-            await clientChannel.close();
-            this._log('debug', `Closed client channel for session ${hookContext.sessionId}`);
-          } catch (error: any) {
-            this._log('warn', `Failed to close client channel (ignoring): ${error.message}`);
-          }
-          clientChannel = null;
+      ws.on('close', async (code) => {
+        // Log the disconnection
+        const isNormalClose = [1000, 1001].includes(code);
+        const sessionInfo = hookContext.sessionId
+          ? `session ${hookContext.sessionId}`
+          : 'unidentified connection';
+        const closeType = isNormalClose ? 'normal closure' : 'abnormal closure';
+
+        this._log(
+          'INFO',
+          `WebSocket ${sessionInfo} disconnected (code: ${code}, ${closeType})`
+        );
+
+        metrics.wsConnections.dec();
+        await this._queues.get(ws); // Try to let pending tasks complete
+        let channel: amqplib.Channel;
+        try {
+          [channel] = await getChannel();
+        } catch (err) {
+          this._log(
+            'ERROR',
+            'Failed to get RabbitMQ channel during WebSocket close',
+            err as Error
+          );
+          return;
+        }
+        this._webSockets.delete(ws);
+        this._queues.delete(ws);
+        const consumerTag = this._consumerTags.get(ws);
+        if (consumerTag) {
+          await channel.cancel(consumerTag);
+        }
+        metrics.rmqConsumers.dec();
+        this._consumerTags.delete(ws);
+        if ([1000, 1001].includes(code) && hookContext.sessionId) {
+          // Normal closure or going away
+          await channel.deleteQueue(hookContext.sessionId);
         }
       });
     });
+
+    this._log(
+      'INFO',
+      `WebMQServer started on port ${this._port}, connected to RabbitMQ at ${this._rmqUrl}, ` +
+      `exchange ${this._exchangeName}`
+    );
   }
 
   public async stop(): Promise<void> {
-    this._log('info', 'Stopping WebMQ server...');
+    // Stop **receiving** from rmq and ws
+    this._webSockets.forEach((ws) => {
+      ws.removeAllListeners('message');
+    });
+    const [channel, connection] = await this._getChannelFunc(null)();
+    await Promise.all(
+      [...this._consumerTags.values()].map((consumerTag) =>
+        channel.cancel(consumerTag)
+      )
+    );
 
-    // Remove from tracked instances
-    WebMQServer._serverInstances.delete(this);
+    // Wait for in-flight tasks to finish
+    await Promise.all([...this._queues.values()]);
 
-    // Stop WebSocket server
-    if (this._wss) {
-      this._wss.close();
-      this._wss = null;
-      this._log('debug', 'WebSocket server stopped');
+    // Close everything
+    this._webSockets.forEach((ws) => ws.close(1001, 'Server shutting down'));
+    this._webSocketServer?.close();
+    await channel.close();
+    await connection.close();
+  }
+
+  public addHook(hookName: HookName, hookFunction: HookFunction) {
+    this._hooks[hookName].add(hookFunction);
+  }
+
+  public removeHook(hookName: HookName, hookFunction: HookFunction) {
+    this._hooks[hookName].delete(hookFunction);
+  }
+
+  private async _handleIdentify(
+    header: MessageHeader,
+    hookContext: HookContext,
+    getChannel: () => Promise<[amqplib.Channel, amqplib.ChannelModel]>,
+    ws: ws.WebSocket
+  ) {
+    if (!header.sessionId) {
+      metrics.errors.inc({
+        type: 'invalid_message_format',
+        action: 'identify',
+      });
+      throw new Error('Identify action missing sessionId');
+    }
+    hookContext.sessionId = header.sessionId;
+
+    try {
+      let actualHeader = await this._runHooks('pre', header, hookContext);
+      actualHeader = await this._runHooks(
+        'wsMessage',
+        actualHeader,
+        hookContext
+      );
+      actualHeader = await this._runHooks(
+        'identify',
+        actualHeader,
+        hookContext
+      );
+      await this._runHooks('post', actualHeader, hookContext);
+    } catch (err) {
+      metrics.errors.inc({ type: 'hook_error', action: 'identify' });
+      throw err;
     }
 
-    // Close HTTP server if we created one
-    if (this._httpServer) {
-      this._httpServer.close();
-      this._httpServer = null;
-      this._log('debug', 'HTTP server stopped');
+    const [channel] = await getChannel();
+    try {
+      await channel.assertQueue(hookContext.sessionId, {
+        expires: this._queueTimeout,
+      });
+      const consume = await channel.consume(
+        hookContext.sessionId,
+        (rmqMessage: amqplib.ConsumeMessage | null) => {
+          this._handleRmqMessage(ws, rmqMessage, getChannel, hookContext);
+        }
+      );
+      this._consumerTags.set(ws, consume.consumerTag);
+      metrics.rmqConsumers.inc();
+    } catch (err) {
+      metrics.errors.inc({ type: 'failed_rabbitmq', action: 'consume' });
+      throw err;
+    }
+  }
+
+  private async _handlePublish(
+    header: MessageHeader,
+    hookContext: HookContext,
+    getChannel: () => Promise<[amqplib.Channel, amqplib.ChannelModel]>,
+    payload?: ArrayBuffer
+  ) {
+    if (!header.routingKey) {
+      metrics.errors.inc({ type: 'invalid_message_format', action: 'publish' });
+      throw new Error('Publish action missing routingKey');
     }
 
-    // Close RabbitMQ channel and connection
-    if (this._rabbitmqChannel) {
+    let actualHeader: MessageHeader;
+    try {
+      actualHeader = await this._runHooks('pre', header, hookContext);
+      actualHeader = await this._runHooks(
+        'wsMessage',
+        actualHeader,
+        hookContext
+      );
+      actualHeader = await this._runHooks('publish', actualHeader, hookContext);
+      actualHeader = await this._runHooks('post', actualHeader, hookContext);
+    } catch (err) {
+      metrics.errors.inc({ type: 'hook_error', action: 'publish' });
+      throw err;
+    }
+
+    const [channel] = await getChannel();
+    try {
+      channel.publish(
+        this._exchangeName,
+        actualHeader.routingKey!,
+        // Convert ArrayBuffer payload to Buffer for RabbitMQ
+        payload ? Buffer.from(payload) : Buffer.alloc(0),
+        actualHeader.rmqOptions
+      );
+      metrics.wsToRmqPublishes.inc({ routing_key: actualHeader.routingKey! });
+    } catch (err) {
+      metrics.errors.inc({ type: 'failed_rabbitmq', action: 'publish' });
+      throw err;
+    }
+  }
+
+  private async _handleListen(
+    header: MessageHeader,
+    hookContext: HookContext,
+    getChannel: () => Promise<[amqplib.Channel, amqplib.ChannelModel]>
+  ) {
+    if (!header.bindingKey) {
+      metrics.errors.inc({ type: 'invalid_message_format', action: 'listen' });
+      throw new Error('Listen action missing bindingKey');
+    }
+    if (!hookContext.sessionId) {
+      metrics.errors.inc({ type: 'invalid_message_format', action: 'listen' });
+      throw new Error('Listen action received before identify');
+    }
+
+    let actualHeader: MessageHeader;
+    try {
+      actualHeader = await this._runHooks('pre', header, hookContext);
+      actualHeader = await this._runHooks(
+        'wsMessage',
+        actualHeader,
+        hookContext
+      );
+      actualHeader = await this._runHooks('listen', actualHeader, hookContext);
+      actualHeader = await this._runHooks('post', actualHeader, hookContext);
+    } catch (err) {
+      metrics.errors.inc({ type: 'hook_error', action: 'listen' });
+      throw err;
+    }
+
+    const [channel] = await getChannel();
+    try {
+      await channel.bindQueue(
+        hookContext.sessionId,
+        this._exchangeName,
+        actualHeader.bindingKey!
+      );
+      metrics.rmqBindings.inc({ binding_key: actualHeader.bindingKey! });
+      this._log(
+        'INFO',
+        `WebSocket session ${hookContext.sessionId} bound to ${actualHeader.bindingKey}`
+      );
+    } catch (err) {
+      metrics.errors.inc({ type: 'failed_rabbitmq', action: 'bind' });
+      throw err;
+    }
+  }
+
+  private async _handleUnlisten(
+    header: MessageHeader,
+    hookContext: HookContext,
+    getChannel: () => Promise<[amqplib.Channel, amqplib.ChannelModel]>
+  ) {
+    if (!header.bindingKey) {
+      metrics.errors.inc({
+        type: 'invalid_message_format',
+        action: 'unlisten',
+      });
+      throw new Error('Unlisten action missing bindingKey');
+    }
+    if (!hookContext.sessionId) {
+      metrics.errors.inc({
+        type: 'invalid_message_format',
+        action: 'unlisten',
+      });
+      throw new Error('Unlisten action received before identify');
+    }
+
+    let actualHeader: MessageHeader;
+    try {
+      actualHeader = await this._runHooks('pre', header, hookContext);
+      actualHeader = await this._runHooks(
+        'wsMessage',
+        actualHeader,
+        hookContext
+      );
+      actualHeader = await this._runHooks(
+        'unlisten',
+        actualHeader,
+        hookContext
+      );
+      actualHeader = await this._runHooks('post', actualHeader, hookContext);
+    } catch (err) {
+      metrics.errors.inc({ type: 'hook_error', action: 'unlisten' });
+      throw err;
+    }
+
+    const [channel] = await getChannel();
+    try {
+      await channel.unbindQueue(
+        hookContext.sessionId,
+        this._exchangeName,
+        actualHeader.bindingKey!
+      );
+      metrics.rmqBindings.dec({ binding_key: actualHeader.bindingKey! });
+      this._log(
+        'INFO',
+        `WebSocket session ${hookContext.sessionId} unbound from ${actualHeader.bindingKey}`
+      );
+    } catch (err) {
+      metrics.errors.inc({ type: 'failed_rabbitmq', action: 'unbind' });
+      throw err;
+    }
+  }
+
+  private async _handleRmqMessage(
+    ws: ws.WebSocket,
+    rmqMessage: amqplib.ConsumeMessage | null,
+    getChannel: () => Promise<[amqplib.Channel, amqplib.ChannelModel]>,
+    hookContext: HookContext
+  ) {
+    this._queues.set(
+      ws,
+      this._queues.get(ws)!.then(async () => {
+        if (!rmqMessage) {
+          metrics.errors.inc({
+            type: 'invalid_message_format',
+            action: 'consume',
+          });
+          this._log('WARNING', `Received null message from RabbitMQ at queue ${hookContext.sessionId}, skipping`);
+          return;
+        }
+        const [channel] = await getChannel();
+        try {
+          let header: MessageHeader = {
+            action: 'message',
+            routingKey: rmqMessage.fields.routingKey,
+          };
+          this._log(
+            'DEBUG',
+            `RabbitMQ message received with routing key ${header.routingKey}`
+          );
+
+          try {
+            header = await this._runHooks(
+              'pre',
+              header,
+              hookContext,
+              rmqMessage
+            );
+            header = await this._runHooks(
+              'rmqMessage',
+              header,
+              hookContext,
+              rmqMessage
+            );
+            header = await this._runHooks(
+              'post',
+              header,
+              hookContext,
+              rmqMessage
+            );
+          } catch (err) {
+            metrics.errors.inc({ type: 'hook_error', action: 'consume' });
+            throw err;
+          }
+
+          if (ws.readyState !== ws.OPEN) {
+            metrics.errors.inc({ type: 'failed_websocket', action: 'send' });
+            throw new Error('WebSocket is not open, cannot send message');
+          }
+          try {
+            // Pass Buffer directly, bundleData handles it
+            ws.send(bundleData(header, rmqMessage.content));
+            metrics.rmqToWsPublishes.inc({ routing_key: header.routingKey });
+          } catch (err) {
+            metrics.errors.inc({ type: 'failed_websocket', action: 'send' });
+            throw err;
+          }
+          try {
+            channel.ack(rmqMessage);
+            metrics.rmqMessagesAcked.inc({ routing_key: header.routingKey });
+          } catch (err) {
+            metrics.errors.inc({ type: 'failed_rabbitmq', action: 'ack' });
+            throw err;
+          }
+        } catch (err) {
+          this._log(
+            'ERROR',
+            'Error sending message to client, requeuing',
+            err as Error
+          );
+          try {
+            channel.nack(rmqMessage, false, true); // Requeue the message
+            metrics.rmqMessagesNacked.inc({
+              routing_key: rmqMessage.fields.routingKey,
+            });
+          } catch (err) {
+            this._log('ERROR', 'Failed to nack message', err as Error);
+          }
+        }
+      })
+    );
+  }
+
+  private _getChannelFunc(
+    defaultConnection: amqplib.ChannelModel | null = null
+  ): () => Promise<[amqplib.Channel, amqplib.ChannelModel]> {
+    let connection: amqplib.ChannelModel | null = defaultConnection;
+    let channel: amqplib.Channel | null = null;
+    return async (): Promise<[amqplib.Channel, amqplib.ChannelModel]> => {
       try {
-        await this._rabbitmqChannel.close();
-        this._log('debug', 'RabbitMQ channel closed');
-      } catch (error: any) {
-        this._log('warn', `Failed to close RabbitMQ channel: ${error.message}`);
-        // Channel might already be closed or failed to create
+        if (!connection) {
+          connection = await retry(() => amqplib.connect(this._rmqUrl));
+          connection.on('close', () => {
+            channel = null;
+            connection = null;
+          });
+        }
+        if (!channel) {
+          channel = await retry(() => connection!.createChannel());
+          channel.on('close', () => {
+            channel = null;
+          });
+        }
+        this._consecutiveChannelFailures = 0;
+        metrics.rmqConsecutiveFailures.set(this._consecutiveChannelFailures);
+        this._lastSuccessfulConnectionAttempt = new Date();
+      } catch (err) {
+        this._log('ERROR', 'Failed to get RabbitMQ channel', err as Error);
+        this._consecutiveChannelFailures++;
+        metrics.rmqConsecutiveFailures.set(this._consecutiveChannelFailures);
+        metrics.errors.inc({
+          type: 'failed_rabbitmq',
+          action: 'channel_retrieval',
+        });
+        throw err;
       }
-      this._rabbitmqChannel = null;
-    }
-
-    if (this._rabbitmqConnection) {
-      await this._rabbitmqConnection.close();
-      this._log('debug', 'RabbitMQ connection closed');
-      this._rabbitmqConnection = null;
-    }
-
-    this._log('info', 'WebMQ server stopped successfully');
-  }
-
-  /**
-   * Health check handler for manual setup with Express or other frameworks.
-   *
-   * @example
-   * ```typescript
-   * const app = express();
-   * const webmq = new WebMQServer({ httpServer: http.createServer(app), ... });
-   * app.get('/health', webmq.healthCheckHandler);
-   * ```
-   */
-  public readonly healthCheckHandler = (req: any, res: any) => {
-    this._handleHealthCheck(req, res);
-  };
-
-  /**
-   * Prometheus metrics handler for manual setup with Express or other frameworks.
-   *
-   * @example
-   * ```typescript
-   * const app = express();
-   * const webmq = new WebMQServer({ httpServer: http.createServer(app), ... });
-   * app.get('/metrics', webmq.metricsHandler);
-   * ```
-   */
-  public readonly metricsHandler = (req: any, res: any) => {
-    this._handleMetrics(req, res);
-  };
-
-  private _handleHealthCheck(req: any, res: any): void {
-    if (res.headersSent) return;
-    const isHealthy = this._rabbitmqConnection !== null && this._wss !== null;
-    const statusCode = isHealthy ? 200 : 503;
-
-    const health = {
-      status: isHealthy ? 'healthy' : 'unhealthy',
-      rabbitmq: this._rabbitmqConnection ? 'connected' : 'disconnected',
-      websocket: this._wss ? 'running' : 'stopped',
-      connections: this._wss?.clients.size || 0
+      return [channel, connection];
     };
-
-    res.writeHead(statusCode, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify(health));
   }
 
-  private _handleMetrics(req: any, res: any): void {
-    if (res.headersSent) return;
-    res.writeHead(200, { 'Content-Type': 'text/plain; version=0.0.4; charset=utf-8' });
-    res.end(this._metrics.toPrometheusFormat());
-  }
-
-  private async _getRabbitmqChannel(): Promise<Channel> {
-    if (!this._rabbitmqConnection) {
-      this._log('debug', `Connecting to RabbitMQ: ${this.rabbitmqUrl}`);
-      this._rabbitmqConnection = await amqplib.connect(this.rabbitmqUrl);
-      this._log('info', 'RabbitMQ connection established');
-      this._metrics.setRabbitmqConnected(true);
-
-      this._rabbitmqConnection.on('close', () => {
-        this._log('warn', 'RabbitMQ connection closed');
-        this._metrics.setRabbitmqConnected(false);
-        this._rabbitmqChannel = null;
-        this._rabbitmqConnection = null;
-      })
-      this._rabbitmqConnection.on('error', (err) => {
-        this._log('error', `RabbitMQ connection error: ${err.message}`);
-        this._metrics.setRabbitmqConnected(false);
-        this._metrics.incrementErrors('rabbitmq_connection');
-        this._rabbitmqChannel = null;
-        this._rabbitmqConnection = null;
-      })
-    }
-    if (!this._rabbitmqChannel) {
-      this._log('debug', 'Creating RabbitMQ channel');
-      this._rabbitmqChannel = await this._rabbitmqConnection.createChannel();
-
-      this._rabbitmqChannel.on('close', () => {
-        this._log('warn', 'RabbitMQ channel closed');
-        this._rabbitmqChannel = null;
-      });
-
-      this._rabbitmqChannel.on('error', (err) => {
-        this._log('error', `RabbitMQ channel error: ${err.message}`);
-        this._rabbitmqChannel = null;
-      });
-    }
-    await this._rabbitmqChannel.assertExchange(this.exchangeName, 'topic', { durable: true });
-    this._log('debug', `Exchange '${this.exchangeName}' ready (topic, durable)`);
-    return this._rabbitmqChannel;
-  }
-
-  private _log(level: 'error' | 'warn' | 'info' | 'debug', message: string): void {
-    if (this.logLevel === 'silent') return;
-
-    const levels = ['error', 'warn', 'info', 'debug'];
-    const currentLevelIndex = levels.indexOf(this.logLevel);
-    const messageLevelIndex = levels.indexOf(level);
-
-    if (messageLevelIndex <= currentLevelIndex) {
-      switch (level) {
-        case 'error':
-          console.error(`[WebMQ ERROR] ${message}`);
-          break;
-        case 'warn':
-          console.warn(`[WebMQ WARN] ${message}`);
-          break;
-        case 'info':
-          console.log(`[WebMQ INFO] ${message}`);
-          break;
-        case 'debug':
-          console.debug(`[WebMQ DEBUG] ${message}`);
-          break;
+  private async _healthCheck(): Promise<HealthCheckResponse> {
+    const oneMinuteAgo = new Date(Date.now() - 60 * 1000);
+    if (
+      !this._lastSuccessfulConnectionAttempt ||
+      this._lastSuccessfulConnectionAttempt < oneMinuteAgo
+    ) {
+      try {
+        const [channel, connection] = await this._getChannelFunc()();
+        await channel.close();
+        await connection.close();
+      } catch (err) {
+        this._log(
+          'ERROR',
+          'Health check failed to connect to RabbitMQ',
+          err as Error
+        );
       }
+    }
+    return {
+      healthy: this._consecutiveChannelFailures === 0,
+      rabbitMQQueues: this._consumerTags.size,
+      websockets: this._webSockets.size,
+    };
+  }
+
+  private async _runHooks(
+    hookName: HookName,
+    header: MessageHeader,
+    context: HookContext,
+    rmqMessage?: amqplib.ConsumeMessage
+  ): Promise<MessageHeader> {
+    const hooks = this._hooks[hookName];
+    let actualHeader = header;
+    for (const hook of hooks) {
+      actualHeader = await hook(actualHeader, context, rmqMessage);
+      if (actualHeader === undefined) {
+        throw new Error(`Hook ${hookName} did not return a header object`);
+      }
+    }
+    return actualHeader;
+  }
+
+  private _log(logLevel: LogLevel, message: string | Error, err?: Error) {
+    const levels = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'SILENT'];
+    const instanceLevelIndex = levels.indexOf(this.logLevel);
+    const messageLevelIndex = levels.indexOf(logLevel);
+    if (messageLevelIndex >= instanceLevelIndex) {
+      console.log(
+        `[${logLevel}] ${message instanceof Error ? message.stack : message}`
+      );
+    }
+    if (err) {
+      this._log('DEBUG', err);
     }
   }
 }
 
-// Register graceful shutdown handlers at module level
 const shutdownHandler = async (signal: string) => {
-  console.log(`Received ${signal}, shutting down all WebMQ servers gracefully...`);
-  await Promise.all(
-    Array.from(WebMQServer['_serverInstances']).map(server => server.stop())
+  console.log(
+    `Received ${signal}, shutting down all WebMQ servers gracefully...`
   );
+  Array.from(WebMQServer['_instances']).map((instance) => instance.stop());
   process.exit(0);
 };
-
-process.on('SIGTERM', () => shutdownHandler('SIGTERM'));
-process.on('SIGINT', () => shutdownHandler('SIGINT'));
+process.on('SIGTERM', shutdownHandler);
+process.on('SIGINT', shutdownHandler);

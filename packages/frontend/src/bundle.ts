@@ -3,7 +3,10 @@ import { MessageHeader } from './index';
  * Bundles a JSON header and an optional binary payload into a single ArrayBuffer.
  * Structure: [4 bytes (Header Length)] + [Header (JSON)] + [Optional Payload]
  */
-export function bundleData(header: MessageHeader, payload?: ArrayBuffer): ArrayBuffer {
+export function bundleData(
+  header: MessageHeader,
+  payload?: ArrayBuffer
+): ArrayBuffer {
   // 1. Convert JSON Header to bytes
   const encoder = new TextEncoder();
   const headerBytes = encoder.encode(JSON.stringify(header));
@@ -53,9 +56,8 @@ export function unbundleData(buffer: ArrayBuffer): [any, ArrayBuffer?] {
 
   // 3. Extract Payload (if any exists after header)
   const payloadOffset = 4 + headerLength;
-  const payload = payloadOffset < buffer.byteLength
-    ? buffer.slice(payloadOffset)
-    : undefined;
+  const payload =
+    payloadOffset < buffer.byteLength ? buffer.slice(payloadOffset) : undefined;
 
   return [header, payload];
 }

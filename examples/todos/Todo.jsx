@@ -3,14 +3,13 @@ import { publish, listen, unlisten } from 'webmq-frontend';
 import UserContext from './UserContext';
 
 function Todo({ id, initialData, onDelete }) {
-  const { username } = useContext(UserContext)
+  const { username } = useContext(UserContext);
   const [text, setText] = useState(initialData.text || '');
   const [completed, setCompleted] = useState(initialData.completed || false);
   const [lastModifiedBy, setLastModifiedBy] = useState(initialData.user || '');
   const [isEditing, setIsEditing] = useState(false);
   const [editText, setEditText] = useState('');
   const [justUpdated, setJustUpdated] = useState(false);
-
 
   const handleUpdated = useCallback((payload) => {
     setText(payload.text);
@@ -20,7 +19,7 @@ function Todo({ id, initialData, onDelete }) {
     // Show highlight animation
     setJustUpdated(true);
     setTimeout(() => setJustUpdated(false), 1000);
-  }, [])
+  }, []);
 
   const handleDeleted = useCallback((payload) => {
     onDelete(id);
@@ -82,7 +81,9 @@ function Todo({ id, initialData, onDelete }) {
   };
 
   return (
-    <div className={`todo-item ${justUpdated ? 'updated' : ''} ${completed ? 'completed' : ''}`}>
+    <div
+      className={`todo-item ${justUpdated ? 'updated' : ''} ${completed ? 'completed' : ''}`}
+    >
       <input
         type="checkbox"
         checked={completed}
@@ -100,14 +101,24 @@ function Todo({ id, initialData, onDelete }) {
             className="edit-input"
             autoFocus
           />
-          <button type="submit" className="save-btn">Save</button>
-          <button onClick={handleCancelEdit} type="button" className="cancel-btn">Cancel</button>
+          <button type="submit" className="save-btn">
+            Save
+          </button>
+          <button
+            onClick={handleCancelEdit}
+            type="button"
+            className="cancel-btn"
+          >
+            Cancel
+          </button>
         </form>
       ) : (
         <div className="todo-content" onDoubleClick={handleStartEdit}>
           <span className="todo-text">{text || '(empty)'}</span>
           {lastModifiedBy && (
-            <span className="modified-by">Last modified by: {lastModifiedBy}</span>
+            <span className="modified-by">
+              Last modified by: {lastModifiedBy}
+            </span>
           )}
         </div>
       )}
@@ -115,8 +126,12 @@ function Todo({ id, initialData, onDelete }) {
       <div className="todo-actions">
         {!isEditing && (
           <>
-            <button onClick={handleStartEdit} className="edit-btn">Edit</button>
-            <button onClick={handleDelete} className="delete-btn">Delete</button>
+            <button onClick={handleStartEdit} className="edit-btn">
+              Edit
+            </button>
+            <button onClick={handleDelete} className="delete-btn">
+              Delete
+            </button>
           </>
         )}
       </div>

@@ -1,16 +1,12 @@
 {
-  "type": "module",
   "name": "webmq-basic-chat",
-  "version": "1.0.0",
-  "description": "Basic chat example for WebMQ",
   "private": true,
+  "type": "module",
   "scripts": {
-    "start:backend": "node backend.js",
+    "start:backend": "tsx backend.ts",
     "start:frontend": "vite",
     "start": "concurrently \"npm run start:backend\" \"npm run start:frontend\" --names \"backend,frontend\" --prefix-colors \"blue,green\""
   },
-  "author": "",
-  "license": "ISC",
   "dependencies": {
     "@testcontainers/rabbitmq": "^11.5.1",
     "react": "^19.1.1",
@@ -19,8 +15,11 @@
     "webmq-frontend": "1.0.0"
   },
   "devDependencies": {
+    "@types/react": "^19.2.14",
     "@vitejs/plugin-react": "^5.0.0",
     "concurrently": "^9.2.1",
+    "tsconfig-paths": "^4.2.0",
+    "tsx": "^4.21.0",
     "vite": "^7.1.5"
   }
 }

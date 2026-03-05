@@ -18,7 +18,7 @@ async function fetchAttractions(cityName) {
   const url = 'https://overpass-api.de/api/interpreter';
   const response = await fetch(url, {
     method: 'POST',
-    body: query
+    body: query,
   });
 
   const data = await response.json();
@@ -29,8 +29,8 @@ async function fetchAttractions(cityName) {
 
   // Extract unique attraction names
   const attractions = data.elements
-    .filter(el => el.tags && el.tags.name)
-    .map(el => el.tags.name)
+    .filter((el) => el.tags && el.tags.name)
+    .map((el) => el.tags.name)
     .filter((name, index, self) => self.indexOf(name) === index) // Remove duplicates
     .slice(0, 10); // Limit to 10 attractions
 
@@ -46,7 +46,9 @@ async function startWorker() {
   const { queue } = await channel.assertQueue('', { exclusive: true });
   await channel.bindQueue(queue, EXCHANGE_NAME, 'search.request.*');
 
-  console.log('🏛️  Attractions worker started, listening for search requests...');
+  console.log(
+    '🏛️  Attractions worker started, listening for search requests...'
+  );
 
   channel.consume(queue, async (msg) => {
     if (!msg) return;
@@ -66,9 +68,9 @@ async function startWorker() {
               id: `attractions-${searchId}`,
               type: 'list',
               title: 'Top Attractions',
-              data: attractions
-            }
-          ]
+              data: attractions,
+            },
+          ],
         };
 
         channel.publish(
@@ -77,7 +79,9 @@ async function startWorker() {
           Buffer.from(JSON.stringify(result))
         );
 
-        console.log(`✅ Attractions data sent for ${query} (${attractions.length} items)`);
+        console.log(
+          `✅ Attractions data sent for ${query} (${attractions.length} items)`
+        );
       } else {
         console.log(`⚠️  No attractions found for ${query}`);
       }

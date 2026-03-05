@@ -3,7 +3,7 @@ import { WebMQServer } from 'webmq-backend';
 const server = new WebMQServer({
   rabbitmqUrl: 'amqp://localhost',
   exchangeName: 'city_search',
-  port: 8080
+  port: 8080,
 });
 
 await server.start();

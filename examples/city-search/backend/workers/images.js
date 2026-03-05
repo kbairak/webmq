@@ -24,8 +24,9 @@ async function fetchImages(query) {
         url: info.url,
         thumbUrl: info.thumburl || info.url,
         title: page.title.replace('File:', ''),
-        description: metadata?.ImageDescription?.value?.replace(/<[^>]*>/g, '') || '',
-        author: metadata?.Artist?.value?.replace(/<[^>]*>/g, '') || 'Unknown'
+        description:
+          metadata?.ImageDescription?.value?.replace(/<[^>]*>/g, '') || '',
+        author: metadata?.Artist?.value?.replace(/<[^>]*>/g, '') || 'Unknown',
       });
     }
   }
@@ -62,14 +63,14 @@ async function startWorker() {
             url: img.url,
             thumbUrl: img.thumbUrl,
             caption: img.description || img.title,
-            author: img.author
-          }
+            author: img.author,
+          },
         }));
 
         const result = {
           searchId,
           source: 'images',
-          results
+          results,
         };
 
         channel.publish(

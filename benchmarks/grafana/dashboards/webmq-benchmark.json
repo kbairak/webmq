@@ -15,7 +15,7 @@
       "id": 1,
       "title": "Messages Per Second",
       "type": "graph",
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
       "targets": [
         {
           "expr": "rate(webmq_messages_published_total[5s])",
@@ -28,16 +28,13 @@
           "refId": "B"
         }
       ],
-      "yaxes": [
-        {"format": "short", "label": "msg/s"},
-        {"format": "short"}
-      ]
+      "yaxes": [{ "format": "short", "label": "msg/s" }, { "format": "short" }]
     },
     {
       "id": 2,
       "title": "Active Connections",
       "type": "graph",
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
       "targets": [
         {
           "expr": "webmq_connections_active",
@@ -46,15 +43,15 @@
         }
       ],
       "yaxes": [
-        {"format": "short", "label": "Connections"},
-        {"format": "short"}
+        { "format": "short", "label": "Connections" },
+        { "format": "short" }
       ]
     },
     {
       "id": 3,
       "title": "Publish Latency",
       "type": "graph",
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
       "targets": [
         {
           "expr": "histogram_quantile(0.95, rate(webmq_publish_duration_seconds_bucket[5s]))",
@@ -72,16 +69,13 @@
           "refId": "C"
         }
       ],
-      "yaxes": [
-        {"format": "s", "label": "Latency"},
-        {"format": "short"}
-      ]
+      "yaxes": [{ "format": "s", "label": "Latency" }, { "format": "short" }]
     },
     {
       "id": 4,
       "title": "Total Messages",
       "type": "graph",
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
       "targets": [
         {
           "expr": "webmq_messages_published_total",
@@ -95,15 +89,15 @@
         }
       ],
       "yaxes": [
-        {"format": "short", "label": "Messages"},
-        {"format": "short"}
+        { "format": "short", "label": "Messages" },
+        { "format": "short" }
       ]
     },
     {
       "id": 5,
       "title": "RabbitMQ Status",
       "type": "singlestat",
-      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 16},
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 16 },
       "targets": [
         {
           "expr": "webmq_rabbitmq_connected",
@@ -111,8 +105,8 @@
         }
       ],
       "valueMaps": [
-        {"value": "0", "text": "Disconnected"},
-        {"value": "1", "text": "Connected"}
+        { "value": "0", "text": "Disconnected" },
+        { "value": "1", "text": "Connected" }
       ],
       "colorBackground": true,
       "colors": ["#d44a3a", "#299c46", "#299c46"],
@@ -122,7 +116,7 @@
       "id": 6,
       "title": "Active Subscriptions",
       "type": "singlestat",
-      "gridPos": {"h": 4, "w": 6, "x": 6, "y": 16},
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 16 },
       "targets": [
         {
           "expr": "webmq_subscriptions_active",
@@ -136,7 +130,7 @@
       "id": 7,
       "title": "Error Rate",
       "type": "graph",
-      "gridPos": {"h": 4, "w": 12, "x": 12, "y": 16},
+      "gridPos": { "h": 4, "w": 12, "x": 12, "y": 16 },
       "targets": [
         {
           "expr": "rate(webmq_errors_total[5s])",
@@ -145,15 +139,15 @@
         }
       ],
       "yaxes": [
-        {"format": "short", "label": "errors/s"},
-        {"format": "short"}
+        { "format": "short", "label": "errors/s" },
+        { "format": "short" }
       ]
     },
     {
       "id": 8,
       "title": "Messages by Routing Key (Top 10)",
       "type": "bargauge",
-      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 20},
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 20 },
       "targets": [
         {
           "expr": "topk(10, rate(webmq_messages_by_routing_key[5s]))",
@@ -170,7 +164,7 @@
       "id": 9,
       "title": "RabbitMQ Queue Depth",
       "type": "graph",
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 28},
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 28 },
       "targets": [
         {
           "expr": "sum(rabbitmq_queue_messages_ready)",
@@ -184,15 +178,15 @@
         }
       ],
       "yaxes": [
-        {"format": "short", "label": "Messages"},
-        {"format": "short"}
+        { "format": "short", "label": "Messages" },
+        { "format": "short" }
       ]
     },
     {
       "id": 10,
       "title": "RabbitMQ Memory Usage",
       "type": "graph",
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 28},
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 28 },
       "targets": [
         {
           "expr": "rabbitmq_process_resident_memory_bytes",
@@ -200,16 +194,13 @@
           "refId": "A"
         }
       ],
-      "yaxes": [
-        {"format": "bytes", "label": "Memory"},
-        {"format": "short"}
-      ]
+      "yaxes": [{ "format": "bytes", "label": "Memory" }, { "format": "short" }]
     },
     {
       "id": 11,
       "title": "RabbitMQ Message Rates",
       "type": "graph",
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 36},
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 36 },
       "targets": [
         {
           "expr": "rate(rabbitmq_channel_messages_published_total[5s])",
@@ -227,16 +218,13 @@
           "refId": "C"
         }
       ],
-      "yaxes": [
-        {"format": "short", "label": "msg/s"},
-        {"format": "short"}
-      ]
+      "yaxes": [{ "format": "short", "label": "msg/s" }, { "format": "short" }]
     },
     {
       "id": 12,
       "title": "RabbitMQ Connections & Channels",
       "type": "graph",
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 36},
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 36 },
       "targets": [
         {
           "expr": "rabbitmq_connections",
@@ -249,10 +237,7 @@
           "refId": "B"
         }
       ],
-      "yaxes": [
-        {"format": "short", "label": "Count"},
-        {"format": "short"}
-      ]
+      "yaxes": [{ "format": "short", "label": "Count" }, { "format": "short" }]
     }
   ]
 }
