@@ -5,8 +5,20 @@
   "main": "dist/index.cjs",
   "module": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./react": {
+      "types": "./dist/react.d.ts",
+      "import": "./dist/react.js",
+      "require": "./dist/react.cjs"
+    }
+  },
   "scripts": {
-    "build": "tsc --emitDeclarationOnly && esbuild src/index.ts --bundle --platform=browser --outfile=dist/index.js --format=esm && esbuild src/index.ts --bundle --platform=node --outfile=dist/index.cjs --format=cjs",
+    "build": "tsc --emitDeclarationOnly && esbuild src/index.ts --bundle --platform=browser --outfile=dist/index.js --format=esm && esbuild src/index.ts --bundle --platform=node --outfile=dist/index.cjs --format=cjs && esbuild src/react.ts --bundle --platform=browser --outfile=dist/react.js --format=esm --external:react && esbuild src/react.ts --bundle --platform=node --outfile=dist/react.cjs --format=cjs --external:react",
     "dev": "esbuild src/index.ts --bundle --platform=browser --outfile=dist/index.js --format=esm --watch",
     "test": "jest",
     "clean": "rm -rf dist"
@@ -25,5 +37,8 @@
   },
   "dependencies": {
     "uuid": "^10.0.0"
+  },
+  "peerDependencies": {
+    "react": "^18.0.0 || ^19.0.0"
   }
 }

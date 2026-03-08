@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "esnext",
+    "moduleResolution": "node",
+    "jsx": "react-jsx",
+    "allowJs": true,
+    "checkJs": false,
+    "paths": {
+      "@webmq-backend": ["../../packages/backend/src/index.ts"],
+      "@webmq-frontend": ["../../packages/frontend/src/index.ts"],
+      "@webmq-frontend/react": ["../../packages/frontend/src/react.ts"]
+    }
+  },
+  "include": ["backend/**/*", "frontend/**/*", "workers/**/*"]
+}

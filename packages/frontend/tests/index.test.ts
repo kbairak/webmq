@@ -23,8 +23,9 @@ describe('WebMQClient', () => {
   });
 
   it('should connect', async () => {
-    const c = new WebMQClient({ url: 'dumb_url', sessionId: 'dumb_sessionid' });
+    const c = new WebMQClient({ url: 'dumb_url', sessionId: 'dumb_sessionid', logLevel: 'SILENT' });
     const connectPromise = c.connect();
+
     expect(MockReconnectingWebSocket).toHaveBeenCalledWith(
       'dumb_url',
       [0, 1000, 2000, 4000, 8000]
@@ -62,7 +63,7 @@ describe('WebMQClient', () => {
   });
 
   it('should reject connect on error', async () => {
-    const c = new WebMQClient({ url: 'dumb_url', sessionId: 'dumb_sessionid' });
+    const c = new WebMQClient({ url: 'dumb_url', sessionId: 'dumb_sessionid', logLevel: 'SILENT' });
     const connectPromise = c.connect();
     mockWs.dispatchEvent(new Event('error'));
     let raised = false;
@@ -75,7 +76,7 @@ describe('WebMQClient', () => {
   });
 
   it('should reject connect on close', async () => {
-    const c = new WebMQClient({ url: 'dumb_url', sessionId: 'dumb_sessionid' });
+    const c = new WebMQClient({ url: 'dumb_url', sessionId: 'dumb_sessionid', logLevel: 'SILENT' });
     const connectPromise = c.connect();
     mockWs.dispatchEvent(new Event('close'));
     let raised = false;
@@ -88,7 +89,7 @@ describe('WebMQClient', () => {
   });
 
   async function getIdentifiedClient() {
-    const c = new WebMQClient({ url: 'dumb_url', sessionId: 'dumb_sessionid' });
+    const c = new WebMQClient({ url: 'dumb_url', sessionId: 'dumb_sessionid', logLevel: 'SILENT' });
     const connectPromise = c.connect();
     mockWs.dispatchEvent(new Event('open'));
     mockWs.dispatchEvent(
@@ -384,6 +385,7 @@ describe('WebMQClient', () => {
       url: 'dumb_url',
       sessionId: 'dumb_sessionid',
       timeoutDelay: 1,
+      logLevel: 'SILENT',
     });
     const connectPromise = c.connect();
     mockWs.dispatchEvent(new Event('open'));
@@ -401,7 +403,7 @@ describe('WebMQClient', () => {
   });
 
   it('should apply identify hook', async () => {
-    const c = new WebMQClient({ url: 'dumb_url', sessionId: 'dumb_sessionid' });
+    const c = new WebMQClient({ url: 'dumb_url', sessionId: 'dumb_sessionid', logLevel: 'SILENT' });
 
     const onIdentify = async (
       header: ClientMessageHeader
@@ -432,7 +434,7 @@ describe('WebMQClient', () => {
   });
 
   it('should apply pre hook to identify', async () => {
-    const c = new WebMQClient({ url: 'dumb_url', sessionId: 'dumb_sessionid' });
+    const c = new WebMQClient({ url: 'dumb_url', sessionId: 'dumb_sessionid', logLevel: 'SILENT' });
 
     const onIdentify = async (
       header: MessageHeader
@@ -513,7 +515,7 @@ describe('WebMQClient', () => {
   });
 
   it('should remove hook', () => {
-    const c = new WebMQClient({ url: 'dumb_url', sessionId: 'dumb_sessionid' });
+    const c = new WebMQClient({ url: 'dumb_url', sessionId: 'dumb_sessionid', logLevel: 'SILENT' });
     const onIdentify = jest.fn();
     c.addHook('identify', onIdentify);
     expect((c as any)._hooks.identify).toContain(onIdentify);

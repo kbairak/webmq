@@ -9,7 +9,6 @@ import { bundleData, unbundleData, retry } from './utils';
 
 // TODOs:
 //   - Check whether we need to pass options to RabbitMQ
-//   - Tests
 
 promClient.collectDefaultMetrics();
 
@@ -313,8 +312,7 @@ export default class WebMQServer {
         }
         metrics.rmqConsumers.dec();
         this._consumerTags.delete(ws);
-        if ([1000, 1001].includes(code) && hookContext.sessionId) {
-          // Normal closure or going away
+        if (isNormalClose && hookContext.sessionId) {
           await channel.deleteQueue(hookContext.sessionId);
         }
       });

@@ -41,6 +41,7 @@ interface WebMQClientOptions {
 }
 
 export {
+  WebMQClientOptions,
   ClientMessageHeader,
   ServerMessageHeader,
   MessageHeader,
@@ -48,8 +49,7 @@ export {
   HookFunction,
 };
 
-export default class WebMQClient extends EventTarget {
-  public logLevel: LogLevel = 'INFO';
+export default class WebMQClient {
 
   private _ws: ReconnectingWebSocket | null = null;
   private _pendingMessages = new Map<
@@ -80,9 +80,9 @@ export default class WebMQClient extends EventTarget {
   readonly sessionId: string;
   public timeoutDelay = 10000;
   public reconnectDelays = [0, 1000, 2000, 4000, 8000];
+  public logLevel: LogLevel = 'INFO';
 
   constructor(options: WebMQClientOptions) {
-    super();
     this.url = options.url;
     this.sessionId = options.sessionId;
     if (options.timeoutDelay) {
@@ -94,11 +94,12 @@ export default class WebMQClient extends EventTarget {
     if (options.logLevel) {
       this.logLevel = options.logLevel;
     }
+    this._log('DEBUG', 'WebMQClient instance created');
 
     // Graceful shutdown on page unload
     if (typeof window !== 'undefined' && window.addEventListener) {
       window.addEventListener('beforeunload', () => {
-        this._ws?.close();
+        this.disconnect();
       });
     }
   }
@@ -114,60 +115,59 @@ export default class WebMQClient extends EventTarget {
 
     return new Promise((resolveConnect, rejectConnect) => {
       const onError = (err: Event) => {
+        this._log('ERROR', 'WebMQClient encountered an error', err);
         rejectConnect();
-        if (err instanceof ErrorEvent) {
-          this.dispatchEvent(
-            new ErrorEvent(err.type, {
-              error: err.error,
-              message: err.message,
-              filename: err.filename,
-              lineno: err.lineno,
-              colno: err.colno,
-            })
-          );
-        } else {
-          this.dispatchEvent(
-            new Event(err.type, {
-              bubbles: err.bubbles, cancelable: err.cancelable, composed: err.composed
-            })
-          );
-        }
       };
       this._ws?.addEventListener('error', onError);
 
       const onClose = (event: Event) => {
         this._log(
           'WARNING',
-          'WebMQClient connection closed before being established: ' +
-          `${event instanceof CloseEvent ? event.reason : 'unknown reason'}`
+          'WebMQClient connection closed before being established',
+          event,
         );
         rejectConnect();
         this._onClose(event);
       };
       this._ws?.addEventListener('close', onClose);
 
+      this._ws?.addEventListener('open', async () => {
+        this._log(
+          'INFO',
+          `WebMQClient connection established, sending identify with sessionId: ${this.sessionId}`
+        );
+        try {
+          let header = await this._runHooks('pre', {
+            action: 'identify',
+            messageId: identifyMessageId,
+            sessionId: this.sessionId,
+          } as ClientMessageHeader);
+          header = await this._runHooks('identify', header);
+          header = await this._runHooks('post', header);
+          this._ws?.send(bundleData(header));
+        } catch (error) {
+          this._log('error', 'Error during identify', error);
+        }
+      });
+
       this._ws?.addEventListener('message', async (event: Event) => {
         const messageEvent = event as MessageEvent;
         let header: ServerMessageHeader, payload: ArrayBuffer | undefined;
-        if (messageEvent.data instanceof ArrayBuffer) {
+        if (!(messageEvent.data instanceof ArrayBuffer)) {
+          this._log('WARNING', 'Received message in unsupported format');
+          return;
+        }
+        try {
           [header, payload] = unbundleData(messageEvent.data);
-          this._log('DEBUG', `Received message: ${JSON.stringify(header)}`);
-        } else {
-          this.dispatchEvent(
-            new ErrorEvent('error', {
-              error: new Error('Unsupported message format'),
-            })
-          );
+          this._log('DEBUG', 'Received message', header);
+        } catch (err) {
+          this._log('WARNING', 'Failed to parse incoming message', err);
           return;
         }
 
         if (header.action === 'ack') {
           if (!header.messageId) {
-            this.dispatchEvent(
-              new ErrorEvent('error', {
-                error: new Error('Received ack without messageId'),
-              })
-            );
+            this._log('WARNING', 'Received ack without messageId');
           } else if (header.messageId === identifyMessageId) {
             this._ws?.addEventListener('close', this._onClose);
             this._ws?.removeEventListener('close', onClose);
@@ -186,7 +186,7 @@ export default class WebMQClient extends EventTarget {
                 actualHeader = await this._runHooks('post', header);
                 this._ws?.send(bundleData(actualHeader, payload));
               } catch (error) {
-                this.dispatchEvent(new ErrorEvent('error', { error }));
+                this._log('WARNING', 'Error sending queued message', [header, error]);
               }
             }
             this._messageQueue.length = 0; // Clear the queue
@@ -196,21 +196,11 @@ export default class WebMQClient extends EventTarget {
             this._pendingMessages.get(header.messageId)?.resolve();
             this._pendingMessages.delete(header.messageId);
           } else {
-            this.dispatchEvent(
-              new ErrorEvent('error', {
-                error: new Error(
-                  `Received ack for unknown messageId: ${header.messageId}`
-                ),
-              })
-            );
+            this._log('WARNING', `Received ack for unknown messageId: ${header.messageId}`);
           }
         } else if (header.action === 'nack') {
           if (!header.messageId) {
-            this.dispatchEvent(
-              new ErrorEvent('error', {
-                error: new Error('Received nack without messageId'),
-              })
-            );
+            this._log('WARNING', 'Received nack without messageId');
           } else if (this._pendingMessages.has(header.messageId)) {
             this._pendingMessages
               .get(header.messageId)
@@ -219,11 +209,7 @@ export default class WebMQClient extends EventTarget {
           }
         } else if (header.action === 'message') {
           if (!header.routingKey) {
-            this.dispatchEvent(
-              new ErrorEvent('error', {
-                error: new Error('Received message without routingKey'),
-              })
-            );
+            this._log('WARNING', 'Received message without routingKey');
           } else {
             [...this._messageListeners.keys()]
               .filter((bindingKey) =>
@@ -244,25 +230,6 @@ export default class WebMQClient extends EventTarget {
                   });
               });
           }
-        }
-      });
-
-      this._ws?.addEventListener('open', async () => {
-        this._log(
-          'INFO',
-          `WebMQClient connection established, sending identify with sessionId: ${this.sessionId}`
-        );
-        try {
-          let header = await this._runHooks('pre', {
-            action: 'identify',
-            messageId: identifyMessageId,
-            sessionId: this.sessionId,
-          } as ClientMessageHeader);
-          header = await this._runHooks('identify', header);
-          header = await this._runHooks('post', header);
-          this._ws?.send(bundleData(header));
-        } catch (error) {
-          this.dispatchEvent(new ErrorEvent('error', { error }));
         }
       });
 
@@ -289,13 +256,13 @@ export default class WebMQClient extends EventTarget {
           header = await this._runHooks('post', header);
           this._ws?.send(bundleData(header));
         } catch (error) {
-          this.dispatchEvent(new ErrorEvent('error', { error }));
+          this._log('error', `Error during identify`, error);
         }
       });
     });
   }
 
-  public disconnect(): Promise<void> {
+  public async disconnect(): Promise<void> {
     this._log('INFO', 'WebMQClient disconnecting');
     return new Promise((resolve) => {
       const onClose = (event: Event) => {
@@ -305,7 +272,11 @@ export default class WebMQClient extends EventTarget {
       };
       this._ws?.addEventListener('close', onClose);
       this._ws?.removeEventListener('close', this._onClose);
-      this._ws?.close();
+      if (this._ws?.readyState == WebSocket.OPEN) {
+        this._ws?.close();
+      } else {
+        this._ws?.addEventListener('open', () => this._ws?.close());
+      }
     });
   }
 
@@ -338,10 +309,7 @@ export default class WebMQClient extends EventTarget {
       callbacks.set(callback, isJson);
       // Only send to backend if this is the first listener for this bindingKey
       if (callbacks.size === 1) {
-        this._log(
-          'INFO',
-          `First callback for bindingKey ${bindingKey}; sending listen request`
-        );
+        this._log('INFO', `First callback for bindingKey ${bindingKey}; sending listen request`);
         await this._sendWithAck({ action: 'listen', bindingKey });
       }
     }
@@ -372,10 +340,7 @@ export default class WebMQClient extends EventTarget {
     }
     callbacks.delete(callback);
     if (callbacks.size === 0) {
-      this._log(
-        'INFO',
-        `No more callbacks for bindingKey ${bindingKey}; sending unlisten request`
-      );
+      this._log('INFO', `No more callbacks for bindingKey ${bindingKey}; sending unlisten request`);
       this._messageListeners.delete(bindingKey); // Clean up empty Map
       await this._sendWithAck({ action: 'unlisten', bindingKey });
     }
@@ -386,43 +351,7 @@ export default class WebMQClient extends EventTarget {
       reject(new Error('Connection closed'))
     );
     this._pendingMessages.clear();
-
-    // Log the disconnection
-    if (event instanceof CloseEvent) {
-      const isCleanClose = [1000, 1001].includes(event.code);
-      const logLevel = isCleanClose ? 'INFO' : 'WARNING';
-      const reasonText = event.reason ? `, reason: ${event.reason}` : '';
-
-      if (isCleanClose) {
-        this._log(
-          logLevel,
-          `WebMQClient connection closed cleanly (code: ${event.code}${reasonText})`
-        );
-      } else {
-        // Abnormal closure means reconnection attempts were exhausted
-        this._log(
-          logLevel,
-          `WebMQClient disconnected permanently after exhausting reconnection attempts (code: ${event.code}${reasonText})`
-        );
-      }
-
-      this.dispatchEvent(
-        new CloseEvent(event.type, {
-          code: event.code,
-          reason: event.reason,
-          wasClean: event.wasClean,
-        })
-      );
-    } else {
-      this._log('WARNING', 'WebMQClient connection closed (unknown close event)');
-      this.dispatchEvent(
-        new Event(event.type, {
-          bubbles: event.bubbles,
-          cancelable: event.cancelable,
-          composed: event.composed,
-        })
-      );
-    }
+    this._log('INFO', `WebMQClient connection closed`, event)
   };
 
   private _sendWithAck(
@@ -455,7 +384,7 @@ export default class WebMQClient extends EventTarget {
           actualHeader = await this._runHooks('post', actualHeader);
           this._ws?.send(bundleData(actualHeader, payload));
         } catch (error) {
-          this.dispatchEvent(new ErrorEvent('error', { error }));
+          this._log('error', 'Error sending message', error);
         }
       } else {
         this._messageQueue.push({ header: { ...header, messageId }, payload });
@@ -512,14 +441,19 @@ export default class WebMQClient extends EventTarget {
     return actualHeader as T;
   }
 
-  private _log(logLevel: string, message: string) {
+  private _log(logLevel: string, message: any, err?: any) {
     const levels = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'SILENT'];
     const instanceLevelIndex = levels.indexOf(this.logLevel);
     const messageLevelIndex = levels.indexOf(logLevel);
     if (messageLevelIndex >= instanceLevelIndex) {
-      this.dispatchEvent(
-        new CustomEvent('log', { detail: { logLevel, message } })
-      );
+      if (typeof message === 'string') {
+        console.log(`[${logLevel}]: ${message}`);
+      } else {
+        console.log([logLevel, message]);
+      }
+    }
+    if (err) {
+      this._log('DEBUG', err);
     }
   }
 }

@@ -15,6 +15,9 @@
       ],
       "@webmq-frontend": [
         "../../packages/frontend/src/index.ts"
+      ],
+      "@webmq-frontend/react": [
+        "../../packages/frontend/src/react.ts"
       ]
     }
   }

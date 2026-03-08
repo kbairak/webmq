@@ -1,14 +1,20 @@
-import { setup, listen, unlisten, publish } from 'webmq-frontend';
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback, useEffect, useMemo } from 'react';
+import { useWebMQ } from '@webmq-frontend/react';
 import ResultCard from './components/ResultCard';
-
-setup({ url: 'ws://localhost:8080' });
 
 export default function CitySearch() {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState([]);
   const [isSearching, setIsSearching] = useState(false);
   const [currentSearchId, setCurrentSearchId] = useState(null);
+
+  // WebMQ setup - no static subscriptions, only dynamic ones based on search
+  const options = useMemo(() => ({
+    url: 'ws://localhost:8080', sessionId: crypto.randomUUID(), logLevel: 'DEBUG'
+  }), []);
+  const on = useCallback(() => Promise.resolve(), []);
+  const off = useCallback(() => Promise.resolve(), []);
+  const webMQClient = useWebMQ(options, on, off);
 
   const handleResults = useCallback((message) => {
     setResults((prev) => [...prev, ...message.results]);
@@ -17,9 +23,9 @@ export default function CitySearch() {
   useEffect(() => {
     if (!currentSearchId) return;
 
-    listen(`search.results.${currentSearchId}`, handleResults);
-    return () => unlisten(`search.results.${currentSearchId}`, handleResults);
-  }, [currentSearchId, handleResults]);
+    webMQClient.listen(`search.results.${currentSearchId}`, handleResults);
+    return () => webMQClient.unlisten(`search.results.${currentSearchId}`, handleResults);
+  }, [currentSearchId, handleResults, webMQClient]);
 
   const handleSearch = (e) => {
     e.preventDefault();
@@ -32,7 +38,7 @@ export default function CitySearch() {
     setIsSearching(true);
 
     // Publish search request
-    publish(`search.request.${searchId}`, {
+    webMQClient.publish(`search.request.${searchId}`, {
       searchId,
       query: query.trim(),
     });
