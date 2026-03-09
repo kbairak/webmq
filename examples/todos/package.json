@@ -5,9 +5,10 @@
   "description": "Real-time collaborative todo list example for WebMQ",
   "private": true,
   "scripts": {
-    "start:backend": "node backend.js",
+    "start:backend": "tsx backend.ts",
     "start:frontend": "vite",
-    "start": "concurrently \"npm run start:backend\" \"npm run start:frontend\" --names \"backend,frontend\" --prefix-colors \"blue,green\""
+    "start": "concurrently \"npm run start:backend\" \"npm run start:frontend\" --names \"backend,frontend\" --prefix-colors \"blue,green\"",
+    "lint": "eslint . --ext .ts,.tsx"
   },
   "author": "",
   "license": "ISC",
@@ -20,7 +21,14 @@
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^5.0.0",
+    "@types/react": "^19.2.14",
+    "@typescript-eslint/eslint-plugin": "^8.56.1",
+    "eslint": "^9.39.4",
+    "tsconfig-paths": "^4.2.0",
+    "eslint-plugin-react-hooks": "^7.0.1",
+    "@typescript-eslint/parser": "^8.56.1",
     "concurrently": "^9.2.1",
+    "tsx": "^4.21.0",
     "vite": "^7.1.5"
   }
 }

@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useMemo } from 'react';
-import { useWebMQ } from '@webmq-frontend/react';
+import WebMQClient from '@webmq-frontend';
 import ResultCard from './components/ResultCard';
 
 export default function CitySearch() {
@@ -9,20 +9,19 @@ export default function CitySearch() {
   const [currentSearchId, setCurrentSearchId] = useState(null);
 
   // WebMQ setup - no static subscriptions, only dynamic ones based on search
-  const options = useMemo(() => ({
+  const webMQClient = useMemo(() => new WebMQClient({
     url: 'ws://localhost:8080', sessionId: crypto.randomUUID(), logLevel: 'DEBUG'
   }), []);
-  const on = useCallback(() => Promise.resolve(), []);
-  const off = useCallback(() => Promise.resolve(), []);
-  const webMQClient = useWebMQ(options, on, off);
+  useEffect(() => {
+    webMQClient.connect();
+    return () => webMQClient.disconnect();
+  }, [webMQClient]);
 
   const handleResults = useCallback((message) => {
     setResults((prev) => [...prev, ...message.results]);
   }, []);
-
   useEffect(() => {
     if (!currentSearchId) return;
-
     webMQClient.listen(`search.results.${currentSearchId}`, handleResults);
     return () => webMQClient.unlisten(`search.results.${currentSearchId}`, handleResults);
   }, [currentSearchId, handleResults, webMQClient]);

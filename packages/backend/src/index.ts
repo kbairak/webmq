@@ -14,7 +14,7 @@ promClient.collectDefaultMetrics();
 
 // Types
 interface MessageHeader {
-  action: 'identify' | 'publish' | 'listen' | 'unlisten' | 'message';
+  action?: 'identify' | 'publish' | 'listen' | 'unlisten' | 'message';
   messageId?: string;
   sessionId?: string;
   routingKey?: string;
@@ -93,44 +93,27 @@ export default class WebMQServer {
     this._rmqUrl = options.rmqUrl;
     this._exchangeName = options.exchange;
     this._port = options.port;
-    if (options.healthEndpoint) {
-      this._healthEndpoint = options.healthEndpoint;
-    }
-    if (options.metricsEndpoint) {
-      this._metricsEndpoint = options.metricsEndpoint;
-    }
-    if (options.queueTimeout) {
-      this._queueTimeout = options.queueTimeout;
-    }
-    if (options.logLevel) {
-      this.logLevel = options.logLevel;
-    }
+    if (options.healthEndpoint) this._healthEndpoint = options.healthEndpoint;
+    if (options.metricsEndpoint) this._metricsEndpoint = options.metricsEndpoint;
+    if (options.queueTimeout) this._queueTimeout = options.queueTimeout;
+    if (options.logLevel) this.logLevel = options.logLevel;
   }
 
   public async start(): Promise<void> {
     WebMQServer._instances.add(this);
 
     const [channel, connection] = await this._getChannelFunc()();
-    await channel.assertExchange(this._exchangeName, 'topic', {
-      durable: true,
-    });
+    await channel.assertExchange(this._exchangeName, 'topic', { durable: true });
 
     if (this._healthEndpoint || this._metricsEndpoint) {
       const server = http.createServer(
-        async (
-          req: http.IncomingMessage,
-          res: http.ServerResponse
-        ): Promise<void> => {
+        async (req: http.IncomingMessage, res: http.ServerResponse) => {
           if (req.url === this._healthEndpoint) {
             const health = await this._healthCheck();
-            res.writeHead(health.healthy ? 200 : 503, {
-              'Content-Type': 'application/json',
-            });
+            res.writeHead(health.healthy ? 200 : 503, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify(health));
           } else if (req.url === this._metricsEndpoint) {
-            res.writeHead(200, {
-              'Content-Type': promClient.register.contentType,
-            });
+            res.writeHead(200, { 'Content-Type': promClient.register.contentType });
             res.end(await promClient.register.metrics());
           } else {
             res.writeHead(404, { 'Content-Type': 'text/plain' });
@@ -157,15 +140,9 @@ export default class WebMQServer {
         this._queues.set(
           ws,
           this._queues.get(ws)!.then(async () => {
-            if (
-              !data ||
-              !(data instanceof ArrayBuffer || Buffer.isBuffer(data))
-            ) {
+            if (!data || !(data instanceof ArrayBuffer || Buffer.isBuffer(data))) {
               metrics.wsMessagesReceived.inc({ action: '' });
-              metrics.errors.inc({
-                type: 'invalid_message_format',
-                action: '',
-              });
+              metrics.errors.inc({ type: 'invalid_message_format', action: '' });
               this._log('WARNING', 'Received non-binary message, ignoring');
               return;
             }
@@ -175,49 +152,23 @@ export default class WebMQServer {
               metrics.wsMessagesReceived.inc({ action: header.action || '' });
             } catch (err) {
               metrics.wsMessagesReceived.inc({ action: '' });
-              metrics.errors.inc({
-                type: 'invalid_message_format',
-                action: '',
-              });
-              this._log(
-                'WARNING',
-                'Failed to unbundle incoming message, ignoring',
-                err as Error
-              );
+              metrics.errors.inc({ type: 'invalid_message_format', action: '' });
+              this._log('WARNING', 'Failed to unbundle incoming message, ignoring', err as Error);
               return;
             }
-            this._log(
-              'DEBUG',
-              `WebSocket message received: ${JSON.stringify(header)}`
-            );
+            this._log('DEBUG', `WebSocket message received: ${JSON.stringify(header)}`);
             if (!('messageId' in header)) {
-              this._log(
-                'WARNING',
-                'Received message without messageId, ignoring'
-              );
-              metrics.errors.inc({
-                type: 'invalid_message_format',
-                action: '',
-              });
+              this._log('WARNING', 'Received message without messageId, ignoring');
+              metrics.errors.inc({ type: 'invalid_message_format', action: '' });
               return;
             }
             try {
               switch (header.action) {
                 case 'identify':
-                  await this._handleIdentify(
-                    header,
-                    hookContext,
-                    getChannel,
-                    ws
-                  );
+                  await this._handleIdentify(header, hookContext, getChannel, ws);
                   break;
                 case 'publish':
-                  await this._handlePublish(
-                    header,
-                    hookContext,
-                    getChannel,
-                    payload
-                  );
+                  await this._handlePublish(header, hookContext, getChannel, payload);
                   break;
                 case 'listen':
                   await this._handleListen(header, hookContext, getChannel);
@@ -228,51 +179,8 @@ export default class WebMQServer {
                 default:
                   throw new Error(`Unknown action: ${header.action}`);
               }
-              if (ws.readyState !== ws.OPEN) {
-                metrics.errors.inc({ type: 'failed_websocket', action: 'ack' });
-                this._log('WARNING', 'WebSocket is not open, cannot send ack');
-                return;
-              }
-              try {
-                ws.send(
-                  bundleData({ action: 'ack', messageId: header.messageId })
-                );
-              } catch (err) {
-                metrics.errors.inc({ type: 'failed_websocket', action: 'ack' });
-                this._log('ERROR', 'Failed to send ack', err as Error);
-                return;
-              }
-              metrics.wsMessagesAcked.inc({ action: header.action || '' });
             } catch (err) {
               this._log('ERROR', 'Error processing message', err as Error);
-              if (ws.readyState !== ws.OPEN) {
-                metrics.errors.inc({
-                  type: 'failed_websocket',
-                  action: 'nack',
-                });
-                this._log('WARNING', 'WebSocket is not open, cannot send nack');
-                return;
-              }
-              try {
-                ws.send(
-                  bundleData({
-                    action: 'nack',
-                    messageId: header.messageId,
-                    error: `${err}`,
-                  })
-                );
-                metrics.wsMessagesNacked.inc({ action: header.action || '' });
-              } catch (err) {
-                this._log(
-                  'ERROR',
-                  'Failed to send nack to client',
-                  err as Error
-                );
-                metrics.errors.inc({
-                  type: 'failed_websocket',
-                  action: 'nack',
-                });
-              }
             }
           })
         );
@@ -286,10 +194,7 @@ export default class WebMQServer {
           : 'unidentified connection';
         const closeType = isNormalClose ? 'normal closure' : 'abnormal closure';
 
-        this._log(
-          'INFO',
-          `WebSocket ${sessionInfo} disconnected (code: ${code}, ${closeType})`
-        );
+        this._log('INFO', `WebSocket ${sessionInfo} disconnected (code: ${code}, ${closeType})`);
 
         metrics.wsConnections.dec();
         await this._queues.get(ws); // Try to let pending tasks complete
@@ -297,11 +202,7 @@ export default class WebMQServer {
         try {
           [channel] = await getChannel();
         } catch (err) {
-          this._log(
-            'ERROR',
-            'Failed to get RabbitMQ channel during WebSocket close',
-            err as Error
-          );
+          this._log('ERROR', 'Failed to get RabbitMQ channel during WebSocket close', err as Error);
           return;
         }
         this._webSockets.delete(ws);
@@ -320,8 +221,8 @@ export default class WebMQServer {
 
     this._log(
       'INFO',
-      `WebMQServer started on port ${this._port}, connected to RabbitMQ at ${this._rmqUrl}, ` +
-      `exchange ${this._exchangeName}`
+      `WebMQServer started on port ${this._port}, connected to RabbitMQ at ${this._rmqUrl}, `
+        + `exchange ${this._exchangeName}`
     );
   }
 
@@ -332,9 +233,7 @@ export default class WebMQServer {
     });
     const [channel, connection] = await this._getChannelFunc(null)();
     await Promise.all(
-      [...this._consumerTags.values()].map((consumerTag) =>
-        channel.cancel(consumerTag)
-      )
+      [...this._consumerTags.values()].map((consumerTag) => channel.cancel(consumerTag))
     );
 
     // Wait for in-flight tasks to finish
@@ -362,26 +261,15 @@ export default class WebMQServer {
     ws: ws.WebSocket
   ) {
     if (!header.sessionId) {
-      metrics.errors.inc({
-        type: 'invalid_message_format',
-        action: 'identify',
-      });
+      metrics.errors.inc({ type: 'invalid_message_format', action: 'identify' });
       throw new Error('Identify action missing sessionId');
     }
     hookContext.sessionId = header.sessionId;
 
     try {
       let actualHeader = await this._runHooks('pre', header, hookContext);
-      actualHeader = await this._runHooks(
-        'wsMessage',
-        actualHeader,
-        hookContext
-      );
-      actualHeader = await this._runHooks(
-        'identify',
-        actualHeader,
-        hookContext
-      );
+      actualHeader = await this._runHooks('wsMessage', actualHeader, hookContext);
+      actualHeader = await this._runHooks('identify', actualHeader, hookContext);
       await this._runHooks('post', actualHeader, hookContext);
     } catch (err) {
       metrics.errors.inc({ type: 'hook_error', action: 'identify' });
@@ -390,9 +278,7 @@ export default class WebMQServer {
 
     const [channel] = await getChannel();
     try {
-      await channel.assertQueue(hookContext.sessionId, {
-        expires: this._queueTimeout,
-      });
+      await channel.assertQueue(hookContext.sessionId, { expires: this._queueTimeout });
       const consume = await channel.consume(
         hookContext.sessionId,
         (rmqMessage: amqplib.ConsumeMessage | null) => {
@@ -421,11 +307,7 @@ export default class WebMQServer {
     let actualHeader: MessageHeader;
     try {
       actualHeader = await this._runHooks('pre', header, hookContext);
-      actualHeader = await this._runHooks(
-        'wsMessage',
-        actualHeader,
-        hookContext
-      );
+      actualHeader = await this._runHooks('wsMessage', actualHeader, hookContext);
       actualHeader = await this._runHooks('publish', actualHeader, hookContext);
       actualHeader = await this._runHooks('post', actualHeader, hookContext);
     } catch (err) {
@@ -466,11 +348,7 @@ export default class WebMQServer {
     let actualHeader: MessageHeader;
     try {
       actualHeader = await this._runHooks('pre', header, hookContext);
-      actualHeader = await this._runHooks(
-        'wsMessage',
-        actualHeader,
-        hookContext
-      );
+      actualHeader = await this._runHooks('wsMessage', actualHeader, hookContext);
       actualHeader = await this._runHooks('listen', actualHeader, hookContext);
       actualHeader = await this._runHooks('post', actualHeader, hookContext);
     } catch (err) {
@@ -480,11 +358,7 @@ export default class WebMQServer {
 
     const [channel] = await getChannel();
     try {
-      await channel.bindQueue(
-        hookContext.sessionId,
-        this._exchangeName,
-        actualHeader.bindingKey!
-      );
+      await channel.bindQueue(hookContext.sessionId, this._exchangeName, actualHeader.bindingKey!);
       metrics.rmqBindings.inc({ binding_key: actualHeader.bindingKey! });
       this._log(
         'INFO',
@@ -502,33 +376,19 @@ export default class WebMQServer {
     getChannel: () => Promise<[amqplib.Channel, amqplib.ChannelModel]>
   ) {
     if (!header.bindingKey) {
-      metrics.errors.inc({
-        type: 'invalid_message_format',
-        action: 'unlisten',
-      });
+      metrics.errors.inc({ type: 'invalid_message_format', action: 'unlisten' });
       throw new Error('Unlisten action missing bindingKey');
     }
     if (!hookContext.sessionId) {
-      metrics.errors.inc({
-        type: 'invalid_message_format',
-        action: 'unlisten',
-      });
+      metrics.errors.inc({ type: 'invalid_message_format', action: 'unlisten' });
       throw new Error('Unlisten action received before identify');
     }
 
     let actualHeader: MessageHeader;
     try {
       actualHeader = await this._runHooks('pre', header, hookContext);
-      actualHeader = await this._runHooks(
-        'wsMessage',
-        actualHeader,
-        hookContext
-      );
-      actualHeader = await this._runHooks(
-        'unlisten',
-        actualHeader,
-        hookContext
-      );
+      actualHeader = await this._runHooks('wsMessage', actualHeader, hookContext);
+      actualHeader = await this._runHooks('unlisten', actualHeader, hookContext);
       actualHeader = await this._runHooks('post', actualHeader, hookContext);
     } catch (err) {
       metrics.errors.inc({ type: 'hook_error', action: 'unlisten' });
@@ -562,44 +422,21 @@ export default class WebMQServer {
     this._queues.set(
       ws,
       this._queues.get(ws)!.then(async () => {
-        if (!rmqMessage) {
-          metrics.errors.inc({
-            type: 'invalid_message_format',
-            action: 'consume',
-          });
-          this._log('WARNING', `Received null message from RabbitMQ at queue ${hookContext.sessionId}, skipping`);
-          return;
-        }
         const [channel] = await getChannel();
         try {
-          let header: MessageHeader = {
-            action: 'message',
-            routingKey: rmqMessage.fields.routingKey,
-          };
-          this._log(
-            'DEBUG',
-            `RabbitMQ message received with routing key ${header.routingKey}`
-          );
+          if (!rmqMessage) {
+            metrics.errors.inc({ type: 'invalid_message_format', action: 'consume' });
+            throw new Error(
+              `Received null message from RabbitMQ at queue ${hookContext.sessionId}`
+            );
+          }
+          let header: MessageHeader = { routingKey: rmqMessage.fields.routingKey };
+          this._log('DEBUG', `RabbitMQ message received with routing key ${header.routingKey}`);
 
           try {
-            header = await this._runHooks(
-              'pre',
-              header,
-              hookContext,
-              rmqMessage
-            );
-            header = await this._runHooks(
-              'rmqMessage',
-              header,
-              hookContext,
-              rmqMessage
-            );
-            header = await this._runHooks(
-              'post',
-              header,
-              hookContext,
-              rmqMessage
-            );
+            header = await this._runHooks('pre', header, hookContext, rmqMessage);
+            header = await this._runHooks('rmqMessage', header, hookContext, rmqMessage);
+            header = await this._runHooks('post', header, hookContext, rmqMessage);
           } catch (err) {
             metrics.errors.inc({ type: 'hook_error', action: 'consume' });
             throw err;
@@ -625,16 +462,12 @@ export default class WebMQServer {
             throw err;
           }
         } catch (err) {
-          this._log(
-            'ERROR',
-            'Error sending message to client, requeuing',
-            err as Error
-          );
+          this._log('ERROR', 'Error sending message to client, requeuing', err as Error);
           try {
-            channel.nack(rmqMessage, false, true); // Requeue the message
-            metrics.rmqMessagesNacked.inc({
-              routing_key: rmqMessage.fields.routingKey,
-            });
+            if (rmqMessage) {
+              channel.nack(rmqMessage, false, true); // Requeue the message
+              metrics.rmqMessagesNacked.inc({ routing_key: rmqMessage.fields.routingKey });
+            }
           } catch (err) {
             this._log('ERROR', 'Failed to nack message', err as Error);
           }
@@ -670,10 +503,7 @@ export default class WebMQServer {
         this._log('ERROR', 'Failed to get RabbitMQ channel', err as Error);
         this._consecutiveChannelFailures++;
         metrics.rmqConsecutiveFailures.set(this._consecutiveChannelFailures);
-        metrics.errors.inc({
-          type: 'failed_rabbitmq',
-          action: 'channel_retrieval',
-        });
+        metrics.errors.inc({ type: 'failed_rabbitmq', action: 'channel_retrieval' });
         throw err;
       }
       return [channel, connection];
@@ -683,19 +513,15 @@ export default class WebMQServer {
   private async _healthCheck(): Promise<HealthCheckResponse> {
     const oneMinuteAgo = new Date(Date.now() - 60 * 1000);
     if (
-      !this._lastSuccessfulConnectionAttempt ||
-      this._lastSuccessfulConnectionAttempt < oneMinuteAgo
+      !this._lastSuccessfulConnectionAttempt
+      || this._lastSuccessfulConnectionAttempt < oneMinuteAgo
     ) {
       try {
         const [channel, connection] = await this._getChannelFunc()();
         await channel.close();
         await connection.close();
       } catch (err) {
-        this._log(
-          'ERROR',
-          'Health check failed to connect to RabbitMQ',
-          err as Error
-        );
+        this._log('ERROR', 'Health check failed to connect to RabbitMQ', err as Error);
       }
     }
     return {
@@ -727,9 +553,7 @@ export default class WebMQServer {
     const instanceLevelIndex = levels.indexOf(this.logLevel);
     const messageLevelIndex = levels.indexOf(logLevel);
     if (messageLevelIndex >= instanceLevelIndex) {
-      console.log(
-        `[${logLevel}] ${message instanceof Error ? message.stack : message}`
-      );
+      console.log(`[${logLevel}] ${message instanceof Error ? message.stack : message}`);
     }
     if (err) {
       this._log('DEBUG', err);
@@ -738,9 +562,7 @@ export default class WebMQServer {
 }
 
 const shutdownHandler = async (signal: string) => {
-  console.log(
-    `Received ${signal}, shutting down all WebMQ servers gracefully...`
-  );
+  console.log(`Received ${signal}, shutting down all WebMQ servers gracefully...`);
   Array.from(WebMQServer['_instances']).map((instance) => instance.stop());
   process.exit(0);
 };

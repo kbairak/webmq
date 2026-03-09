@@ -1,5 +1,5 @@
-import { useState, useCallback, useMemo } from 'react';
-import { WebMQClient, useWebMQ, type WebMQClientOptions } from '@webmq-frontend/react';
+import { useState, useCallback, useMemo, useEffect } from 'react';
+import WebMQClient from '@webmq-frontend';
 
 type UUID = ReturnType<typeof crypto.randomUUID>;
 interface Message { id: UUID; text: string; user: string; };
@@ -15,18 +15,17 @@ export default function Chat() {
     (prev) => ([...prev, msg])
   ), []);
 
-  const options = useMemo<WebMQClientOptions>(() => ({
+  const webMQClient = useMemo(() => new WebMQClient({
     url: 'ws://localhost:8080', sessionId: crypto.randomUUID(), logLevel: 'DEBUG'
   }), []);
-  const on = useCallback(
-    (c: WebMQClient) => c.listen('chat.messages', appendMessage),
-    [appendMessage],
-  );
-  const off = useCallback(
-    (c: WebMQClient) => c.unlisten('chat.messages', appendMessage),
-    [appendMessage],
-  );
-  const webMQClient = useWebMQ(options, on, off);
+  useEffect(() => {
+    webMQClient.connect();
+    webMQClient.listen('chat.messages', appendMessage);
+    return () => {
+      webMQClient.unlisten('chat.messages', appendMessage);
+      webMQClient.disconnect();
+    };
+  }, [webMQClient, appendMessage]);
 
   const handleSubmit = (formData: FormData) => {
     const message = formData.get('message') as string;

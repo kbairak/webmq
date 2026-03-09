@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback, useContext } from 'react';
-import { listen, publish, unlisten } from 'webmq-frontend';
+import { useState, useEffect, useCallback, useContext, useMemo } from 'react';
+import WebMQClient from '@webmq-frontend';
 import Todo from './Todo';
 import UserContext from './UserContext';
 
@@ -8,21 +8,30 @@ function TodoList() {
   const [todos, setTodos] = useState({});
   const [newTodoText, setNewTodoText] = useState('');
 
-  const handleTodoAdded = useCallback((payload) => {
+  const webMQClient = useMemo(() => new WebMQClient({
+    url: 'ws://localhost:8080', sessionId: crypto.randomUUID(), logLevel: 'DEBUG'
+  }), []);
+
+  const appendTodo = useCallback((payload) => {
     setTodos((prev) => ({ ...prev, [payload.id]: payload }));
   }, []);
 
   useEffect(() => {
-    listen('todos.added', handleTodoAdded);
-    return () => unlisten('todos.added', handleTodoAdded);
-  }, [handleTodoAdded]);
+    webMQClient.connect();
+    webMQClient.listen('todos.added', appendTodo);
+    return () => {
+      webMQClient.unlisten('todos.added', appendTodo);
+      webMQClient.disconnect();
+
+    };
+  }, [appendTodo, webMQClient]);
 
   const handleAddTodo = async (e) => {
     e.preventDefault();
     if (!newTodoText.trim()) return;
 
     // Publish to all clients (we'll receive it via our todos.added listener)
-    await publish('todos.added', {
+    await webMQClient.publish('todos.added', {
       id: crypto.randomUUID(),
       text: newTodoText,
       completed: false,
@@ -76,6 +85,7 @@ function TodoList() {
               id={todo.id}
               initialData={todo}
               onDelete={handleTodoDeleted}
+              webMQClient={webMQClient}
             />
           ))
         )}

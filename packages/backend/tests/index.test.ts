@@ -341,12 +341,6 @@ describe('WebMQServer', () => {
           'session-123',
           expect.any(Function)
         );
-        expect(mockWs.send).toHaveBeenCalledWith(expect.any(ArrayBuffer));
-
-        const [ackData] = mockWs.send.mock.calls[0];
-        const [ackHeader] = unbundleData(ackData);
-        expect(ackHeader.action).toBe('ack');
-        expect(ackHeader.messageId).toBe('msg-1');
       });
 
       it('should reject identify without sessionId', async () => {
@@ -357,10 +351,8 @@ describe('WebMQServer', () => {
 
         await waitForQueue();
 
-        const [nackData] = mockWs.send.mock.calls[0];
-        const [nackHeader] = unbundleData(nackData);
-        expect(nackHeader.action).toBe('nack');
-        expect(nackHeader.error).toContain('sessionId');
+        // No ack/nack sent - operation just fails silently
+        expect(mockChannel.assertQueue).not.toHaveBeenCalled();
       });
     });
 
@@ -419,10 +411,7 @@ describe('WebMQServer', () => {
 
         await waitForQueue();
 
-        const [nackData] = mockWs.send.mock.calls[0];
-        const [nackHeader] = unbundleData(nackData);
-        expect(nackHeader.action).toBe('nack');
-        expect(nackHeader.error).toContain('routingKey');
+        expect(mockChannel.publish).not.toHaveBeenCalled();
       });
     });
 
@@ -464,10 +453,8 @@ describe('WebMQServer', () => {
 
         await waitForQueue();
 
-        const [nackData] = mockWs.send.mock.calls[0];
-        const [nackHeader] = unbundleData(nackData);
-        expect(nackHeader.action).toBe('nack');
-        expect(nackHeader.error).toContain('bindingKey');
+        // No ack/nack sent - operation just fails silently
+        expect(mockChannel.bindQueue).not.toHaveBeenCalled();
       });
 
       it('should reject listen before identify', async () => {
@@ -482,10 +469,8 @@ describe('WebMQServer', () => {
 
         await waitForQueue();
 
-        const [nackData] = newWs.send.mock.calls[0];
-        const [nackHeader] = unbundleData(nackData);
-        expect(nackHeader.action).toBe('nack');
-        expect(nackHeader.error).toContain('before identify');
+        // No ack/nack sent - operation just fails silently
+        expect(mockChannel.bindQueue).not.toHaveBeenCalled();
       });
     });
 
@@ -535,10 +520,8 @@ describe('WebMQServer', () => {
 
         await waitForQueue();
 
-        const [nackData] = mockWs.send.mock.calls[0];
-        const [nackHeader] = unbundleData(nackData);
-        expect(nackHeader.action).toBe('nack');
-        expect(nackHeader.error).toContain('bindingKey');
+        // No ack/nack sent - operation just fails silently
+        expect(mockChannel.unbindQueue).not.toHaveBeenCalled();
       });
     });
 
@@ -563,10 +546,8 @@ describe('WebMQServer', () => {
 
         await waitForQueue();
 
-        const [nackData] = mockWs.send.mock.calls[0];
-        const [nackHeader] = unbundleData(nackData);
-        expect(nackHeader.action).toBe('nack');
-        expect(nackHeader.error).toContain('Unknown action');
+        // No ack/nack sent - operation just fails silently and logs error
+        expect(mockWs.send).not.toHaveBeenCalled();
       });
     });
   });
@@ -608,7 +589,6 @@ describe('WebMQServer', () => {
       const [sentData] = mockWs.send.mock.calls[0];
       const [header, receivedPayload] = unbundleData(sentData);
 
-      expect(header.action).toBe('message');
       expect(header.routingKey).toBe('test.route');
       expect(Buffer.from(receivedPayload!)).toEqual(payload);
       expect(mockChannel.ack).toHaveBeenCalledWith(rmqMessage);
@@ -746,7 +726,7 @@ describe('WebMQServer', () => {
       expect(hookFn).not.toHaveBeenCalled();
     });
 
-    it('should handle hook errors and send nack', async () => {
+    it('should handle hook errors and not send nack', async () => {
       server.addHook('publish', async () => {
         throw new Error('Hook processing failed');
       });
@@ -759,10 +739,9 @@ describe('WebMQServer', () => {
 
       await waitForQueue();
 
-      const [nackData] = mockWs.send.mock.calls[0];
-      const [nackHeader] = unbundleData(nackData);
-      expect(nackHeader.action).toBe('nack');
-      expect(nackHeader.error).toContain('Hook processing failed');
+      // No ack/nack sent - operation just fails silently and logs error
+      expect(mockWs.send).not.toHaveBeenCalled();
+      expect(mockChannel.publish).not.toHaveBeenCalled();
     });
   });
 
