@@ -1,3 +1,14 @@
-singleQuote: true
-printWidth: 100
 arrowParens: always
+bracketSameLine: false
+bracketSpacing: true
+endOfLine: lf
+experimentalOperatorPosition: start
+objectWrap: collapse
+printWidth: 100
+proseWrap: preserve
+quoteProps: as-needed
+semi: true
+singleQuote: true
+tabWidth: 2
+trailingComma: es5
+useTabs: false

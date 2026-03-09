@@ -2,10 +2,6 @@ import { v4 as uuid } from 'uuid';
 import ReconnectingWebSocket from './ReconnectingWebSocket';
 import { bundleData, unbundleData } from './bundle';
 
-// TODOs:
-//   - Helpers for session vs localStorage vs React Native vs vanilla JS vs React
-//   - ack back on message (?)
-
 // Types
 interface ClientMessageHeader {
   action: 'identify' | 'publish' | 'listen' | 'unlisten';
@@ -15,7 +11,6 @@ interface ClientMessageHeader {
   [key: string]: any;
 }
 interface ServerMessageHeader {
-  action: 'ack' | 'nack' | 'message';
   messageId?: string;
   routingKey?: string;
   [key: string]: any;
@@ -30,12 +25,11 @@ type HookName =
   | 'unlisten'
   | 'message'
   | 'post';
-type HookFunction<T extends MessageHeader> = (header: T) => Promise<T>;
+type HookFunction<T extends MessageHeader> = (header: T) => T;
 type LogLevel = 'DEBUG' | 'INFO' | 'WARNING' | 'ERROR' | 'SILENT';
 interface WebMQClientOptions {
   url: string;
   sessionId: string;
-  timeoutDelay?: number;
   reconnectDelays?: number[];
   logLevel?: LogLevel;
 }
@@ -50,21 +44,12 @@ export {
 };
 
 export default class WebMQClient {
-
   private _ws: ReconnectingWebSocket | null = null;
-  private _pendingMessages = new Map<
-    string,
-    { resolve: Function; reject: Function }
-  >();
   private _messageListeners = new Map<
     string,
     Map<(payload: any) => void, boolean>
   >();
-  private _identified: boolean = false;
-  private _messageQueue: {
-    header: ClientMessageHeader;
-    payload?: ArrayBuffer;
-  }[] = [];
+  private _messageQueue: { header: ClientMessageHeader; payload?: ArrayBuffer; }[] = [];
   private _hooks = {
     pre: new Set<HookFunction<MessageHeader>>(),
     identify: new Set<HookFunction<ClientMessageHeader>>(),
@@ -78,16 +63,12 @@ export default class WebMQClient {
   // Options
   readonly url: string;
   readonly sessionId: string;
-  public timeoutDelay = 10000;
   public reconnectDelays = [0, 1000, 2000, 4000, 8000];
   public logLevel: LogLevel = 'INFO';
 
   constructor(options: WebMQClientOptions) {
     this.url = options.url;
     this.sessionId = options.sessionId;
-    if (options.timeoutDelay) {
-      this.timeoutDelay = options.timeoutDelay;
-    }
     if (options.reconnectDelays) {
       this.reconnectDelays = options.reconnectDelays;
     }
@@ -95,6 +76,98 @@ export default class WebMQClient {
       this.logLevel = options.logLevel;
     }
     this._log('DEBUG', 'WebMQClient instance created');
+  }
+
+  public connect() {
+    // Clean up any existing connection before creating a new one
+    if (this._ws) {
+      this._ws.close(1000, 'Reconnecting');
+      this._ws = null;
+    }
+
+    this._log('INFO', `WebMQClient connecting to ${this.url}`);
+    this._ws = new ReconnectingWebSocket(this.url, this.reconnectDelays);
+    this._ws.binaryType = 'arraybuffer';
+
+    let identifyMessageId = uuid();
+    this._ws?.addEventListener('error', (err: Event) => {
+      this._log('ERROR', 'WebMQClient encountered an error', err);
+    });
+
+    this._ws?.addEventListener('close', (event) => {
+      this._log('INFO', `WebMQClient connection closed`, event)
+    });
+
+    const onOpen = () => {
+      this._log(
+        'INFO',
+        `WebMQClient connection established, sending identify with sessionId: ${this.sessionId}`
+      );
+      try {
+        let header = this._runHooks('pre', {
+          action: 'identify',
+          messageId: identifyMessageId,
+          sessionId: this.sessionId,
+        });
+        header = this._runHooks('identify', header);
+        header = this._runHooks('post', header);
+        this._ws?.send(bundleData(header));
+        this._messageQueue.forEach(({ header, payload }) => {
+          this._sendOrEnqueue(header, payload);
+        });
+      } catch (error) {
+        this._log('error', 'Error during identify', error);
+      }
+    };
+    this._ws?.addEventListener('open', onOpen);
+    this._ws?.addEventListener('reconnected', onOpen);
+
+    this._ws?.addEventListener('message', (event: Event) => {
+      const messageEvent = event as MessageEvent;
+      let header: ServerMessageHeader, payload: ArrayBuffer | undefined;
+      if (!(messageEvent.data instanceof ArrayBuffer)) {
+        this._log('WARNING', 'Received message in unsupported format');
+        return;
+      }
+      try {
+        [header, payload] = unbundleData(messageEvent.data);
+        this._log('DEBUG', 'Received message', header);
+      } catch (err) {
+        this._log('WARNING', 'Failed to parse incoming message', err);
+        return;
+      }
+
+      if (!header.routingKey) {
+        this._log('WARNING', 'Received message without routingKey');
+        return;
+      }
+
+      [...this._messageListeners.keys()]
+        .filter((bindingKey) =>
+          matchesPattern(header.routingKey!, bindingKey)
+        )
+        .forEach((bindingKey) => {
+          this._messageListeners
+            .get(bindingKey)
+            ?.forEach((isJson, callback) => {
+              if (isJson) {
+                const decoder = new TextDecoder();
+                const payloadString = decoder.decode(payload);
+                const decodedPayload = JSON.parse(payloadString);
+                callback(decodedPayload);
+              } else {
+                callback(payload);
+              }
+            });
+        });
+    });
+
+    this._ws?.addEventListener('reconnecting', () => {
+      this._log(
+        'WARNING',
+        'WebMQClient connection lost, attempting to reconnect'
+      );
+    });
 
     // Graceful shutdown on page unload
     if (typeof window !== 'undefined' && window.addEventListener) {
@@ -104,200 +177,28 @@ export default class WebMQClient {
     }
   }
 
-  public connect(): Promise<void> {
-    // Clean up any existing connection before creating a new one
-
-    this._log('INFO', `WebMQClient connecting to ${this.url}`);
-    this._ws = new ReconnectingWebSocket(this.url, this.reconnectDelays);
-    this._ws.binaryType = 'arraybuffer';
-
-    let identifyMessageId = uuid();
-
-    return new Promise((resolveConnect, rejectConnect) => {
-      const onError = (err: Event) => {
-        this._log('ERROR', 'WebMQClient encountered an error', err);
-        rejectConnect();
-      };
-      this._ws?.addEventListener('error', onError);
-
-      const onClose = (event: Event) => {
-        this._log(
-          'WARNING',
-          'WebMQClient connection closed before being established',
-          event,
-        );
-        rejectConnect();
-        this._onClose(event);
-      };
-      this._ws?.addEventListener('close', onClose);
-
-      this._ws?.addEventListener('open', async () => {
-        this._log(
-          'INFO',
-          `WebMQClient connection established, sending identify with sessionId: ${this.sessionId}`
-        );
-        try {
-          let header = await this._runHooks('pre', {
-            action: 'identify',
-            messageId: identifyMessageId,
-            sessionId: this.sessionId,
-          } as ClientMessageHeader);
-          header = await this._runHooks('identify', header);
-          header = await this._runHooks('post', header);
-          this._ws?.send(bundleData(header));
-        } catch (error) {
-          this._log('error', 'Error during identify', error);
-        }
-      });
-
-      this._ws?.addEventListener('message', async (event: Event) => {
-        const messageEvent = event as MessageEvent;
-        let header: ServerMessageHeader, payload: ArrayBuffer | undefined;
-        if (!(messageEvent.data instanceof ArrayBuffer)) {
-          this._log('WARNING', 'Received message in unsupported format');
-          return;
-        }
-        try {
-          [header, payload] = unbundleData(messageEvent.data);
-          this._log('DEBUG', 'Received message', header);
-        } catch (err) {
-          this._log('WARNING', 'Failed to parse incoming message', err);
-          return;
-        }
-
-        if (header.action === 'ack') {
-          if (!header.messageId) {
-            this._log('WARNING', 'Received ack without messageId');
-          } else if (header.messageId === identifyMessageId) {
-            this._ws?.addEventListener('close', this._onClose);
-            this._ws?.removeEventListener('close', onClose);
-            this._identified = true;
-
-            if (this._messageQueue.length > 0) {
-              this._log(
-                'INFO',
-                `Flushing ${this._messageQueue.length} queued messages after reconnect`
-              );
-            }
-            for (const { header, payload } of this._messageQueue) {
-              try {
-                let actualHeader = await this._runHooks('pre', header);
-                actualHeader = await this._runHooks(header.action, header);
-                actualHeader = await this._runHooks('post', header);
-                this._ws?.send(bundleData(actualHeader, payload));
-              } catch (error) {
-                this._log('WARNING', 'Error sending queued message', [header, error]);
-              }
-            }
-            this._messageQueue.length = 0; // Clear the queue
-
-            resolveConnect();
-          } else if (this._pendingMessages.has(header.messageId)) {
-            this._pendingMessages.get(header.messageId)?.resolve();
-            this._pendingMessages.delete(header.messageId);
-          } else {
-            this._log('WARNING', `Received ack for unknown messageId: ${header.messageId}`);
-          }
-        } else if (header.action === 'nack') {
-          if (!header.messageId) {
-            this._log('WARNING', 'Received nack without messageId');
-          } else if (this._pendingMessages.has(header.messageId)) {
-            this._pendingMessages
-              .get(header.messageId)
-              ?.reject(header.error || null);
-            this._pendingMessages.delete(header.messageId);
-          }
-        } else if (header.action === 'message') {
-          if (!header.routingKey) {
-            this._log('WARNING', 'Received message without routingKey');
-          } else {
-            [...this._messageListeners.keys()]
-              .filter((bindingKey) =>
-                matchesPattern(header.routingKey!, bindingKey)
-              )
-              .forEach((bindingKey) => {
-                this._messageListeners
-                  .get(bindingKey)
-                  ?.forEach((isJson, callback) => {
-                    if (isJson) {
-                      const decoder = new TextDecoder();
-                      const payloadString = decoder.decode(payload);
-                      const decodedPayload = JSON.parse(payloadString);
-                      callback(decodedPayload);
-                    } else {
-                      callback(payload);
-                    }
-                  });
-              });
-          }
-        }
-      });
-
-      this._ws?.addEventListener('reconnecting', () => {
-        this._log(
-          'WARNING',
-          'WebMQClient connection lost, attempting to reconnect'
-        );
-        this._identified = false;
-      });
-      this._ws?.addEventListener('reconnected', async () => {
-        this._log(
-          'INFO',
-          `WebMQClient connection established, sending identify with sessionId: ${this.sessionId}`
-        );
-        identifyMessageId = uuid();
-        try {
-          let header = await this._runHooks('pre', {
-            action: 'identify',
-            messageId: identifyMessageId,
-            sessionId: this.sessionId,
-          });
-          header = await this._runHooks('identify', header);
-          header = await this._runHooks('post', header);
-          this._ws?.send(bundleData(header));
-        } catch (error) {
-          this._log('error', `Error during identify`, error);
-        }
-      });
-    });
-  }
-
-  public async disconnect(): Promise<void> {
+  public disconnect() {
     this._log('INFO', 'WebMQClient disconnecting');
-    return new Promise((resolve) => {
-      const onClose = (event: Event) => {
-        this._ws?.removeEventListener('close', onClose);
-        this._onClose(event);
-        resolve();
-      };
-      this._ws?.addEventListener('close', onClose);
-      this._ws?.removeEventListener('close', this._onClose);
-      if (this._ws?.readyState == WebSocket.OPEN) {
-        this._ws?.close();
-      } else {
-        this._ws?.addEventListener('open', () => this._ws?.close());
-      }
-    });
+    const ws = this._ws;  // Capture the reference
+    if (ws?.readyState === WebSocket.OPEN) {
+      ws.close(1000, 'Client disconnect');
+    } else if (ws) {
+      ws.addEventListener('open', () => ws.close(1000, 'Client disconnect'));
+    }
+    this._ws = null;  // Clear it so we know it's disconnected
   }
 
-  public async publish(
-    routingKey: string,
-    payload: ArrayBuffer | object | any[]
-  ): Promise<void> {
+  public publish(routingKey: string, payload: ArrayBuffer | object | any[]) {
     this._log('DEBUG', `Publishing message with routingKey: ${routingKey}`);
     const actualPayload =
       payload instanceof ArrayBuffer
         ? payload
         : new TextEncoder().encode(JSON.stringify(payload)).buffer;
 
-    await this._sendWithAck({ action: 'publish', routingKey }, actualPayload);
+    this._sendOrEnqueue({ action: 'publish', routingKey }, actualPayload);
   }
 
-  public async listen(
-    bindingKey: string,
-    callback: (payload: any) => void,
-    isJson: boolean = true
-  ): Promise<void> {
+  public listen(bindingKey: string, callback: (payload: any) => void, isJson: boolean = true) {
     this._log('INFO', `Adding listener for bindingKey: ${bindingKey}`);
     let callbacks = this._messageListeners.get(bindingKey);
     if (!callbacks) {
@@ -310,29 +211,23 @@ export default class WebMQClient {
       // Only send to backend if this is the first listener for this bindingKey
       if (callbacks.size === 1) {
         this._log('INFO', `First callback for bindingKey ${bindingKey}; sending listen request`);
-        await this._sendWithAck({ action: 'listen', bindingKey });
+        this._sendOrEnqueue({ action: 'listen', bindingKey });
       }
     }
   }
 
-  public listenRaw(
-    bindingKey: string,
-    callback: (payload: any) => void
-  ): Promise<void> {
-    return this.listen(bindingKey, callback, false);
+  public listenRaw(bindingKey: string, callback: (payload: any) => void) {
+    this.listen(bindingKey, callback, false);
   }
 
-  public listenJson(
-    bindingKey: string,
-    callback: (payload: any) => void
-  ): Promise<void> {
-    return this.listen(bindingKey, callback, true);
+  public listenJson(bindingKey: string, callback: (payload: any) => void) {
+    this.listen(bindingKey, callback, true);
   }
 
-  public async unlisten(
+  public unlisten(
     bindingKey: string,
     callback: (payload: any) => void
-  ): Promise<void> {
+  ) {
     this._log('INFO', `Removing listener for bindingKey: ${bindingKey}`);
     const callbacks = this._messageListeners.get(bindingKey);
     if (!callbacks || !callbacks.has(callback)) {
@@ -342,98 +237,55 @@ export default class WebMQClient {
     if (callbacks.size === 0) {
       this._log('INFO', `No more callbacks for bindingKey ${bindingKey}; sending unlisten request`);
       this._messageListeners.delete(bindingKey); // Clean up empty Map
-      await this._sendWithAck({ action: 'unlisten', bindingKey });
+      this._sendOrEnqueue({ action: 'unlisten', bindingKey });
     }
   }
 
-  private _onClose = (event: Event) => {
-    this._pendingMessages.forEach(({ reject }) =>
-      reject(new Error('Connection closed'))
-    );
-    this._pendingMessages.clear();
-    this._log('INFO', `WebMQClient connection closed`, event)
-  };
+  private _sendOrEnqueue(header: ClientMessageHeader, payload?: ArrayBuffer) {
+    const messageId = uuid();
 
-  private _sendWithAck(
-    header: ClientMessageHeader,
-    payload?: ArrayBuffer
-  ): Promise<void> {
-    return new Promise(async (resolve, reject) => {
-      const messageId = uuid();
-      const timeout = setTimeout(() => {
-        this._pendingMessages.delete(messageId);
-        reject(new Error('Message timeout'));
-      }, this.timeoutDelay);
-
-      this._pendingMessages.set(messageId, {
-        resolve: () => {
-          clearTimeout(timeout);
-          resolve();
-        },
-        reject: (err?: Error) => {
-          clearTimeout(timeout);
-          reject(err || new Error('Message rejected'));
-        },
-      });
-
-      if (this._identified) {
-        let actualHeader: ClientMessageHeader = { ...header, messageId };
-        try {
-          actualHeader = await this._runHooks('pre', actualHeader);
-          actualHeader = await this._runHooks(header.action, actualHeader);
-          actualHeader = await this._runHooks('post', actualHeader);
-          this._ws?.send(bundleData(actualHeader, payload));
-        } catch (error) {
-          this._log('error', 'Error sending message', error);
-        }
-      } else {
-        this._messageQueue.push({ header: { ...header, messageId }, payload });
+    if (this._ws?.readyState === WebSocket.OPEN) {
+      let actualHeader: ClientMessageHeader = { ...header, messageId };
+      try {
+        actualHeader = this._runHooks('pre', actualHeader);
+        actualHeader = this._runHooks(header.action, actualHeader);
+        actualHeader = this._runHooks('post', actualHeader);
+        this._ws?.send(bundleData(actualHeader, payload));
+      } catch (error) {
+        this._log('error', 'Error sending message', error);
       }
-    });
+    } else {
+      this._messageQueue.push({ header: { ...header, messageId }, payload });
+    }
   }
 
-  public addHook(
-    action: 'pre' | 'post',
-    hook: HookFunction<MessageHeader>
-  ): void;
+  public addHook(action: 'pre' | 'post', hook: HookFunction<MessageHeader>): void;
   public addHook(
     action: 'identify' | 'publish' | 'listen' | 'unlisten',
     hook: HookFunction<ClientMessageHeader>
   ): void;
-  public addHook(
-    action: 'message',
-    hook: HookFunction<ServerMessageHeader>
-  ): void;
+  public addHook(action: 'message', hook: HookFunction<ServerMessageHeader>): void;
   public addHook(action: HookName, hook: HookFunction<any>): void {
     this._log('INFO', `Adding hook for action: ${action}`);
     this._hooks[action].add(hook);
   }
 
-  public removeHook(
-    action: 'pre' | 'post',
-    hook: HookFunction<MessageHeader>
-  ): void;
+  public removeHook(action: 'pre' | 'post', hook: HookFunction<MessageHeader>): void;
   public removeHook(
     action: 'identify' | 'publish' | 'listen' | 'unlisten',
     hook: HookFunction<ClientMessageHeader>
   ): void;
-  public removeHook(
-    action: 'message',
-    hook: HookFunction<ServerMessageHeader>
-  ): void;
+  public removeHook(action: 'message', hook: HookFunction<ServerMessageHeader>): void;
   public removeHook(action: HookName, hook: HookFunction<any>): void {
     this._log('INFO', `Removing hook for action: ${action}`);
     this._hooks[action].delete(hook);
   }
 
-  private async _runHooks<T extends MessageHeader>(
-    hookName: HookName,
-    header: T
-  ): Promise<T> {
+  private _runHooks<T extends MessageHeader>(hookName: HookName, header: T) {
     const hooks = this._hooks[hookName] as Set<HookFunction<MessageHeader>>;
     let actualHeader: MessageHeader = header;
     for (const hook of hooks) {
-      actualHeader = await hook(actualHeader);
+      actualHeader = hook(actualHeader);
       if (actualHeader === undefined) {
         throw new Error(`Hook ${hookName} did not return a header object`);
       }

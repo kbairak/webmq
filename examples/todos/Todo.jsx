@@ -1,8 +1,7 @@
 import { useState, useEffect, useCallback, useContext } from 'react';
-import { publish, listen, unlisten } from 'webmq-frontend';
 import UserContext from './UserContext';
 
-function Todo({ id, initialData, onDelete }) {
+function Todo({ id, initialData, onDelete, webMQClient }) {
   const { username } = useContext(UserContext);
   const [text, setText] = useState(initialData.text || '');
   const [completed, setCompleted] = useState(initialData.completed || false);
@@ -21,25 +20,20 @@ function Todo({ id, initialData, onDelete }) {
     setTimeout(() => setJustUpdated(false), 1000);
   }, []);
 
-  const handleDeleted = useCallback((payload) => {
-    onDelete(id);
-  }, []);
+  const handleDeleted = useCallback(() => onDelete(id), [id, onDelete]);
 
   useEffect(() => {
-    listen(`todos.updated.${id}`, handleUpdated);
-    listen(`todos.deleted.${id}`, handleDeleted);
+    webMQClient.listen(`todos.updated.${id}`, handleUpdated);
+    webMQClient.listen(`todos.deleted.${id}`, handleDeleted);
     return () => {
-      unlisten(`todos.deleted.${id}`, handleDeleted);
-      unlisten(`todos.updated.${id}`, handleUpdated);
+      webMQClient.unlisten(`todos.deleted.${id}`, handleDeleted);
+      webMQClient.unlisten(`todos.updated.${id}`, handleUpdated);
     };
-  }, []);
+  }, [handleUpdated, handleDeleted, id, webMQClient]);
 
   const handleToggleComplete = async () => {
-    await publish(`todos.updated.${id}`, {
-      text,
-      completed: !completed,
-      user: username,
-      timestamp: Date.now(),
+    await webMQClient.publish(`todos.updated.${id}`, {
+      text, completed: !completed, user: username, timestamp: Date.now()
     });
   };
 
@@ -53,7 +47,7 @@ function Todo({ id, initialData, onDelete }) {
 
     if (!editText.trim()) return;
 
-    publish(`todos.updated.${id}`, {
+    webMQClient.publish(`todos.updated.${id}`, {
       text: editText,
       completed,
       user: username,
@@ -68,7 +62,7 @@ function Todo({ id, initialData, onDelete }) {
   };
 
   const handleDelete = async () => {
-    await publish(`todos.deleted.${id}`, {
+    await webMQClient.publish(`todos.deleted.${id}`, {
       user: username,
       timestamp: Date.now(),
     });

@@ -1,4 +1,4 @@
-import { WebMQServer } from 'webmq-backend';
+import WebMQServer from '@webmq-backend';
 import { RabbitMQContainer } from '@testcontainers/rabbitmq';
 
 const rabbitmq = await new RabbitMQContainer(
@@ -6,9 +6,7 @@ const rabbitmq = await new RabbitMQContainer(
 ).start();
 
 const server = new WebMQServer({
-  rabbitmqUrl: rabbitmq.getAmqpUrl(),
-  exchangeName: 'todos_exchange',
-  port: 8080,
+  rmqUrl: rabbitmq.getAmqpUrl(), exchange: 'todos_exchange', port: 8080
 });
 // server.logLevel = 'debug';
 await server.start();
