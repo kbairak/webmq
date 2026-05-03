@@ -1,0 +1,17 @@
+{
+  "extends": "expo/tsconfig.base",
+  "compilerOptions": {
+    "strict": true,
+    "target": "ES2022",
+    "module": "esnext",
+    "moduleResolution": "node",
+    "paths": {
+      "webmq-backend": [
+        "../../packages/backend/src/index_.ts"
+      ],
+      "webmq-frontend": [
+        "../../packages/frontend/src/index_.ts"
+      ]
+    }
+  }
+}

@@ -1,4 +1,6 @@
-export default class ReconnectingWebSocket extends EventTarget {
+import EventEmitter from './EventEmitter';
+
+export default class ReconnectingWebSocket extends EventEmitter {
   private _ws: WebSocket | null = null;
   private _reconnectAttempts = 0;
   private _shouldReconnect = true;
@@ -17,9 +19,9 @@ export default class ReconnectingWebSocket extends EventTarget {
     this._ws.addEventListener('open', () => {
       if (this._reconnectAttempts > 0) {
         this._reconnectAttempts = 0;
-        this.dispatchEvent(new Event('reconnected'));
+        this.emit('reconnected');
       } else {
-        this.dispatchEvent(new Event('open'));
+        this.emit('open');
       }
     });
 
@@ -28,44 +30,24 @@ export default class ReconnectingWebSocket extends EventTarget {
         !this._shouldReconnect ||
         this._reconnectAttempts >= this.reconnectDelays.length
       ) {
-        this.dispatchEvent(
-          new CloseEvent(event.type, {
-            code: event.code,
-            reason: event.reason,
-            wasClean: event.wasClean,
-          })
-        );
+        this.emit('close', event.code, event.reason, event.wasClean);
       } else {
         if (this._reconnectAttempts === 0) {
-          this.dispatchEvent(new Event('reconnecting'));
+          this.emit('reconnecting');
         }
         await new Promise((resolve) =>
           setTimeout(resolve, this.reconnectDelays[this._reconnectAttempts])
-        ); // Exponential backoff
+        );
         this._connect();
         this._reconnectAttempts++;
       }
     });
 
     this._ws.addEventListener('error', (event: Event) => {
-      this.dispatchEvent(
-        new Event(event.type, {
-          bubbles: event.bubbles,
-          cancelable: event.cancelable,
-          composed: event.composed,
-        })
-      );
+      this.emit('error', event);
     });
     this._ws.addEventListener('message', (event: MessageEvent) => {
-      this.dispatchEvent(
-        new MessageEvent(event.type, {
-          data: event.data,
-          origin: event.origin,
-          lastEventId: event.lastEventId,
-          source: event.source,
-          ports: [...event.ports],
-        })
-      );
+      this.emit('message', event.data);
     });
   }
 

@@ -1,38 +1,31 @@
-import { v4 as uuid } from 'uuid';
-import ReconnectingWebSocket from './ReconnectingWebSocket';
+import { io, Socket } from 'socket.io-client';
 import { bundleData, unbundleData } from './bundle';
 
-// Types
-interface ClientMessageHeader {
-  action: 'identify' | 'publish' | 'listen' | 'unlisten';
-  messageId?: string;
-  routingKey?: string;
-  bindingKey?: string;
-  [key: string]: any;
-}
-interface ServerMessageHeader {
-  messageId?: string;
-  routingKey?: string;
-  [key: string]: any;
-}
-type MessageHeader = ClientMessageHeader | ServerMessageHeader;
-
-type HookName =
-  | 'pre'
-  | 'identify'
-  | 'publish'
-  | 'listen'
-  | 'unlisten'
-  | 'message'
-  | 'post';
-type HookFunction<T extends MessageHeader> = (header: T) => T;
 type LogLevel = 'DEBUG' | 'INFO' | 'WARNING' | 'ERROR' | 'SILENT';
 interface WebMQClientOptions {
   url: string;
   sessionId: string;
-  reconnectDelays?: number[];
   logLevel?: LogLevel;
 }
+interface ServerMessageHeader {
+  routingKey: string;
+  [key: string]: JsonSerializable;
+}
+interface ClientMessageHeader {
+  routingKey?: string;
+  bindingKey?: string;
+  [key: string]: any;
+}
+type MessageHeader = ClientMessageHeader | ServerMessageHeader;
+type HookName = 'pre' | 'identify' | 'publish' | 'listen' | 'unlisten' | 'message' | 'post';
+type HookFunction<T extends MessageHeader> = (header: T) => T;
+type JsonSerializable =
+  | string
+  | number
+  | boolean
+  | null
+  | JsonSerializable[]
+  | { [key: string]: JsonSerializable };
 
 export {
   WebMQClientOptions,
@@ -41,15 +34,15 @@ export {
   MessageHeader,
   HookName,
   HookFunction,
+  JsonSerializable,
 };
 
 export default class WebMQClient {
-  private _ws: ReconnectingWebSocket | null = null;
-  private _messageListeners = new Map<
-    string,
-    Map<(payload: any) => void, boolean>
-  >();
-  private _messageQueue: { header: ClientMessageHeader; payload?: ArrayBuffer; }[] = [];
+  readonly url: string;
+  readonly sessionId: string;
+  public logLevel: LogLevel = 'INFO';
+  private _socket: Socket | null = null;
+  private _messageListeners = new Map<string, Map<(payload: any) => void, boolean>>();
   private _hooks = {
     pre: new Set<HookFunction<MessageHeader>>(),
     identify: new Set<HookFunction<ClientMessageHeader>>(),
@@ -60,18 +53,9 @@ export default class WebMQClient {
     post: new Set<HookFunction<MessageHeader>>(),
   };
 
-  // Options
-  readonly url: string;
-  readonly sessionId: string;
-  public reconnectDelays = [0, 1000, 2000, 4000, 8000];
-  public logLevel: LogLevel = 'INFO';
-
   constructor(options: WebMQClientOptions) {
     this.url = options.url;
     this.sessionId = options.sessionId;
-    if (options.reconnectDelays) {
-      this.reconnectDelays = options.reconnectDelays;
-    }
     if (options.logLevel) {
       this.logLevel = options.logLevel;
     }
@@ -79,96 +63,48 @@ export default class WebMQClient {
   }
 
   public connect() {
-    // Clean up any existing connection before creating a new one
-    if (this._ws) {
-      this._ws.close(1000, 'Reconnecting');
-      this._ws = null;
-    }
-
     this._log('INFO', `WebMQClient connecting to ${this.url}`);
-    this._ws = new ReconnectingWebSocket(this.url, this.reconnectDelays);
-    this._ws.binaryType = 'arraybuffer';
-
-    let identifyMessageId = uuid();
-    this._ws?.addEventListener('error', (err: Event) => {
-      this._log('ERROR', 'WebMQClient encountered an error', err);
+    this._socket = io(this.url, {
+      auth: { sessionId: this.sessionId },
+      reconnectionDelay: 500,      // Start reconnecting after 500ms
+      reconnectionDelayMax: 2000,  // Max delay between attempts
     });
 
-    this._ws?.addEventListener('close', (event) => {
-      this._log('INFO', `WebMQClient connection closed`, event)
-    });
-
-    const onOpen = () => {
-      this._log(
-        'INFO',
-        `WebMQClient connection established, sending identify with sessionId: ${this.sessionId}`
-      );
-      try {
-        let header = this._runHooks('pre', {
-          action: 'identify',
-          messageId: identifyMessageId,
-          sessionId: this.sessionId,
-        });
-        header = this._runHooks('identify', header);
-        header = this._runHooks('post', header);
-        this._ws?.send(bundleData(header));
-        this._messageQueue.forEach(({ header, payload }) => {
-          this._sendOrEnqueue(header, payload);
-        });
-      } catch (error) {
-        this._log('error', 'Error during identify', error);
-      }
-    };
-    this._ws?.addEventListener('open', onOpen);
-    this._ws?.addEventListener('reconnected', onOpen);
-
-    this._ws?.addEventListener('message', (event: Event) => {
-      const messageEvent = event as MessageEvent;
+    this._socket.on('message', (data: ArrayBuffer, ack: () => void) => {
       let header: ServerMessageHeader, payload: ArrayBuffer | undefined;
-      if (!(messageEvent.data instanceof ArrayBuffer)) {
+      if (!(data instanceof ArrayBuffer)) {
         this._log('WARNING', 'Received message in unsupported format');
         return;
       }
       try {
-        [header, payload] = unbundleData(messageEvent.data);
+        [header, payload] = unbundleData(data);
         this._log('DEBUG', 'Received message', header);
       } catch (err) {
         this._log('WARNING', 'Failed to parse incoming message', err);
         return;
       }
-
       if (!header.routingKey) {
         this._log('WARNING', 'Received message without routingKey');
         return;
       }
-
       [...this._messageListeners.keys()]
-        .filter((bindingKey) =>
-          matchesPattern(header.routingKey!, bindingKey)
-        )
+        .filter((bindingKey) => matchesPattern(header.routingKey!, bindingKey))
         .forEach((bindingKey) => {
-          this._messageListeners
-            .get(bindingKey)
-            ?.forEach((isJson, callback) => {
-              if (isJson) {
-                const decoder = new TextDecoder();
-                const payloadString = decoder.decode(payload);
-                const decodedPayload = JSON.parse(payloadString);
-                callback(decodedPayload);
-              } else {
-                callback(payload);
-              }
-            });
+          this._messageListeners.get(bindingKey)?.forEach((isJson, callback) => {
+            if (isJson) {
+              const decoder = new TextDecoder();
+              const payloadString = decoder.decode(payload);
+              const decodedPayload = JSON.parse(payloadString);
+              callback(decodedPayload);
+            } else {
+              callback(payload);
+            }
+          });
         });
-    });
 
-    this._ws?.addEventListener('reconnecting', () => {
-      this._log(
-        'WARNING',
-        'WebMQClient connection lost, attempting to reconnect'
-      );
+      // Acknowledge message receipt to backend
+      if (ack) ack();
     });
-
     // Graceful shutdown on page unload
     if (typeof window !== 'undefined' && window.addEventListener) {
       window.addEventListener('beforeunload', () => {
@@ -178,40 +114,49 @@ export default class WebMQClient {
   }
 
   public disconnect() {
-    this._log('INFO', 'WebMQClient disconnecting');
-    const ws = this._ws;  // Capture the reference
-    if (ws?.readyState === WebSocket.OPEN) {
-      ws.close(1000, 'Client disconnect');
-    } else if (ws) {
-      ws.addEventListener('open', () => ws.close(1000, 'Client disconnect'));
-    }
-    this._ws = null;  // Clear it so we know it's disconnected
+    this._socket?.disconnect();
   }
 
-  public publish(routingKey: string, payload: ArrayBuffer | object | any[]) {
+  public publish(routingKey: string, payload: ArrayBuffer | JsonSerializable) {
     this._log('DEBUG', `Publishing message with routingKey: ${routingKey}`);
     const actualPayload =
       payload instanceof ArrayBuffer
         ? payload
         : new TextEncoder().encode(JSON.stringify(payload)).buffer;
-
-    this._sendOrEnqueue({ action: 'publish', routingKey }, actualPayload);
+    try {
+      const header = this._runHooks(['pre', 'publish', 'post'], { routingKey });
+      const bundled = bundleData(header, actualPayload);
+      this._socket?.emit('publish', bundled);
+    } catch (error) {
+      this._log('error', 'Error sending message', error);
+    }
   }
 
-  public listen(bindingKey: string, callback: (payload: any) => void, isJson: boolean = true) {
+  public listen(
+    bindingKey: string,
+    callback: (payload: JsonSerializable) => void,
+    isJson?: true
+  ): void;
+  public listen(bindingKey: string, callback: (payload: ArrayBuffer) => void, isJson: false): void;
+  public listen(bindingKey: string, callback: (payload: any) => void, isJson?: boolean) {
     this._log('INFO', `Adding listener for bindingKey: ${bindingKey}`);
     let callbacks = this._messageListeners.get(bindingKey);
     if (!callbacks) {
       callbacks = new Map<(payload: any) => void, boolean>();
       this._messageListeners.set(bindingKey, callbacks);
     }
-
     if (!callbacks.has(callback)) {
-      callbacks.set(callback, isJson);
+      callbacks.set(callback, isJson ?? true);
       // Only send to backend if this is the first listener for this bindingKey
       if (callbacks.size === 1) {
         this._log('INFO', `First callback for bindingKey ${bindingKey}; sending listen request`);
-        this._sendOrEnqueue({ action: 'listen', bindingKey });
+        try {
+          const header = this._runHooks(['pre', 'listen', 'post'], { bindingKey });
+          const bundled = bundleData(header);
+          this._socket?.emit('listen', bundled);
+        } catch (error) {
+          this._log('error', 'Error sending message', error);
+        }
       }
     }
   }
@@ -224,10 +169,7 @@ export default class WebMQClient {
     this.listen(bindingKey, callback, true);
   }
 
-  public unlisten(
-    bindingKey: string,
-    callback: (payload: any) => void
-  ) {
+  public unlisten(bindingKey: string, callback: (payload: any) => void) {
     this._log('INFO', `Removing listener for bindingKey: ${bindingKey}`);
     const callbacks = this._messageListeners.get(bindingKey);
     if (!callbacks || !callbacks.has(callback)) {
@@ -237,25 +179,13 @@ export default class WebMQClient {
     if (callbacks.size === 0) {
       this._log('INFO', `No more callbacks for bindingKey ${bindingKey}; sending unlisten request`);
       this._messageListeners.delete(bindingKey); // Clean up empty Map
-      this._sendOrEnqueue({ action: 'unlisten', bindingKey });
-    }
-  }
-
-  private _sendOrEnqueue(header: ClientMessageHeader, payload?: ArrayBuffer) {
-    const messageId = uuid();
-
-    if (this._ws?.readyState === WebSocket.OPEN) {
-      let actualHeader: ClientMessageHeader = { ...header, messageId };
       try {
-        actualHeader = this._runHooks('pre', actualHeader);
-        actualHeader = this._runHooks(header.action, actualHeader);
-        actualHeader = this._runHooks('post', actualHeader);
-        this._ws?.send(bundleData(actualHeader, payload));
+        const header = this._runHooks(['pre', 'unlisten', 'post'], { bindingKey });
+        const bundled = bundleData(header);
+        this._socket?.emit('unlisten', bundled);
       } catch (error) {
         this._log('error', 'Error sending message', error);
       }
-    } else {
-      this._messageQueue.push({ header: { ...header, messageId }, payload });
     }
   }
 
@@ -281,16 +211,23 @@ export default class WebMQClient {
     this._hooks[action].delete(hook);
   }
 
-  private _runHooks<T extends MessageHeader>(hookName: HookName, header: T) {
-    const hooks = this._hooks[hookName] as Set<HookFunction<MessageHeader>>;
-    let actualHeader: MessageHeader = header;
-    for (const hook of hooks) {
-      actualHeader = hook(actualHeader);
-      if (actualHeader === undefined) {
-        throw new Error(`Hook ${hookName} did not return a header object`);
+  private _runHooks<T extends MessageHeader>(hookName: HookName | HookName[], header: T) {
+    let result: MessageHeader = header;
+    if (Array.isArray(hookName)) {
+      for (const name of hookName) {
+        result = this._runHooks(name, result);
+      }
+    } else {
+      const hooks = this._hooks[hookName] as Set<HookFunction<MessageHeader>>;
+      let result: MessageHeader = header;
+      for (const hook of hooks) {
+        result = hook(result);
+        if (result === undefined) {
+          throw new Error(`Hook ${hookName} did not return a header object`);
+        }
       }
     }
-    return actualHeader as T;
+    return result as T;
   }
 
   private _log(logLevel: string, message: any, err?: any) {
@@ -307,6 +244,21 @@ export default class WebMQClient {
     if (err) {
       this._log('DEBUG', err);
     }
+  }
+
+  // Map `on` and `off` to underlying socket's `on` and `off`
+  public on(...args: Parameters<Socket['on']>): ReturnType<Socket['on']> {
+    if (!this._socket) {
+      throw new Error('WebMQClient is not connected. Call connect() before adding listeners.');
+    }
+    return this._socket.on(...args);
+  }
+
+  public off(...args: Parameters<Socket['on']>): ReturnType<Socket['on']> {
+    if (!this._socket) {
+      throw new Error('WebMQClient is not connected. Call connect() before adding listeners.');
+    }
+    return this._socket.off(...args);
   }
 }
 

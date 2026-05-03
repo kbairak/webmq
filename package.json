@@ -21,8 +21,6 @@
   "author": "Konstantinos Bairaktaris <ikijob@gmail.com>",
   "license": "ISC",
   "workspaces": [
-    "packages/*",
-    "examples/*",
-    "e2e-tests"
+    "packages/*"
   ]
 }

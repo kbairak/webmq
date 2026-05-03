@@ -1,14 +1,12 @@
+import { MessageHeader } from './index';
+
 /**
- * Bundles a JSON header and an optional binary payload into a single ArrayBuffer.
+ * Bundles a JSON header and an optional binary payload into a Uint8Array.
  * Structure: [4 bytes (Header Length)] + [Header (JSON)] + [Optional Payload]
  */
-export function bundleData(
-  header: object,
-  payload?: ArrayBuffer | Buffer
-): ArrayBuffer {
+export function bundleData(header: MessageHeader, payload?: ArrayBuffer | Buffer): Uint8Array {
   // 1. Convert JSON Header to bytes
-  const encoder = new TextEncoder();
-  const headerBytes = encoder.encode(JSON.stringify(header));
+  const headerBytes = new TextEncoder().encode(JSON.stringify(header));
 
   // 2. Calculate Total Length
   // Always include 4 bytes for the length + the header bytes.
@@ -31,13 +29,11 @@ export function bundleData(
   if (payload) {
     const payloadOffset = 4 + headerBytes.byteLength;
     // Handle both ArrayBuffer and Buffer
-    const payloadBytes = Buffer.isBuffer(payload)
-      ? payload
-      : new Uint8Array(payload);
+    const payloadBytes = Buffer.isBuffer(payload) ? payload : new Uint8Array(payload);
     view.set(payloadBytes, payloadOffset);
   }
 
-  return masterBuffer;
+  return view;
 }
 
 /**
@@ -45,16 +41,14 @@ export function bundleData(
  * Structure: [4 bytes (Header Length)] + [Header (JSON)] + [Optional Payload]
  * @returns [header, payload?] - Tuple of parsed header and optional payload
  */
-export function unbundleData(buffer: ArrayBuffer): [any, ArrayBuffer?] {
+export function unbundleData(buffer: ArrayBuffer): [MessageHeader, ArrayBuffer?] {
   const dataView = new DataView(buffer);
 
   // 1. Read Header Length (first 4 bytes, Big Endian)
   const headerLength = dataView.getUint32(0, false);
 
   if (headerLength > 1024 * 1024) {
-    throw new Error(
-      `Header length ${headerLength} exceeds maximum allowed size`
-    );
+    throw new Error(`Header length ${headerLength} exceeds maximum allowed size`);
   }
 
   // 2. Extract and parse Header (JSON)
@@ -65,16 +59,12 @@ export function unbundleData(buffer: ArrayBuffer): [any, ArrayBuffer?] {
 
   // 3. Extract Payload (if any exists after header)
   const payloadOffset = 4 + headerLength;
-  const payload =
-    payloadOffset < buffer.byteLength ? buffer.slice(payloadOffset) : undefined;
+  const payload = payloadOffset < buffer.byteLength ? buffer.slice(payloadOffset) : undefined;
 
   return [header, payload];
 }
 
-export async function retry<T>(
-  fn: () => Promise<T>,
-  delays = [0, 100, 200, 400]
-) {
+export async function retry<T>(fn: () => Promise<T>, delays = [0, 100, 200, 400]) {
   let error;
   for (let delay of delays) {
     await new Promise((resolve) => setTimeout(resolve, delay));

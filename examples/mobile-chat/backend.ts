@@ -1,15 +1,14 @@
-import WebMQServer from 'webmq-backend/src/index';
+import WebMQServer from 'webmq-backend';
 import { RabbitMQContainer } from '@testcontainers/rabbitmq';
 
 const rabbitmq = await new RabbitMQContainer('rabbitmq:3.11-management').start();
-console.log(`RabbitMQ started at ${rabbitmq.getAmqpUrl()}`);
 
 const server = new WebMQServer({
   rmqUrl: rabbitmq.getAmqpUrl(),
   exchange: 'chat_app',
   port: 8080,
   host: '0.0.0.0',
-  logLevel: 'DEBUG',
+  logLevel: 'DEBUG'
 });
 
 await server.start();

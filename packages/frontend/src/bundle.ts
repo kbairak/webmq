@@ -1,15 +1,11 @@
-import { MessageHeader } from './index';
+import { MessageHeader, ServerMessageHeader } from './index';
 /**
  * Bundles a JSON header and an optional binary payload into a single ArrayBuffer.
  * Structure: [4 bytes (Header Length)] + [Header (JSON)] + [Optional Payload]
  */
-export function bundleData(
-  header: MessageHeader,
-  payload?: ArrayBuffer
-): ArrayBuffer {
+export function bundleData(header: MessageHeader, payload?: ArrayBuffer): Uint8Array {
   // 1. Convert JSON Header to bytes
-  const encoder = new TextEncoder();
-  const headerBytes = encoder.encode(JSON.stringify(header));
+  const headerBytes = new TextEncoder().encode(JSON.stringify(header));
 
   // 2. Calculate Total Length
   // Always include 4 bytes for the length + the header bytes.
@@ -30,11 +26,11 @@ export function bundleData(
 
   // 6. Write the Payload (only if it exists)
   if (payload) {
-    const payloadOffset = 4 + headerBytes.byteLength;
-    view.set(new Uint8Array(payload), payloadOffset);
+    view.set(new Uint8Array(payload), 4 + headerBytes.byteLength);
   }
 
-  return masterBuffer;
+  // Convert ArrayBuffer to Uint8Array for React Native compatibility
+  return new Uint8Array(masterBuffer);
 }
 
 /**
@@ -42,7 +38,7 @@ export function bundleData(
  * Structure: [4 bytes (Header Length)] + [Header (JSON)] + [Optional Payload]
  * @returns [header, payload?] - Tuple of parsed header and optional payload
  */
-export function unbundleData(buffer: ArrayBuffer): [any, ArrayBuffer?] {
+export function unbundleData(buffer: ArrayBuffer): [ServerMessageHeader, ArrayBuffer?] {
   const dataView = new DataView(buffer);
 
   // 1. Read Header Length (first 4 bytes, Big Endian)
@@ -50,14 +46,12 @@ export function unbundleData(buffer: ArrayBuffer): [any, ArrayBuffer?] {
 
   // 2. Extract and parse Header (JSON)
   const headerBytes = new Uint8Array(buffer, 4, headerLength);
-  const decoder = new TextDecoder();
-  const headerString = decoder.decode(headerBytes);
+  const headerString = new TextDecoder().decode(headerBytes);
   const header = JSON.parse(headerString);
 
   // 3. Extract Payload (if any exists after header)
   const payloadOffset = 4 + headerLength;
-  const payload =
-    payloadOffset < buffer.byteLength ? buffer.slice(payloadOffset) : undefined;
+  const payload = payloadOffset < buffer.byteLength ? buffer.slice(payloadOffset) : undefined;
 
   return [header, payload];
 }
