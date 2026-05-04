@@ -12,51 +12,65 @@ While WebSocket libraries exist, WebMQ leverages RabbitMQ's battle-tested messag
 
 ## Quick Start
 
-Here's a complete real-time chat in under 30 lines:
+Here's a complete real-time chat in under 40 lines:
 
-**Backend** (`server.js`):
+**Backend** (`backend.ts`):
 
 ```javascript
-import { WebMQServer } from 'webmq-backend';
+import WebMQServer from 'webmq-backend';
 
-const webMQServer = new WebMQServer({
-  rabbitmqUrl: 'amqp://localhost',
-  exchangeName: 'chat_app',
-  port: 8080
+const server = new WebMQServer({
+  rmqUrl: 'amqp://localhost',
+  exchange: 'chat_app',
+  port: 8080,
+  logLevel: 'INFO'
 });
 
-await webMQServer.start();
+await server.start();
 console.log('WebMQ server running on ws://localhost:8080');
 ```
 
-**Frontend** (React component):
+**Frontend** (`App.tsx` - React):
 
-```jsx
-import { setup, listen, unlisten, publish } from 'webmq-frontend';
-import { useState, useEffect, useCallback } from 'react';
-
-setup({ url: 'ws://localhost:8080' });
+```tsx
+import { useState, useEffect, useCallback, useMemo } from 'react';
+import WebMQClient from 'webmq-frontend';
 
 export default function Chat() {
-  const username = useRef(randomName());
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
 
-  const onMessageAdded = useCallback((msg) => { setMessages((prev) => [...prev, msg]); }, []);
+  const client = useMemo(() => new WebMQClient({
+    url: 'ws://localhost:8080',
+    sessionId: crypto.randomUUID()
+  }), []);
+
+  const appendMessage = useCallback((msg) => {
+    setMessages((prev) => [...prev, msg]);
+  }, []);
+
   useEffect(() => {
-    listen('chat.messages', onMessageAdded);
-    return () => unlisten('chat.messages', onMessageAdded);
-  }, [onMessageAdded]);
+    client.connect();
+    client.listen('chat.messages', appendMessage);
+    return () => {
+      client.unlisten('chat.messages', appendMessage);
+      client.disconnect();
+    };
+  }, [client, appendMessage]);
 
   const sendMessage = (e) => {
     e.preventDefault();
-    publish('chat.messages', { id: crypto.randomUUID(), text: input, user: username.current });
+    client.publish('chat.messages', {
+      id: crypto.randomUUID(),
+      text: input,
+      user: 'Me'
+    });
     setInput('');
   };
 
   return (
     <div>
-      {messages.map(msg => <p key={msg.id}>{msg.user}: {msg.text}</p>)}
+      {messages.map(msg => <p key={msg.id}><b>{msg.user}</b>: {msg.text}</p>)}
       <form onSubmit={sendMessage}>
         <input value={input} onChange={(e) => setInput(e.target.value)} />
         <button>Send</button>
@@ -66,343 +80,248 @@ export default function Chat() {
 }
 ```
 
-> You can run this example with
+> You can run this example with:
 >
 > ```sh
 > cd examples/basic-chat
 > npm install
-> npm run start
+> npm start
 > ```
 
-*Note: WebMQ works with any frontend framework—React, Vue, vanilla JavaScript, or anything that can use WebSockets.*
+*Note: WebMQ works with any frontend framework—React, Vue, vanilla JavaScript, React Native, or anything that can use WebSockets.*
 
 ## Core Concepts
 
 WebMQ acts as a bridge between WebSocket connections and RabbitMQ's topic exchange. When a frontend publishes to `user.login`, it's routed through RabbitMQ to any backend services or other frontends listening for `user.*` or `user.login` specifically.
 
-**Topic Routing**: Use patterns like `chat.room.1`, `order.created`, or `user.profile.updated` to organize your events. Subscribers can listen to exact matches (`order.created`) or patterns (`order.*` for all order events).
+**Topic Routing**: Use patterns like `chat.room.1`, `order.created`, or `user.profile.updated` to organize your events. Subscribers can listen to exact matches (`order.created`) or patterns (`order.*` for all order events, `#` for wildcard matching).
 
 **Bidirectional Flow**: Frontends can both publish events and subscribe to updates. Backend services can process events and publish results back to specific users or broadcast to all connected clients.
 
+**Guaranteed Delivery**: Messages from RabbitMQ are only acknowledged after the client confirms receipt, ensuring no messages are lost during network interruptions or reconnections.
+
 ### Server-Side Hooks
 
-WebMQ uses Express-style middleware hooks to intercept and process messages on the backend. Each hook receives a `context` (connection data), `next` function, and `message` (the client request). Call `await next()` to continue to the next hook, return without calling `next` to abort silently, or throw an error to reject the request.
+Hooks allow you to intercept and transform messages on the backend. Each hook is an async function that receives a message header and context, and returns a (possibly modified) header.
 
 ```javascript
-// Authentication hook
-const authenticationHook = async (context, next, message) => {
-  if (message.action === 'auth') {
-    const user = await validateToken(message.payload.token);
-    if (!user) throw new Error('Invalid token');
-    context.user = user;
-    return; // Don't call next() for auth messages
-  }
-
-  if (!context.user) {
-    throw new Error('Authentication required');
-  }
-
-  await next(); // Continue to action-specific hooks
+// Add user metadata from socket auth
+const authHook = async (header, context, rmqMessage) => {
+  // context.socket.handshake.auth contains the sessionId
+  // You can add authentication logic here
+  return { ...header, userId: context.sessionId };
 };
 
-// Authorization hook - only allow listening to events ending in user's UUID
-const authorizationHook = async (context, next, message) => {
-  if (message.action === 'listen') {
-    const userUUID = context.user.id;
-    if (!message.bindingKey.endsWith(userUUID)) {
-      throw new Error('Cannot listen to events for other users');
-    }
+// Enforce authorization on binding keys
+const authzHook = async (header, context, rmqMessage) => {
+  if (header.bindingKey && !header.bindingKey.startsWith('public.')) {
+    // Only allow listening to public topics
+    throw new Error('Unauthorized binding key');
   }
-
-  await next();
+  return header;
 };
 
-// Payload enhancement hook - add user ID to all published messages
-const payloadEnhancementHook = async (context, next, message) => {
-  if (message.action === 'publish') {
-    message.payload.userId = context.user.id;
-    message.payload.timestamp = Date.now();
-  }
-
-  await next();
+// Add timestamps to all published messages
+const timestampHook = async (header, context, rmqMessage) => {
+  return { ...header, timestamp: Date.now() };
 };
 
-const webMQServer = new WebMQServer({
-  rabbitmqUrl: 'amqp://localhost',
-  exchangeName: 'secure_app',
-  port: 8080,
-  hooks: {
-    pre: [authenticationHook],        // Runs before all actions
-    onListen: [authorizationHook],    // Runs only for 'listen' actions
-    onPublish: [payloadEnhancementHook] // Runs only for 'publish' actions
-  }
+const server = new WebMQServer({
+  rmqUrl: 'amqp://localhost',
+  exchange: 'my_app',
+  port: 8080
 });
+
+// Register hooks using addHook method
+server.addHook('pre', authHook);           // Runs before all actions
+server.addHook('listen', authzHook);       // Runs only for listen actions
+server.addHook('publish', timestampHook);  // Runs only for publish actions
+
+await server.start();
 ```
 
 **Hook Types:**
 
-- **`pre`**: Runs before all actions (identify, publish, listen, unlisten)
-- **`onIdentify`**: Runs when client sends initial identification message with sessionId, establishing session queue and consumer
-- **`onPublish`**: Runs only when publishing messages, can modify `message.routingKey` and `message.payload`
-- **`onListen`**: Runs only when setting up listeners, can modify `message.bindingKey`
-- **`onUnlisten`**: Runs only when unsubscribing from listeners, can modify `message.bindingKey`
+- **`pre`**: Runs before all other hooks
+- **`wsMessage`**: Runs for all WebSocket→RabbitMQ messages (publish, listen, unlisten)
+- **`publish`**: Runs only for publish actions
+- **`listen`**: Runs only for listen actions
+- **`unlisten`**: Runs only for unlisten actions
+- **`rmqMessage`**: Runs for RabbitMQ→WebSocket messages
+- **`post`**: Runs after all other hooks
 
-**Hook Parameters:**
+**Hook Signature:**
 
-Each hook receives three parameters:
+```typescript
+type HookFunction = (
+  header: MessageHeader,
+  context: HookContext,
+  rmqMessage?: amqplib.ConsumeMessage
+) => Promise<MessageHeader>
+```
 
-- **`context`**: Persistent object containing `ws` (the WebSocket connection object) and `sessionId` (the session ID, set after identify action). Hooks can add custom properties to store user data or other state across requests.
-- **`next`**: Function to continue to the next hook or main action
-- **`message`**: Action-specific data containing:
-  - `action`: The type of action ('identify', 'publish', 'listen', 'unlisten')
-  - `routingKey`: Topic being published to (publish actions)
-  - `payload`: Message data (publish, identify actions)
-  - `bindingKey`: Topic pattern being listened to (listen, unlisten actions)
-  - `sessionId`: Session identifier (identify actions)
-  - `messageId`: A unique ID for this message (all actions)
+**Parameters:**
+
+- **`header`**: Message header object containing:
+  - `routingKey?`: Topic for publish actions
+  - `bindingKey?`: Pattern for listen/unlisten actions
+  - `rmqOptions?`: RabbitMQ publish options
+  - Custom properties you add
+- **`context`**: Contains `socket` (Socket.IO socket), `sessionId`, and any custom properties
+- **`rmqMessage`**: Only provided for `rmqMessage` hooks, contains the raw RabbitMQ message
+
+Hooks run in sequence and can modify the header. Throwing an error aborts the action.
 
 ### Client-Side Hooks
 
-WebMQ also supports middleware-style hooks on the frontend to intercept and process messages before they're sent or received. Client-side hooks follow the exact same Express-style pattern as backend hooks, using `context`, `next()`, and `message` parameters.
+Frontend hooks are synchronous functions that transform message headers before they're sent.
 
 ```javascript
-import { setup } from 'webmq-frontend';
+import WebMQClient from 'webmq-frontend';
 
-// Authentication hook - add JWT token to identify message
-const authenticationHook = async (context, next, message) => {
-  message.payload = { token: sessionStorage.getItem('authToken') };
-  await next();
+// Add authentication token to all messages
+const authHook = (header) => {
+  return { ...header, token: sessionStorage.getItem('authToken') };
 };
 
-// Logging hook - track all messages
-const loggingHook = async (context, next, message) => {
-  console.log('Processing:', message.action, message.routingKey || message.bindingKey);
-  await next();
+// Log all published messages
+const loggingHook = (header) => {
+  console.log('Publishing:', header.routingKey);
+  return header;
 };
 
-// Message transformation hook - decrypt incoming messages
-const decryptionHook = async (context, next, message) => {
-  if (message.payload && message.payload.encrypted) {
-    message.payload.data = decrypt(message.payload.encrypted);
-    delete message.payload.encrypted;
-  }
-  await next();
+// Transform incoming messages
+const transformHook = (header) => {
+  return { ...header, receivedAt: Date.now() };
 };
 
-setup({
-  url: 'ws://localhost:8080', 
-  hooks: {
-    pre: [loggingHook],                           // Run before all actions
-    onIdentify: [authenticationHook],             // Run when establishing connection
-    onMessage: [decryptionHook]                   // Run for incoming messages
-  }
+const client = new WebMQClient({
+  url: 'ws://localhost:8080',
+  sessionId: crypto.randomUUID()
 });
+
+// Register hooks using addHook method
+client.addHook('pre', loggingHook);      // Runs before all actions
+client.addHook('publish', authHook);     // Runs only for publish
+client.addHook('message', transformHook); // Runs for incoming messages
+
+client.connect();
 ```
 
 **Hook Types:**
 
-- **`pre`**: Runs before all actions (identify, publish, listen, unlisten, message processing)
-- **`onIdentify`**: Runs when establishing WebSocket connection, can add authentication data to `message.payload`
-- **`onPublish`**: Runs only when publishing messages, can modify `message.routingKey` and `message.payload`
-- **`onListen`**: Runs only when setting up listeners, can modify `message.bindingKey`
-- **`onUnlisten`**: Runs only when unsubscribing from listeners, can modify `message.bindingKey`
-- **`onMessage`**: Runs for all incoming messages, can modify `message.payload` before callbacks
+- **`pre`**: Runs before all other hooks
+- **`publish`**: Runs only for publish actions
+- **`listen`**: Runs only for listen actions
+- **`unlisten`**: Runs only for unlisten actions
+- **`message`**: Runs for incoming messages from RabbitMQ
+- **`post`**: Runs after all other hooks
 
-**Hook Parameters:**
+**Hook Signature:**
 
-Each hook receives three parameters:
-
-- **`context`**: Persistent object containing `client` reference and user data
-- **`next`**: Function to continue to the next hook or main action
-- **`message`**: Action-specific data containing:
-  - `action`: The type of action ('publish', 'listen', 'message')
-  - `routingKey`: Topic being published to (publish actions)
-  - `payload`: Message data (publish, message actions)
-  - `bindingKey`: Topic pattern being listened to (listen, message actions)
-  - `callback`: Message handler function (listen actions)
-
-The context persists across different actions, allowing hooks to maintain state:
-
-```javascript
-const sessionHook = async (context, next, message) => {
-  if (!context.sessionId) {
-    context.sessionId = generateSessionId();
-  }
-  // sessionId will be available in all subsequent hook calls
-  await next();
-};
+```typescript
+type HookFunction<T extends MessageHeader> = (header: T) => T
 ```
 
-**Error Handling:**
-
-If a hook throws an error, the action is aborted:
-
-- Publishing: The publish promise rejects
-- Listening: The listen promise rejects
-- Message processing: The message callback is not called
+Hooks receive a header object and must return a (possibly modified) header. Throwing an error will abort the action.
 
 ### Logging Configuration
 
-Both frontend and backend support configurable logging levels for debugging and monitoring:
+Both frontend and backend support configurable logging levels:
 
 ```javascript
-// Frontend logging
-import { webMQClient } from 'webmq-frontend';
-webMQClient.logLevel = 'debug'; // 'silent' | 'error' | 'warn' | 'info' | 'debug'
-
-// Backend logging
-const webMQServer = new WebMQServer({
-  rabbitmqUrl: 'amqp://localhost',
-  exchangeName: 'my_app',
-  port: 8080
+// Frontend
+const client = new WebMQClient({
+  url: 'ws://localhost:8080',
+  sessionId: crypto.randomUUID(),
+  logLevel: 'DEBUG'  // 'SILENT' | 'ERROR' | 'WARNING' | 'INFO' | 'DEBUG'
 });
-webMQServer.logLevel = 'info';
+
+// Backend
+const server = new WebMQServer({
+  rmqUrl: 'amqp://localhost',
+  exchange: 'my_app',
+  port: 8080,
+  logLevel: 'INFO'  // 'SILENT' | 'ERROR' | 'WARNING' | 'INFO' | 'DEBUG'
+});
 ```
 
-### EventEmitter Events
+### Connection Events
 
-The WebMQClient extends EventEmitter, providing connection state monitoring:
-
-**Frontend Events:**
-
-- `'connected'`: Initial connection established
-- `'disconnected'`: Connection lost
-- `'reconnecting'`: Connection is attempting to reconnect (includes retry count in event data)
-- `'error'`: WebSocket error occurred
+The WebMQClient proxies Socket.IO events for connection monitoring:
 
 ```javascript
-// Frontend event monitoring
-import { webMQClient } from 'webmq-frontend';
-webMQClient.on('connected', () => console.log('Connected'));
-webMQClient.on('disconnected', () => console.log('Disconnected'));
-webMQClient.on('reconnecting', (event) => console.log('Reconnecting...', event));
+const client = new WebMQClient({
+  url: 'ws://localhost:8080',
+  sessionId: crypto.randomUUID()
+});
+
+client.connect();
+
+// Socket.IO connection events
+client.on('connect', () => console.log('Connected'));
+client.on('disconnect', () => console.log('Disconnected'));
+client.on('connect_error', (error) => console.log('Connection error:', error));
 ```
 
-**Note:** The backend WebMQServer does not currently emit custom events. For backend monitoring, use the built-in logging system by setting `server.logLevel = 'debug'` or Prometheus metrics integration.
+Available events: `connect`, `disconnect`, `connect_error`, `reconnect`, `reconnect_attempt`, `reconnecting`, `reconnect_error`, `reconnect_failed`
+
+**Note:** The backend WebMQServer does not emit custom events. Use the logging system or Prometheus metrics for monitoring.
 
 ### Health Check & Metrics
 
-WebMQ provides built-in support for health check and Prometheus metrics endpoints. There are three ways to set them up depending on your architecture.
-
-#### Pattern 1: Automatic Setup (Standalone Mode)
-
-When using `port` without an external HTTP server, WebMQ creates and manages the HTTP server automatically, setting up routing for you.
+WebMQ provides built-in HTTP endpoints for health checks and Prometheus metrics. When you specify `healthEndpoint` or `metricsEndpoint`, the backend automatically creates an HTTP server that handles these routes.
 
 ```javascript
-const webMQServer = new WebMQServer({
-  rabbitmqUrl: 'amqp://localhost',
-  exchangeName: 'my_app',
+const server = new WebMQServer({
+  rmqUrl: 'amqp://localhost',
+  exchange: 'my_app',
   port: 8080,
-  healthCheck: true,  // Creates /health endpoint
-  metrics: true       // Creates /metrics endpoint
-});
-await webMQServer.start();
-
-// Endpoints available at:
-// - http://localhost:8080/health
-// - http://localhost:8080/metrics
-```
-
-**Custom paths:**
-
-```javascript
-const webMQServer = new WebMQServer({
-  rabbitmqUrl: 'amqp://localhost',
-  exchangeName: 'my_app',
-  port: 8080,
-  healthCheck: '/api/health',  // Custom health endpoint
-  metrics: '/prometheus'        // Custom metrics endpoint
-});
-```
-
-#### Pattern 2: Manual Routing (External HTTP Server)
-
-When passing an external HTTP server via `server` option, you must manually wire up the endpoint handlers. This gives you full control over routing and middleware.
-
-```javascript
-import { createServer } from 'http';
-
-const httpServer = createServer((req, res) => {
-  if (req.url === '/health') {
-    webMQServer.healthCheckHandler(req, res);
-  } else if (req.url === '/metrics') {
-    webMQServer.metricsHandler(req, res);
-  } else {
-    res.writeHead(426);
-    res.end('Upgrade Required');
-  }
+  host: '0.0.0.0',
+  healthEndpoint: '/health',    // Creates health check at http://localhost:8080/health
+  metricsEndpoint: '/metrics'   // Creates metrics at http://localhost:8080/metrics
 });
 
-const webMQServer = new WebMQServer({
-  rabbitmqUrl: 'amqp://localhost',
-  exchangeName: 'my_app',
-  server: httpServer
-});
-
-await webMQServer.start();
-httpServer.listen(8080);
-```
-
-#### Pattern 3: Express Integration
-
-The most common production setup uses Express for routing, middleware, and additional endpoints.
-
-```javascript
-import express from 'express';
-import { createServer } from 'http';
-
-const app = express();
-const httpServer = createServer(app);
-
-const webMQServer = new WebMQServer({
-  rabbitmqUrl: 'amqp://localhost',
-  exchangeName: 'my_app',
-  server: httpServer
-});
-
-// Add endpoints with middleware
-app.get('/health', webMQServer.healthCheckHandler);
-app.get('/metrics', authMiddleware, webMQServer.metricsHandler);
-
-// Additional REST endpoints
-app.get('/api/stats', (req, res) => {
-  res.json({ uptime: process.uptime() });
-});
-
-await webMQServer.start();
-httpServer.listen(8080);
+await server.start();
 ```
 
 **Health Check Response:**
 
 ```json
 {
-  "status": "healthy",
-  "rabbitmq": "connected",
-  "websocket": "running",
-  "connections": 42
+  "healthy": true,
+  "rabbitMQQueues": 5,
+  "websockets": 12
 }
 ```
 
-Returns HTTP 200 when healthy, 503 when unhealthy.
+Returns HTTP 200 when healthy, 503 when unhealthy (RabbitMQ connection failures).
+
+**Metrics Endpoint:**
+
+Returns Prometheus-formatted metrics including:
+- WebSocket connections
+- RabbitMQ consumer count
+- Messages published/acked
+- Binding key counts
+- Error counts by type
 
 ### Prometheus Metrics
 
-WebMQ exposes Prometheus metrics for monitoring message throughput, latency, connections, and errors.
+WebMQ exposes Prometheus metrics for monitoring:
 
 **Available Metrics:**
 
-| Metric | Type | Description |
-|--------|------|-------------|
-| `webmq_connections_active` | Gauge | Current active WebSocket connections |
-| `webmq_rabbitmq_connected` | Gauge | RabbitMQ connection status (0=disconnected, 1=connected) |
-| `webmq_subscriptions_active` | Gauge | Current active subscriptions |
-| `webmq_messages_published_total` | Counter | Total messages published to RabbitMQ |
-| `webmq_messages_received_total` | Counter | Total messages received from RabbitMQ |
-| `webmq_errors_total{type}` | Counter | Total errors by type (rabbitmq_connection, websocket_error) |
-| `webmq_publish_duration_seconds` | Histogram | Time to publish message to RabbitMQ |
-| `webmq_messages_by_routing_key{routing_key}` | Counter | Messages published per routing key |
-| `webmq_subscriptions_by_binding_key{binding_key}` | Gauge | Subscriptions per binding key |
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `webmq_ws_connections` | Gauge | - | Active WebSocket connections |
+| `webmq_rmq_consumers` | Gauge | - | Active RabbitMQ consumers |
+| `webmq_rmq_bindings` | Gauge | `binding_key` | Active queue bindings by pattern |
+| `webmq_rmq_consecutive_failures` | Gauge | - | Consecutive RabbitMQ connection failures |
+| `webmq_ws_messages_received` | Counter | `action` | Messages received from WebSocket clients |
+| `webmq_ws_to_rmq_publishes` | Counter | `routing_key` | Messages published to RabbitMQ |
+| `webmq_rmq_messages_acked` | Counter | `routing_key` | Messages acknowledged from RabbitMQ |
+| `webmq_errors` | Counter | `type`, `action` | Errors by type and action |
 
 **Prometheus Configuration:**
 
@@ -415,69 +334,51 @@ scrape_configs:
       - targets: ['localhost:8080']
 ```
 
-**Grafana Dashboard Example:**
-
-```promql
-# Messages per second
-rate(webmq_messages_published_total[1m])
-
-# Average publish latency
-rate(webmq_publish_duration_seconds_sum[5m]) / rate(webmq_publish_duration_seconds_count[5m])
-
-# 95th percentile latency
-histogram_quantile(0.95, rate(webmq_publish_duration_seconds_bucket[5m]))
-
-# Active connections over time
-webmq_connections_active
-
-# Error rate
-rate(webmq_errors_total[5m])
-```
-
 ## Features
 
-- **Auto-reconnection**: Exponential backoff handles network interruptions
-- **Message acknowledgments**: Guaranteed delivery with Promise-based confirmations
-- **Offline queuing**: Messages sent while disconnected are queued and sent on reconnect
-- **Graceful shutdowns**: Proper cleanup of connections and resources
-- **Flexible authentication**: Middleware-style hooks for custom auth logic
-- **Client-side hooks**: Express-style middleware for frontend message processing
-- **Topic wildcards**: Subscribe to event patterns with `*` and `#` wildcards
-- **Connection events**: React to connect/disconnect/reconnect states
-- **Framework agnostic**: Works with React, Vue, Angular, or vanilla JS
+- **Guaranteed message delivery**: Backend waits for client acknowledgment before acking RabbitMQ, preventing message loss
+- **Auto-reconnection**: Fast reconnection with configurable delays (default 500ms-2s)
+- **Graceful shutdowns**: Proper cleanup of connections, queues, and resources
+- **Flexible hooks**: Transform message headers on both frontend and backend
+- **Topic wildcards**: Subscribe to event patterns with `*` (single segment) and `#` (multiple segments)
+- **Connection events**: Monitor connection state via Socket.IO events
+- **Framework agnostic**: Works with React, Vue, Angular, React Native, or vanilla JS
+- **TypeScript support**: Full type definitions with JsonSerializable types
+- **Health & metrics**: Built-in health checks and Prometheus metrics
+- **Per-session queues**: Each client gets a dedicated RabbitMQ queue with configurable TTL
 
 ## API Reference
 
 ### Frontend API
 
-#### Hybrid Singleton Pattern
+#### WebMQClient Class
 
-WebMQ uses a hybrid approach that provides convenience for common use cases while allowing flexibility for advanced scenarios. The exported functions (`setup`, `listen`, `publish`, `unlisten`) are convenience wrappers around a default singleton client instance.
+WebMQ uses a class-based client that you instantiate for each connection:
 
 ```javascript
-// Option 1: Using standalone functions (most common)
-import { setup, listen, publish, unlisten } from 'webmq-frontend';
-setup({ url: 'ws://localhost:8080' });
+import WebMQClient from 'webmq-frontend';
 
-// Option 2: Direct client instantiation
-import { WebMQClient } from 'webmq-frontend';
-const client = new WebMQClient({ url: 'ws://localhost:8080' });
+const client = new WebMQClient({
+  url: 'ws://localhost:8080',
+  sessionId: crypto.randomUUID(),
+  logLevel: 'INFO'
+});
 
-// Option 3: Create then configure
-const client = new WebMQClient({});
-client.setup({ url: 'ws://localhost:8080' });
+client.connect();
 ```
-
-For advanced features like logging or event monitoring, you can either create a custom instance or import the singleton. See [Logging Configuration](#logging-configuration) and [EventEmitter Events](#eventemitter-events) in Core Concepts.
 
 Multiple clients can be created to connect to different backends:
 
 ```javascript
-const chatClient = new WebMQClient({ url: 'ws://chat.example.com' });
-const analyticsClient = new WebMQClient({ url: 'ws://analytics.example.com' });
+const chatClient = new WebMQClient({ 
+  url: 'ws://chat.example.com', 
+  sessionId: 'chat-' + crypto.randomUUID() 
+});
+const analyticsClient = new WebMQClient({ 
+  url: 'ws://analytics.example.com',
+  sessionId: 'analytics-' + crypto.randomUUID()
+});
 ```
-
-#### WebMQClient Class
 
 **Constructor:**
 
@@ -487,56 +388,55 @@ new WebMQClient(options: WebMQClientOptions)
 
 Options:
 
-- `url` (string, optional): WebSocket server URL (e.g., 'ws://localhost:8080')
-- `hooks` (WebMQClientHooks, optional): Client-side middleware hooks
-  - `pre` (HookFunction[]): Run before all actions
-  - `onIdentify` (HookFunction[]): Run when establishing connection
-  - `onPublish` (HookFunction[]): Run for 'publish' actions
-  - `onListen` (HookFunction[]): Run for 'listen' actions
-  - `onUnlisten` (HookFunction[]): Run for 'unlisten' actions
-  - `onMessage` (HookFunction[]): Run for incoming messages
-- `ackTimeoutDelay` (number, optional): Timeout in ms for server acknowledgments (default: 5000)
-- `reconnectionDelay` (number, optional): Base delay in ms for exponential backoff (default: 1000)
-- `maxReconnectionAttempts` (number, optional): Max reconnection attempts (default: 5)
+- `url` (string, **required**): WebSocket server URL (e.g., 'ws://localhost:8080')
+- `sessionId` (string, **required**): Unique session identifier (used for RabbitMQ queue name)
+- `logLevel` (LogLevel, optional): 'SILENT' | 'ERROR' | 'WARNING' | 'INFO' | 'DEBUG' (default: 'INFO')
 
 **Methods:**
 
-- `setup(options: WebMQClientOptions): void` - Configure connection (also available as standalone import)
-  - Same options as constructor
+- `connect(): void` - Establish WebSocket connection
+  - Must be called before publish/listen
+  - Auto-reconnects on disconnect with 500ms-2s delays
 
-- `publish(routingKey: string, payload: any): Promise<void>` - Publish events (also available as standalone import)
+- `disconnect(): void` - Close WebSocket connection
+  - Cleans up listeners but preserves client state
+
+- `publish(routingKey: string, payload: ArrayBuffer | JsonSerializable): void` - Publish message
   - `routingKey`: Topic to publish to (e.g., 'chat.room.1')
-  - `payload`: Data to send (will be JSON stringified)
-  - Returns: Promise that resolves on server ACK, rejects on NACK or timeout
+  - `payload`: Either binary data (ArrayBuffer) or JSON-serializable object
+  - JSON objects are automatically stringified and encoded
 
-- `listen(bindingKey: string, callback: (payload: any) => void): Promise<void>` - Subscribe to events (also available as standalone import)
+- `listen(bindingKey: string, callback: (payload: JsonSerializable) => void, isJson?: true): void` - Subscribe to JSON messages (default)
   - `bindingKey`: Topic pattern (supports `*` for single segment, `#` for multiple segments)
-  - `callback`: Handler receiving message payload
-  - Returns: Promise that resolves when subscription is confirmed
+  - `callback`: Handler receiving parsed JSON payload
+  - Payloads are automatically decoded and parsed
 
-- `unlisten(bindingKey: string, callback: (payload: any) => void): Promise<void>` - Unsubscribe from events (also available as standalone import)
-  - `bindingKey`: Topic pattern to stop listening to
-  - `callback`: Specific callback to remove
-  - Returns: Promise that resolves when unsubscribed
+- `listen(bindingKey: string, callback: (payload: ArrayBuffer) => void, isJson: false): void` - Subscribe to binary messages
+  - `callback`: Handler receiving raw ArrayBuffer payload
 
-- `close(): void` - Disconnect and disable reconnection (also available as standalone import)
+- `listenJson(bindingKey: string, callback: (payload: JsonSerializable) => void): void` - Subscribe to JSON messages (alias)
+
+- `listenRaw(bindingKey: string, callback: (payload: ArrayBuffer) => void): void` - Subscribe to binary messages (alias)
+
+- `unlisten(bindingKey: string, callback: Function): void` - Unsubscribe from events
+  - Removes specific callback for the binding key
+  - Backend is notified when last callback is removed
+
+- `addHook(hookName: HookName, hookFunction: HookFunction): void` - Add message transformation hook
+  - See [Client-Side Hooks](#client-side-hooks) for details
+
+- `removeHook(hookName: HookName, hookFunction: HookFunction): void` - Remove hook
+
+- `on(...args): void` - Listen to Socket.IO events (proxied to internal socket)
+  - `'connect'`, `'disconnect'`, `'connect_error'`, `'reconnect'`, etc.
+
+- `off(...args): void` - Remove Socket.IO event listener
 
 **Properties:**
 
-- `logLevel` ('silent' | 'error' | 'warn' | 'info' | 'debug'): Control logging verbosity (default: 'info')
-
-**Events (extends EventEmitter):**
-
-- `'connected'`: Initial connection established
-- `'disconnected'`: Connection lost and reconnection attempts exhausted
-- `'reconnecting'`: Connection attempting to reconnect (event data contains attempt number)
-- `'error'`: WebSocket error occurred
-
-```javascript
-import { webMQClient } from 'webmq-frontend';
-webMQClient.on('connected', () => console.log('Connected'));
-webMQClient.on('reconnecting', (attempt) => console.log(`Reconnecting... attempt ${attempt}`));
-```
+- `url` (string, readonly): WebSocket server URL
+- `sessionId` (string, readonly): Session identifier
+- `logLevel` (LogLevel): Control logging verbosity
 
 ### Backend API
 
@@ -548,122 +448,133 @@ webMQClient.on('reconnecting', (attempt) => console.log(`Reconnecting... attempt
 new WebMQServer(options: WebMQServerOptions)
 ```
 
-Options (extends ws ServerOptions):
+Options:
 
-- `rabbitmqUrl` (string, **required**): AMQP connection URL (e.g., 'amqp://localhost' or 'amqp://user:pass@host:5672')
-- `exchangeName` (string, **required**): RabbitMQ exchange name (always created as durable topic exchange)
-- `port` (number, optional): Port to listen on for standalone WebSocket server
-- `server` (http.Server | https.Server, optional): Existing HTTP/HTTPS server to attach WebSocket server to
-- `healthCheck` (boolean | string, optional): Enable health check endpoint
-  - `true`: Automatically creates endpoint at `/health`
-  - `'/custom-path'`: Creates endpoint at specified path
-  - Works with both standalone (`port`) and attached (`server`) modes
-- `metrics` (boolean | string, optional): Enable Prometheus metrics endpoint
-  - `true`: Automatically creates endpoint at `/metrics`
-  - `'/custom-path'`: Creates endpoint at specified path
-  - Exposes metrics in Prometheus text format
-- `hooks` (WebMQHooks, optional): Server-side middleware hooks
-  - `pre` (HookFunction[]): Run before all actions
-  - `onIdentify` (HookFunction[]): Run when client sends identify message
-  - `onPublish` (HookFunction[]): Run for 'publish' actions
-  - `onListen` (HookFunction[]): Run for 'listen' actions
-  - `onUnlisten` (HookFunction[]): Run for 'unlisten' actions
-- All other options from [ws ServerOptions](https://github.com/websockets/ws/blob/master/doc/ws.md#new-websocketserveroptions-callback) (path, perMessageDeflate, clientTracking, etc.)
+- `rmqUrl` (string, **required**): AMQP connection URL (e.g., 'amqp://localhost' or 'amqp://user:pass@host:5672')
+- `exchange` (string, **required**): RabbitMQ exchange name (always created as durable topic exchange)
+- `port` (number, **required**): Port to listen on for HTTP and WebSocket server
+- `host` (string, optional): Host to bind to (default: all interfaces)
+- `healthEndpoint` (string, optional): HTTP path for health checks (e.g., '/health')
+- `metricsEndpoint` (string, optional): HTTP path for Prometheus metrics (e.g., '/metrics')
+- `queueTimeout` (number, optional): Queue TTL in milliseconds (default: 300000 = 5 minutes)
+  - Client queues are automatically deleted if unused for this duration
+- `logLevel` (LogLevel, optional): 'SILENT' | 'ERROR' | 'WARNING' | 'INFO' | 'DEBUG' (default: 'INFO')
 
 **Methods:**
 
-- `start(): Promise<void>` - Start WebSocket server and connect to RabbitMQ
-  - Establishes RabbitMQ connection
-  - Creates WebSocket server (standalone or attached)
-  - Sets up automatic health check endpoint if configured
-  - Registers graceful shutdown handlers
+- `start(): Promise<void>` - Start server
+  - Connects to RabbitMQ and creates exchange
+  - Starts HTTP server (for WebSocket upgrade, health, and metrics)
+  - Starts Socket.IO server with ping/pong for fast disconnect detection
+  - Registers graceful shutdown handlers for SIGTERM and SIGINT
 
-- `stop(): Promise<void>` - Stop server and cleanup resources
-  - Closes WebSocket server
-  - Closes all RabbitMQ channels and connections
-  - Removes graceful shutdown handlers
+- `stop(): Promise<void>` - Stop server gracefully
+  - Stops receiving new messages
+  - Waits for in-flight messages to complete
+  - Cancels all RabbitMQ consumers
+  - Closes WebSocket connections
+  - Closes RabbitMQ channels and connections
 
-- `healthCheckHandler: (req, res) => void` - Health check handler for manual setup
-  - Bound arrow function property (use directly without calling)
-  - Useful for integrating with Express or other frameworks
-  - Returns HTTP 200 with health status when healthy
-  - Returns HTTP 503 when unhealthy (RabbitMQ disconnected or WebSocket stopped)
+- `addHook(hookName: HookName, hookFunction: HookFunction): void` - Add message transformation hook
+  - See [Server-Side Hooks](#server-side-hooks) for details
 
-- `metricsHandler: (req, res) => void` - Prometheus metrics handler for manual setup
-  - Bound arrow function property (use directly without calling)
-  - Exposes metrics in Prometheus text format (version 0.0.4)
-  - Returns HTTP 200 with metrics data
+- `removeHook(hookName: HookName, hookFunction: HookFunction): void` - Remove hook
 
 **Properties:**
 
-- `logLevel` ('silent' | 'error' | 'warn' | 'info' | 'debug'): Control logging verbosity (default: 'info')
+- `logLevel` (LogLevel): Control logging verbosity
 
 **Examples:**
 
-Basic standalone mode:
+Basic setup:
 
 ```javascript
-const webMQServer = new WebMQServer({
-  rabbitmqUrl: 'amqp://localhost',
-  exchangeName: 'my_app',
-  port: 8080
+import WebMQServer from 'webmq-backend';
+
+const server = new WebMQServer({
+  rmqUrl: 'amqp://localhost',
+  exchange: 'my_app',
+  port: 8080,
+  healthEndpoint: '/health',
+  metricsEndpoint: '/metrics'
 });
-await webMQServer.start();
+
+await server.start();
 ```
 
-For health check and metrics setup examples, see the [Health Check & Metrics](#health-check--metrics) section in Core Concepts.
+With hooks:
+
+```javascript
+const server = new WebMQServer({
+  rmqUrl: 'amqp://localhost',
+  exchange: 'my_app',
+  port: 8080
+});
+
+server.addHook('publish', async (header, context) => {
+  return { ...header, timestamp: Date.now() };
+});
+
+await server.start();
+```
 
 ## Roadmap
 
+### Recently Completed ✅
+
+- TypeScript support with full type definitions
+- Guaranteed message delivery (client acknowledgment before RabbitMQ ack)
+- Fast disconnect detection (2s ping interval, 5s timeout)
+- React Native support with Blob compatibility fixes
+- Built-in Prometheus metrics and health checks
+- Binary (ArrayBuffer) and JSON message support with type-safe overloads
+
 ### Immediate Improvements
 
-1. Production Readiness
+1. **Developer Experience**
+   - Better error messages and error handling
+   - More example apps (collaborative editing, notifications)
+   - Better authentication examples with OAuth/JWT
 
-- Better error handling in backend (channel errors, connection recovery)
-- Graceful degradation when RabbitMQ is down
+2. **Performance**
+   - Message batching to reduce overhead
+   - Optional compression for large payloads
+   - Connection pooling for RabbitMQ channels
 
-2. Performance
-
-- Message batching to reduce overhead
-- Compression for large payloads
-
-3. Developer Experience
-
-- TypeScript support in examples
-- More example apps (notifications, collaborative editing?)
-- Better error messages
+3. **Testing**
+   - End-to-end test suite
+   - Load testing and benchmarks
+   - Integration test helpers
 
 ### Bigger Features
 
-4. Advanced Patterns
+4. **Advanced Patterns**
+   - Message persistence/replay (RabbitMQ queue durability options)
+   - Priority queues
+   - Dead letter queues for failed messages
 
-- Message persistence/replay
-- Priority queues
+5. **Security**
+   - Rate limiting per client/session
+   - Message size limits
+   - Built-in auth middleware (JWT validation, session management)
 
-5. Security
-
-- Rate limiting per client
-- Message size limits
-- Better authentication examples
-
-6. Observability
-
-- Distributed tracing
-- Custom metric labels/dimensions
+6. **Observability**
+   - Distributed tracing (OpenTelemetry)
+   - Custom metric labels/dimensions
+   - Structured logging with correlation IDs
 
 ### Nice to Have
 
-7. Alternative Transports
+7. **Framework Integrations**
+   - React hooks package (`useWebMQ`, `usePublish`, `useListen`)
+   - Vue composables
+   - Next.js API routes example
+   - SvelteKit integration
 
-- Redis backend (instead of RabbitMQ)
-- Kafka backend
-- In-memory backend for testing
-
-8. Framework Integrations
-
-- React hooks package
-- Vue composables
-- Next.js API routes example
+8. **Alternative Backends**
+   - Redis Pub/Sub backend
+   - In-memory backend for testing (no RabbitMQ required)
+   - NATS backend
 
 ## For Contributors
 
@@ -703,12 +614,13 @@ For health check and metrics setup examples, see the [Health Check & Metrics](#h
 
 ```
 packages/
-├── backend/     # Node.js WebSocket server library
-└── frontend/    # Framework-agnostic client library
+├── backend/     # Node.js Socket.IO + RabbitMQ server library
+└── frontend/    # Framework-agnostic client library (browser & React Native)
 examples/
-├── basic-chat/  # Simple chat application
-└── stock_order/ # Async workflow example
-e2e-tests/       # Integration tests
+├── basic-chat/  # Simple chat application (React web)
+├── mobile-chat/ # Mobile chat application (React Native)
+├── city-search/ # City search with autocomplete
+└── todos/       # Todo list application
 ```
 
 ### Development Commands

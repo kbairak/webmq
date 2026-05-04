@@ -17,7 +17,7 @@ interface ClientMessageHeader {
   [key: string]: any;
 }
 type MessageHeader = ClientMessageHeader | ServerMessageHeader;
-type HookName = 'pre' | 'identify' | 'publish' | 'listen' | 'unlisten' | 'message' | 'post';
+type HookName = 'pre' | 'publish' | 'listen' | 'unlisten' | 'message' | 'post';
 type HookFunction<T extends MessageHeader> = (header: T) => T;
 type JsonSerializable =
   | string
@@ -45,7 +45,6 @@ export default class WebMQClient {
   private _messageListeners = new Map<string, Map<(payload: any) => void, boolean>>();
   private _hooks = {
     pre: new Set<HookFunction<MessageHeader>>(),
-    identify: new Set<HookFunction<ClientMessageHeader>>(),
     publish: new Set<HookFunction<ClientMessageHeader>>(),
     listen: new Set<HookFunction<ClientMessageHeader>>(),
     unlisten: new Set<HookFunction<ClientMessageHeader>>(),
@@ -66,8 +65,8 @@ export default class WebMQClient {
     this._log('INFO', `WebMQClient connecting to ${this.url}`);
     this._socket = io(this.url, {
       auth: { sessionId: this.sessionId },
-      reconnectionDelay: 500,      // Start reconnecting after 500ms
-      reconnectionDelayMax: 2000,  // Max delay between attempts
+      reconnectionDelay: 500, // Start reconnecting after 500ms
+      reconnectionDelayMax: 2000, // Max delay between attempts
     });
 
     this._socket.on('message', (data: ArrayBuffer, ack: () => void) => {
@@ -191,7 +190,7 @@ export default class WebMQClient {
 
   public addHook(action: 'pre' | 'post', hook: HookFunction<MessageHeader>): void;
   public addHook(
-    action: 'identify' | 'publish' | 'listen' | 'unlisten',
+    action: 'publish' | 'listen' | 'unlisten',
     hook: HookFunction<ClientMessageHeader>
   ): void;
   public addHook(action: 'message', hook: HookFunction<ServerMessageHeader>): void;
@@ -202,7 +201,7 @@ export default class WebMQClient {
 
   public removeHook(action: 'pre' | 'post', hook: HookFunction<MessageHeader>): void;
   public removeHook(
-    action: 'identify' | 'publish' | 'listen' | 'unlisten',
+    action: 'publish' | 'listen' | 'unlisten',
     hook: HookFunction<ClientMessageHeader>
   ): void;
   public removeHook(action: 'message', hook: HookFunction<ServerMessageHeader>): void;

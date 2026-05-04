@@ -22,7 +22,9 @@ export default class EventEmitter {
   emit(event: string, ...args: any[]): void {
     const listeners = this._listeners.get(event);
     if (listeners) {
-      listeners.forEach(listener => {
+      // Snapshot listeners to avoid issues with add/remove during iteration
+      const snapshot = Array.from(listeners);
+      snapshot.forEach(listener => {
         try {
           listener(...args);
         } catch (error) {

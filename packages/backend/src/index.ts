@@ -35,15 +35,7 @@ interface MessageHeader {
   rmqOptions?: amqplib.Options.Publish;
   [key: string]: JsonSerializable | amqplib.Options.Publish | undefined;
 }
-type HookName =
-  | 'pre'
-  | 'wsMessage'
-  | 'identify'
-  | 'publish'
-  | 'listen'
-  | 'unlisten'
-  | 'rmqMessage'
-  | 'post';
+type HookName = 'pre' | 'wsMessage' | 'publish' | 'listen' | 'unlisten' | 'rmqMessage' | 'post';
 type HookFunction = (
   header: MessageHeader,
   context: HookContext,
@@ -82,7 +74,6 @@ export default class WebMQServer {
 
   private _hooks = {
     pre: new Set<HookFunction>(),
-    identify: new Set<HookFunction>(),
     publish: new Set<HookFunction>(),
     listen: new Set<HookFunction>(),
     unlisten: new Set<HookFunction>(),
@@ -127,10 +118,9 @@ export default class WebMQServer {
     httpServer.listen(this._port, this._host);
     this._io = new io.Server(httpServer, {
       cors: { origin: '*', methods: ['GET', 'POST'] },
-      pingTimeout: 5000,    // Wait 5s for pong before considering connection dead
-      pingInterval: 2000,   // Send ping every 2s
+      pingTimeout: 5000, // Wait 5s for pong before considering connection dead
+      pingInterval: 2000, // Send ping every 2s
     });
-
     this._io.on('connection', async (socket) => {
       if (!socket.handshake?.auth?.sessionId) {
         this._log('WARNING', 'WebSocket connection missing sessionId, rejecting');
@@ -167,6 +157,11 @@ export default class WebMQServer {
       socket.on('unlisten', (data) => this._handleUnlisten(socket, data, hookContext, getChannel));
       socket.on('publish', (data) => this._handlePublish(socket, data, hookContext, getChannel));
     });
+
+    this._log(
+      'INFO',
+      `WebMQServer started on port ${this._port}, connected to RabbitMQ at ${this._rmqUrl}`
+    );
   }
 
   public async stop(): Promise<void> {
@@ -423,7 +418,9 @@ export default class WebMQServer {
 
           // Wait for client acknowledgment before acking RabbitMQ
           try {
-            await socket.timeout(10000).emitWithAck('message', bundleData(header, rmqMessage.content));
+            await socket
+              .timeout(10000)
+              .emitWithAck('message', bundleData(header, rmqMessage.content));
             channel.ack(rmqMessage);
             metrics.rmqMessagesAcked.inc({ routing_key: header.routingKey });
             this._log('DEBUG', 'Client acknowledged message delivery');
