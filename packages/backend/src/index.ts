@@ -1,12 +1,13 @@
 import http from 'http';
 
+import { v4 as uuid } from 'uuid';
 import amqplib from 'amqplib';
 import promClient from 'prom-client';
 import * as ws from 'ws';
 
 import * as metrics from './metrics';
 import { retry } from './utils';
-import { bundleData, unbundleData, makePong, makeAck, makeNack, isAck, newMessageId } from 'webmq-protocol';
+import { bundleData, unbundleData, makePong, makeAck, makeNack, isAck } from 'webmq-protocol';
 
 promClient.collectDefaultMetrics();
 
@@ -237,7 +238,6 @@ export default class WebMQServer {
           return;
         }
         this._webSockets.delete(ws);
-        this._queues.delete(ws);
 
         for (const [msgId, entry] of this._pendingRmqAcks) {
           if (entry.ws === ws) {
@@ -251,16 +251,19 @@ export default class WebMQServer {
           }
         }
 
-        const currentSessionId = hookContext.sessionId;
-        const sessionInfo2 = currentSessionId ? this._sessions.get(currentSessionId) : undefined;
-        if (sessionInfo2 && sessionInfo2.ws === ws) {
-          this._sessions.delete(currentSessionId!);
-        }
         const consumerTag = this._consumerTags.get(ws);
         if (consumerTag) {
           await channel.cancel(consumerTag);
           metrics.rmqConsumers.dec();
           this._consumerTags.delete(ws);
+        }
+
+        this._queues.delete(ws);
+
+        const currentSessionId = hookContext.sessionId;
+        const sessionInfo2 = currentSessionId ? this._sessions.get(currentSessionId) : undefined;
+        if (sessionInfo2 && sessionInfo2.ws === ws) {
+          this._sessions.delete(currentSessionId!);
         }
         if (isNormalClose && hookContext.sessionId) {
           const currentSession = this._sessions.get(hookContext.sessionId);
@@ -504,9 +507,14 @@ export default class WebMQServer {
     getChannel: () => Promise<[amqplib.Channel, amqplib.ChannelModel]>,
     hookContext: HookContext
   ) {
+    const queue = this._queues.get(ws);
+    if (!queue) {
+      this._log('WARNING', 'Received RMQ message for closed WebSocket, discarding');
+      return;
+    }
     this._queues.set(
       ws,
-      this._queues.get(ws)!.then(async () => {
+      queue.then(async () => {
         const [channel] = await getChannel();
         try {
           if (!rmqMessage) {
@@ -532,7 +540,7 @@ export default class WebMQServer {
             throw new Error('WebSocket is not open, cannot send message');
           }
 
-          const messageId = newMessageId();
+          const messageId = uuid();
           header.messageId = messageId;
 
           try {

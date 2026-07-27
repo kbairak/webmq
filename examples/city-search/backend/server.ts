@@ -1,4 +1,4 @@
-import WebMQServer from '@webmq-backend';
+import WebMQServer from 'webmq-backend';
 
 const server = new WebMQServer({
   rmqUrl: 'amqp://localhost',

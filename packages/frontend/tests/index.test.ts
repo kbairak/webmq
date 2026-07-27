@@ -1,19 +1,15 @@
-import { newMessageId } from 'webmq-protocol';
+import { v4 as uuid } from 'uuid';
 import ReconnectingWebSocket from '../src/ReconnectingWebSocket';
 import WebMQClient, { ClientMessageHeader, MessageHeader } from '../src';
 import { bundleData, unbundleData } from 'webmq-protocol';
 import { createMockWebSocket } from './utils';
 
-jest.mock('webmq-protocol', () => {
-  const actual = jest.requireActual('webmq-protocol');
-  return {
-    ...actual,
-    newMessageId: jest.fn(),
-  };
-});
+jest.mock('uuid', () => ({
+  v4: jest.fn(),
+}));
 jest.mock('../src/ReconnectingWebSocket');
 
-const mockNewMessageId = newMessageId as jest.Mock;
+const mockUuid = jest.mocked(uuid);
 const MockReconnectingWebSocket = ReconnectingWebSocket as jest.Mock;
 
 describe('WebMQClient', () => {
@@ -23,7 +19,7 @@ describe('WebMQClient', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     uuidCounter = 1;
-    mockNewMessageId.mockImplementation(() => `uuid_${uuidCounter++}`);
+    mockUuid.mockImplementation(() => `uuid_${uuidCounter++}`);
     mockWs = createMockWebSocket();
     MockReconnectingWebSocket.mockImplementation(() => mockWs);
   });
@@ -34,9 +30,9 @@ describe('WebMQClient', () => {
 
     expect(MockReconnectingWebSocket).toHaveBeenCalledWith(
       'dumb_url',
-      [0, 1000, 2000, 4000, 8000]
+      [0, 500, 1000, 2000, 3000]
     );
-    expect(mockWs.addEventListener).toHaveBeenCalledTimes(6);
+    expect(mockWs.addEventListener).toHaveBeenCalledTimes(7);
 
     // Simulate WebSocket open
     mockWs.dispatchEvent(new Event('open'));

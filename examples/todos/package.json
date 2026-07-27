@@ -14,10 +14,10 @@
   "license": "ISC",
   "dependencies": {
     "@testcontainers/rabbitmq": "^11.5.1",
-    "react": "^19.1.1",
-    "react-dom": "^19.1.1",
-    "webmq-backend": "1.0.0",
-    "webmq-frontend": "1.0.0"
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "webmq-backend": "file:../../packages/backend",
+    "webmq-frontend": "file:../../packages/frontend"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^5.0.0",

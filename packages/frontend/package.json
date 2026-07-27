@@ -13,8 +13,8 @@
     }
   },
   "scripts": {
-    "build": "tsc --emitDeclarationOnly && esbuild src/index.ts --bundle --platform=browser --outfile=dist/index.js --format=esm && esbuild src/index.ts --bundle --platform=node --outfile=dist/index.cjs --format=cjs",
-    "dev": "esbuild src/index.ts --bundle --platform=browser --outfile=dist/index.js --format=esm --watch",
+    "build": "tsc --emitDeclarationOnly && esbuild src/index.ts --bundle --platform=browser --outfile=dist/index.js --format=esm --external:react-native && esbuild src/index.ts --bundle --platform=node --outfile=dist/index.cjs --format=cjs --external:react-native",
+    "dev": "esbuild src/index.ts --bundle --platform=browser --outfile=dist/index.js --format=esm --watch --external:react-native",
     "test": "jest",
     "clean": "rm -rf dist"
   },
@@ -34,6 +34,12 @@
     "uuid": "^10.0.0"
   },
   "peerDependencies": {
-    "react": "^18.0.0 || ^19.0.0"
+    "react": "^18.0.0 || ^19.0.0",
+    "react-native": "*"
+  },
+  "peerDependenciesMeta": {
+    "react-native": {
+      "optional": true
+    }
   }
 }

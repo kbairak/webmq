@@ -23,7 +23,6 @@
   "license": "ISC",
   "workspaces": [
     "packages/*",
-    "examples/*",
     "e2e-tests"
   ]
 }

@@ -1,11 +1,13 @@
+import { v4 as uuid } from 'uuid';
+import './platform';
 import ReconnectingWebSocket from './ReconnectingWebSocket';
+import { EventTarget, CustomEvent, onReconnectSignal, onUnload } from './platform';
 import {
   bundleData,
   unbundleData,
   type ClientMessageHeader,
   type ServerMessageHeader,
   type MessageHeader,
-  newMessageId,
   makePing,
   makeAck,
   isPong,
@@ -67,7 +69,8 @@ export default class WebMQClient extends EventTarget {
   private _lastPongAt = 0;
   private _heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private _reconnectCount = 0;
-  private _lifecycleListenersRegistered = false;
+  private _reconnectSignalCleanup: (() => void) | null = null;
+  private _unloadCleanup: (() => void) | null = null;
   private _hooks = {
     pre: new Set<HookFunction<MessageHeader>>(),
     identify: new Set<HookFunction<ClientMessageHeader>>(),
@@ -81,7 +84,7 @@ export default class WebMQClient extends EventTarget {
   // Options
   readonly url: string;
   readonly sessionId: string;
-  public reconnectDelays = [0, 1000, 2000, 4000, 8000];
+  public reconnectDelays = [0, 500, 1000, 2000, 3000];
   public logLevel: LogLevel = 'INFO';
   public pingInterval = 5000;
   public pongTimeout = 10000;
@@ -137,13 +140,20 @@ export default class WebMQClient extends EventTarget {
       this._dispatchEvent('disconnected');
     });
 
+    this._ws?.addEventListener('reconnecting', () => {
+      if (this._heartbeatTimer !== null) {
+        clearInterval(this._heartbeatTimer);
+        this._heartbeatTimer = null;
+      }
+    });
+
     const onOpen = () => {
       if (this._reconnectCount > 0) {
         this._dispatchEvent('reconnected');
       } else {
         this._dispatchEvent('connected');
       }
-      const identifyMessageId = newMessageId();
+      const identifyMessageId = uuid();
       try {
         let header: ClientMessageHeader = {
           action: 'identify',
@@ -165,7 +175,7 @@ export default class WebMQClient extends EventTarget {
       for (const { header, payload, resolve, reject } of entries) {
         let actualHeader: ClientMessageHeader;
         if (!header.messageId) {
-          actualHeader = { ...header, messageId: newMessageId() };
+          actualHeader = { ...header, messageId: uuid() };
         } else {
           actualHeader = header;
         }
@@ -286,25 +296,18 @@ export default class WebMQClient extends EventTarget {
     });
 
     this._ws?.addEventListener('reconnecting', (event: Event) => {
-      this._dispatchEvent('reconnecting', (event as CustomEvent).detail);
+      this._dispatchEvent('reconnecting', (event as any).detail);
     });
 
-    if (typeof window !== 'undefined' && typeof document !== 'undefined' && !this._lifecycleListenersRegistered) {
-      this._lifecycleListenersRegistered = true;
-      window.addEventListener('online', () => {
-        if (this._ws && (this._ws.readyState !== WebSocket.OPEN || Date.now() - this._lastPongAt > this.pongTimeout)) {
-          this._ws.forceReconnect();
-        }
-      });
-      document.addEventListener('visibilitychange', () => {
-        if (document.visibilityState === 'visible' && this._ws && (this._ws.readyState !== WebSocket.OPEN || Date.now() - this._lastPongAt > this.pongTimeout)) {
-          this._ws.forceReconnect();
-        }
-      });
-      window.addEventListener('beforeunload', () => {
-        this.disconnect();
-      });
-    }
+    this._reconnectSignalCleanup = onReconnectSignal(() => {
+      if (this._ws && (this._ws.readyState !== WebSocket.OPEN || Date.now() - this._lastPongAt > this.pongTimeout)) {
+        this._ws.forceReconnect();
+      }
+    });
+
+    this._unloadCleanup = onUnload(() => {
+      this.disconnect();
+    });
   }
 
   public disconnect() {
@@ -320,6 +323,18 @@ export default class WebMQClient extends EventTarget {
       ws.addEventListener('open', () => ws.close(1000, 'Client disconnect'));
     }
     this._ws = null;
+    if (this._reconnectSignalCleanup) {
+      this._reconnectSignalCleanup();
+      this._reconnectSignalCleanup = null;
+    }
+    if (this._unloadCleanup) {
+      this._unloadCleanup();
+      this._unloadCleanup = null;
+    }
+  }
+
+  public forceReconnect() {
+    this._ws?.forceReconnect();
   }
 
   public publish(routingKey: string, payload: ArrayBuffer | object | any[]): Promise<void> {
@@ -381,7 +396,7 @@ export default class WebMQClient extends EventTarget {
     return new Promise<void>((resolve, reject) => {
       let actualHeader: ClientMessageHeader;
       if (!header.messageId) {
-        actualHeader = { ...header, messageId: newMessageId() };
+        actualHeader = { ...header, messageId: uuid() };
       } else {
         actualHeader = header;
       }

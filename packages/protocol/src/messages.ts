@@ -1,8 +1,8 @@
+import { v4 as uuid } from 'uuid';
 import type { ClientMessageHeader, MessageHeader } from './types';
-import { newMessageId } from './id';
 
 export function makePing(): ClientMessageHeader {
-  return { action: 'ping', messageId: newMessageId() };
+  return { action: 'ping', messageId: uuid() };
 }
 
 export function makePong(messageId: string): ClientMessageHeader {

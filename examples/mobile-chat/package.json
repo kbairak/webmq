@@ -1,30 +1,36 @@
 {
-  "name": "webmq-basic-chat",
+  "name": "webmq-mobile-chat",
   "private": true,
   "type": "module",
+  "main": "index.ts",
   "scripts": {
     "start:backend": "tsx backend.ts",
-    "start:frontend": "vite",
-    "start": "concurrently \"npm run start:backend\" \"npm run start:frontend\" --names \"backend,frontend\" --prefix-colors \"blue,green\"",
+    "start:frontend": "./start-frontend.sh",
+    "start": "concurrently \"npm run start:backend\" \"npm run start:frontend\" --names \"backend,expo\" --prefix-colors \"blue,green\"",
+    "web": "expo start --web",
     "lint": "eslint . --ext .ts,.tsx"
   },
   "dependencies": {
+    "@expo/metro-runtime": "~6.1.1",
     "@testcontainers/rabbitmq": "^11.5.1",
+    "expo": "~54.0.0",
     "react": "19.1.0",
     "react-dom": "19.1.0",
+    "react-native": "0.81.5",
+    "react-native-get-random-values": "~1.11.0",
+    "react-native-web": "^0.21.0",
+    "text-encoding": "^0.7.0",
     "webmq-backend": "file:../../packages/backend",
     "webmq-frontend": "file:../../packages/frontend"
   },
   "devDependencies": {
-    "@types/react": "^19.2.14",
+    "@types/react": "~19.1.10",
     "@typescript-eslint/eslint-plugin": "^8.56.1",
     "@typescript-eslint/parser": "^8.56.1",
-    "@vitejs/plugin-react": "^5.0.0",
     "concurrently": "^9.2.1",
     "eslint": "^9.39.4",
     "eslint-plugin-react-hooks": "^7.0.1",
-    "tsconfig-paths": "^4.2.0",
     "tsx": "^4.21.0",
-    "vite": "^7.1.5"
+    "typescript": "~5.9.2"
   }
 }

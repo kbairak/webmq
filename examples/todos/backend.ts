@@ -1,4 +1,4 @@
-import WebMQServer from '@webmq-backend';
+import WebMQServer from 'webmq-backend';
 import { RabbitMQContainer } from '@testcontainers/rabbitmq';
 
 const rabbitmq = await new RabbitMQContainer(

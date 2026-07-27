@@ -1,3 +1,6 @@
+import { EventTarget, CustomEvent, type BinaryType } from './platform';
+import { Event as PolyfillEvent, CloseEvent as PolyfillCloseEvent, MessageEvent as PolyfillMessageEvent } from './platform';
+
 export default class ReconnectingWebSocket extends EventTarget {
   private _ws: WebSocket | null = null;
   private _reconnectAttempts = 0;
@@ -7,7 +10,7 @@ export default class ReconnectingWebSocket extends EventTarget {
 
   constructor(
     readonly url: string,
-    private reconnectDelays = [0, 1000, 2000, 4000, 8000]
+    private reconnectDelays = [0, 500, 1000, 2000, 3000]
   ) {
     super();
     this._connect();
@@ -20,16 +23,16 @@ export default class ReconnectingWebSocket extends EventTarget {
     this._ws.addEventListener('open', () => {
       if (this._reconnectAttempts > 0) {
         this._reconnectAttempts = 0;
-        this.dispatchEvent(new Event('reconnected'));
+        this.dispatchEvent(new PolyfillEvent('reconnected'));
       } else {
-        this.dispatchEvent(new Event('open'));
+        this.dispatchEvent(new PolyfillEvent('open'));
       }
     });
 
     this._ws.addEventListener('close', (event: CloseEvent) => {
       if (!this._shouldReconnect) {
         this.dispatchEvent(
-          new CloseEvent(event.type, {
+          new PolyfillCloseEvent(event.type, {
             code: event.code,
             reason: event.reason,
             wasClean: event.wasClean,
@@ -56,7 +59,7 @@ export default class ReconnectingWebSocket extends EventTarget {
 
     this._ws.addEventListener('error', (event: Event) => {
       this.dispatchEvent(
-        new Event(event.type, {
+        new PolyfillEvent(event.type, {
           bubbles: event.bubbles,
           cancelable: event.cancelable,
           composed: event.composed,
@@ -65,19 +68,21 @@ export default class ReconnectingWebSocket extends EventTarget {
     });
     this._ws.addEventListener('message', (event: MessageEvent) => {
       this.dispatchEvent(
-        new MessageEvent(event.type, {
+        new PolyfillMessageEvent(event.type, {
           data: event.data,
           origin: event.origin,
           lastEventId: event.lastEventId,
           source: event.source,
-          ports: [...event.ports],
+          ports: event.ports ? [...event.ports] : [],
         })
       );
     });
   }
 
   public send(data: any) {
-    this._ws?.send(data);
+    if (this._ws?.readyState === WebSocket.OPEN) {
+      this._ws.send(data);
+    }
   }
 
   public close(code?: number, reason?: string): void {

@@ -1,6 +1,6 @@
 import type { MessageHeader } from '../src/types';
 import { bundleData, unbundleData } from '../src/bundle';
-import { newMessageId } from '../src/id';
+import { v4 as uuid } from 'uuid';
 import { makePing, makePong, makeAck, makeNack, isPong, isAck, isNack } from '../src/messages';
 
 describe('bundleData / unbundleData', () => {
@@ -95,9 +95,9 @@ describe('messages', () => {
   });
 });
 
-describe('newMessageId', () => {
+describe('uuid', () => {
   it('should generate unique IDs', () => {
-    const ids = new Set(Array.from({ length: 100 }, () => newMessageId()));
+    const ids = new Set(Array.from({ length: 100 }, () => uuid()));
     expect(ids.size).toBe(100);
   });
 });

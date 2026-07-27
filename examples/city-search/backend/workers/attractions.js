@@ -6,8 +6,8 @@ const EXCHANGE_NAME = 'city_search';
 async function fetchAttractions(cityName) {
   // Use Overpass API to find attractions in the city
   const query = `
-    [out:json][timeout:25];
-    area[name="${cityName}"]->.searchArea;
+    [out:json][timeout:60];
+    area[name="${cityName}"][admin_level~"4|5|6|7|8"]->.searchArea;
     (
       node["tourism"~"attraction|museum|monument|viewpoint"](area.searchArea);
       way["tourism"~"attraction|museum|monument|viewpoint"](area.searchArea);
@@ -18,8 +18,17 @@ async function fetchAttractions(cityName) {
   const url = 'https://overpass-api.de/api/interpreter';
   const response = await fetch(url, {
     method: 'POST',
-    body: query,
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'User-Agent': 'WebMQ-CitySearch/1.0',
+    },
+    body: new URLSearchParams({ data: query }),
   });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Overpass API returned ${response.status}: ${text.substring(0, 200)}`);
+  }
 
   const data = await response.json();
 
