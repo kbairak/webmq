@@ -2,13 +2,8 @@
   "extends": "../../tsconfig.json",
   "compilerOptions": {
     "outDir": "./dist",
-    "baseUrl": ".",
-    "paths": {
-      "webmq-protocol": ["../protocol/src"]
-    },
     "module": "ESNext",
-    "moduleResolution": "node",
-    "lib": ["ES2022", "DOM", "DOM.Iterable"]
+    "moduleResolution": "node"
   },
   "include": ["src"],
   "exclude": ["src/**/*.test.ts"]

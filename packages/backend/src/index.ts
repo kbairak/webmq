@@ -5,16 +5,14 @@ import promClient from 'prom-client';
 import * as ws from 'ws';
 
 import * as metrics from './metrics';
-import { bundleData, unbundleData, retry } from './utils';
-
-// TODOs:
-//   - Check whether we need to pass options to RabbitMQ
+import { retry } from './utils';
+import { bundleData, unbundleData, makePong, makeAck, makeNack, isAck, newMessageId } from 'webmq-protocol';
 
 promClient.collectDefaultMetrics();
 
 // Types
 interface MessageHeader {
-  action?: 'identify' | 'publish' | 'listen' | 'unlisten' | 'message';
+  action?: 'identify' | 'publish' | 'listen' | 'unlisten' | 'message' | 'ping' | 'pong' | 'ack' | 'nack';
   messageId?: string;
   sessionId?: string;
   routingKey?: string;
@@ -56,6 +54,8 @@ interface WebMQServerOptions {
   metricsEndpoint?: string;
   queueTimeout?: number;
   logLevel?: LogLevel;
+  wsPingInterval?: number;
+  clientAckTimeout?: number;
 }
 
 export { MessageHeader, HookContext, HookName, HookFunction };
@@ -67,9 +67,20 @@ export default class WebMQServer {
   private _queues = new Map<ws.WebSocket, Promise<void>>();
   private _webSocketServer: ws.WebSocketServer | null = null;
   private _consumerTags = new Map<ws.WebSocket, string>();
+  private _sessions = new Map<string, { ws: ws.WebSocket; consumerTag: string }>();
   private _webSockets = new Set<ws.WebSocket>();
   private _consecutiveChannelFailures = 0;
   private _lastSuccessfulConnectionAttempt: Date | null = null;
+  private _heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  private _pendingRmqAcks = new Map<
+    string,
+    {
+      rmqMessage: amqplib.ConsumeMessage;
+      channel: amqplib.Channel;
+      ws: ws.WebSocket;
+      timer: ReturnType<typeof setTimeout>;
+    }
+  >();
   private _hooks = {
     pre: new Set<HookFunction>(),
     identify: new Set<HookFunction>(),
@@ -87,7 +98,9 @@ export default class WebMQServer {
   private _port = 0;
   private _healthEndpoint = '/health';
   private _metricsEndpoint = '/metrics';
-  private _queueTimeout = 5 * 60 * 1000; // 5 minutes
+  private _queueTimeout = 5 * 60 * 1000;
+  private _wsPingInterval = 15000;
+  private _clientAckTimeout = 10000;
 
   constructor(options: WebMQServerOptions) {
     this._rmqUrl = options.rmqUrl;
@@ -97,6 +110,8 @@ export default class WebMQServer {
     if (options.metricsEndpoint) this._metricsEndpoint = options.metricsEndpoint;
     if (options.queueTimeout) this._queueTimeout = options.queueTimeout;
     if (options.logLevel) this.logLevel = options.logLevel;
+    if (options.wsPingInterval !== undefined) this._wsPingInterval = options.wsPingInterval;
+    if (options.clientAckTimeout !== undefined) this._clientAckTimeout = options.clientAckTimeout;
   }
 
   public async start(): Promise<void> {
@@ -135,6 +150,9 @@ export default class WebMQServer {
       this._queues.set(ws, Promise.resolve());
       const getChannel = this._getChannelFunc(connection);
       ws.binaryType = 'arraybuffer';
+
+      ;(ws as any).isAlive = true;
+      ws.on('pong', () => { (ws as any).isAlive = true; });
 
       ws.on('message', (data: ws.RawData) => {
         this._queues.set(
@@ -176,18 +194,31 @@ export default class WebMQServer {
                 case 'unlisten':
                   await this._handleUnlisten(header, hookContext, getChannel);
                   break;
+                case 'ping':
+                  if (ws.readyState === ws.OPEN) {
+                    ws.send(bundleData(makePong(header.messageId!)));
+                  }
+                  break;
+                case 'ack':
+                  this._handleClientAck(header);
+                  break;
                 default:
                   throw new Error(`Unknown action: ${header.action}`);
               }
+              if (header.action !== 'ping' && header.action !== 'ack' && header.messageId && ws.readyState === ws.OPEN) {
+                ws.send(bundleData(makeAck(header.messageId)));
+              }
             } catch (err) {
               this._log('ERROR', 'Error processing message', err as Error);
+              if (header.action !== 'ping' && header.action !== 'ack' && header.messageId && ws.readyState === ws.OPEN) {
+                ws.send(bundleData(makeNack(header.messageId, String(err))));
+              }
             }
           })
         );
       });
 
       ws.on('close', async (code) => {
-        // Log the disconnection
         const isNormalClose = [1000, 1001].includes(code);
         const sessionInfo = hookContext.sessionId
           ? `session ${hookContext.sessionId}`
@@ -197,7 +228,7 @@ export default class WebMQServer {
         this._log('INFO', `WebSocket ${sessionInfo} disconnected (code: ${code}, ${closeType})`);
 
         metrics.wsConnections.dec();
-        await this._queues.get(ws); // Try to let pending tasks complete
+        await this._queues.get(ws);
         let channel: amqplib.Channel;
         try {
           [channel] = await getChannel();
@@ -207,17 +238,49 @@ export default class WebMQServer {
         }
         this._webSockets.delete(ws);
         this._queues.delete(ws);
+
+        for (const [msgId, entry] of this._pendingRmqAcks) {
+          if (entry.ws === ws) {
+            clearTimeout(entry.timer);
+            this._pendingRmqAcks.delete(msgId);
+            try {
+              entry.channel.nack(entry.rmqMessage, false, true);
+            } catch (err) {
+              this._log('ERROR', 'Failed to nack message on socket close', err as Error);
+            }
+          }
+        }
+
+        const currentSessionId = hookContext.sessionId;
+        const sessionInfo2 = currentSessionId ? this._sessions.get(currentSessionId) : undefined;
+        if (sessionInfo2 && sessionInfo2.ws === ws) {
+          this._sessions.delete(currentSessionId!);
+        }
         const consumerTag = this._consumerTags.get(ws);
         if (consumerTag) {
           await channel.cancel(consumerTag);
+          metrics.rmqConsumers.dec();
+          this._consumerTags.delete(ws);
         }
-        metrics.rmqConsumers.dec();
-        this._consumerTags.delete(ws);
         if (isNormalClose && hookContext.sessionId) {
-          await channel.deleteQueue(hookContext.sessionId);
+          const currentSession = this._sessions.get(hookContext.sessionId);
+          if (!currentSession || currentSession.ws === ws) {
+            await channel.deleteQueue(hookContext.sessionId);
+          }
         }
       });
     });
+
+    this._heartbeatTimer = setInterval(() => {
+      this._webSockets.forEach((ws: any) => {
+        if (ws.isAlive === false) {
+          this._log('WARNING', 'Terminating stale WebSocket connection');
+          return ws.terminate();
+        }
+        ws.isAlive = false;
+        ws.ping();
+      });
+    }, this._wsPingInterval);
 
     this._log(
       'INFO',
@@ -227,7 +290,14 @@ export default class WebMQServer {
   }
 
   public async stop(): Promise<void> {
-    // Stop **receiving** from rmq and ws
+    if (this._heartbeatTimer !== null) {
+      clearInterval(this._heartbeatTimer);
+      this._heartbeatTimer = null;
+    }
+    for (const [, entry] of this._pendingRmqAcks) {
+      clearTimeout(entry.timer);
+    }
+    this._pendingRmqAcks.clear();
     this._webSockets.forEach((ws) => {
       ws.removeAllListeners('message');
     });
@@ -236,10 +306,8 @@ export default class WebMQServer {
       [...this._consumerTags.values()].map((consumerTag) => channel.cancel(consumerTag))
     );
 
-    // Wait for in-flight tasks to finish
     await Promise.all([...this._queues.values()]);
 
-    // Close everything
     this._webSockets.forEach((ws) => ws.close(1001, 'Server shutting down'));
     this._webSocketServer?.close();
     await channel.close();
@@ -264,6 +332,23 @@ export default class WebMQServer {
       metrics.errors.inc({ type: 'invalid_message_format', action: 'identify' });
       throw new Error('Identify action missing sessionId');
     }
+
+    const existingSession = this._sessions.get(header.sessionId);
+    if (existingSession && existingSession.ws !== ws) {
+      this._log('INFO', `Session ${header.sessionId} reconnected, evicting old connection`);
+      const oldConsumerTag = this._consumerTags.get(existingSession.ws);
+      if (oldConsumerTag) {
+        try {
+          const [ch] = await getChannel();
+          await ch.cancel(oldConsumerTag);
+        } catch (err) {
+          this._log('ERROR', 'Failed to cancel old consumer during session eviction', err as Error);
+        }
+      }
+      existingSession.ws.terminate();
+      this._consumerTags.delete(existingSession.ws);
+    }
+
     hookContext.sessionId = header.sessionId;
 
     try {
@@ -286,6 +371,7 @@ export default class WebMQServer {
         }
       );
       this._consumerTags.set(ws, consume.consumerTag);
+      this._sessions.set(hookContext.sessionId, { ws, consumerTag: consume.consumerTag });
       metrics.rmqConsumers.inc();
     } catch (err) {
       metrics.errors.inc({ type: 'failed_rabbitmq', action: 'consume' });
@@ -320,7 +406,6 @@ export default class WebMQServer {
       channel.publish(
         this._exchangeName,
         actualHeader.routingKey!,
-        // Convert ArrayBuffer payload to Buffer for RabbitMQ
         payload ? Buffer.from(payload) : Buffer.alloc(0),
         actualHeader.rmqOptions
       );
@@ -446,26 +531,35 @@ export default class WebMQServer {
             metrics.errors.inc({ type: 'failed_websocket', action: 'send' });
             throw new Error('WebSocket is not open, cannot send message');
           }
+
+          const messageId = newMessageId();
+          header.messageId = messageId;
+
           try {
-            // Pass Buffer directly, bundleData handles it
             ws.send(bundleData(header, rmqMessage.content));
             metrics.rmqToWsPublishes.inc({ routing_key: header.routingKey });
           } catch (err) {
             metrics.errors.inc({ type: 'failed_websocket', action: 'send' });
             throw err;
           }
-          try {
-            channel.ack(rmqMessage);
-            metrics.rmqMessagesAcked.inc({ routing_key: header.routingKey });
-          } catch (err) {
-            metrics.errors.inc({ type: 'failed_rabbitmq', action: 'ack' });
-            throw err;
-          }
+
+          const timer = setTimeout(() => {
+            this._pendingRmqAcks.delete(messageId);
+            try {
+              channel.nack(rmqMessage, false, true);
+              metrics.rmqMessagesNacked.inc({ routing_key: rmqMessage.fields.routingKey });
+              this._log('WARNING', `Client ack timeout for message ${messageId}, requeued`);
+            } catch (err) {
+              this._log('ERROR', 'Failed to nack timed-out message', err as Error);
+            }
+          }, this._clientAckTimeout);
+          this._pendingRmqAcks.set(messageId, { rmqMessage, channel, ws, timer });
+
         } catch (err) {
           this._log('ERROR', 'Error sending message to client, requeuing', err as Error);
           try {
             if (rmqMessage) {
-              channel.nack(rmqMessage, false, true); // Requeue the message
+              channel.nack(rmqMessage, false, true);
               metrics.rmqMessagesNacked.inc({ routing_key: rmqMessage.fields.routingKey });
             }
           } catch (err) {
@@ -474,6 +568,23 @@ export default class WebMQServer {
         }
       })
     );
+  }
+
+  private _handleClientAck(header: MessageHeader) {
+    if (!header.messageId) return;
+    const entry = this._pendingRmqAcks.get(header.messageId);
+    if (!entry) {
+      this._log('DEBUG', `Received ack for unknown or already-processed messageId: ${header.messageId}`);
+      return;
+    }
+    clearTimeout(entry.timer);
+    this._pendingRmqAcks.delete(header.messageId);
+    try {
+      entry.channel.ack(entry.rmqMessage);
+      metrics.rmqMessagesAcked.inc({ routing_key: entry.rmqMessage.fields.routingKey });
+    } catch (err) {
+      this._log('ERROR', 'Failed to ack RMQ message', err as Error);
+    }
   }
 
   private _getChannelFunc(

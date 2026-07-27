@@ -5,6 +5,7 @@
   "description": "A framework to connect web frontends with RabbitMQ via WebSockets.",
   "main": "index.js",
   "scripts": {
+    "build:protocol": "npm run build -w webmq-protocol",
     "build:backend": "npm run build -w webmq-backend",
     "build:frontend": "npm run build -w webmq-frontend",
     "build": "npm run build --workspaces --if-present",

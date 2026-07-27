@@ -7,4 +7,8 @@ module.exports = {
   coverageDirectory: 'coverage',
   coverageReporters: ['text', 'lcov', 'html'],
   collectCoverageFrom: ['src/**/*.ts', '!src/**/*.test.ts', '!src/**/*.d.ts'],
+  moduleNameMapper: {
+    '^webmq-protocol$': '<rootDir>/../protocol/src/index.ts',
+  },
+  forceExit: true,
 };

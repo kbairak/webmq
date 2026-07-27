@@ -1,13 +1,19 @@
-import { v4 as uuid } from 'uuid';
+import { newMessageId } from 'webmq-protocol';
 import ReconnectingWebSocket from '../src/ReconnectingWebSocket';
 import WebMQClient, { ClientMessageHeader, MessageHeader } from '../src';
-import { bundleData, unbundleData } from '../src/bundle';
+import { bundleData, unbundleData } from 'webmq-protocol';
 import { createMockWebSocket } from './utils';
 
-jest.mock('uuid');
+jest.mock('webmq-protocol', () => {
+  const actual = jest.requireActual('webmq-protocol');
+  return {
+    ...actual,
+    newMessageId: jest.fn(),
+  };
+});
 jest.mock('../src/ReconnectingWebSocket');
 
-const mockUuid = uuid as jest.Mock;
+const mockNewMessageId = newMessageId as jest.Mock;
 const MockReconnectingWebSocket = ReconnectingWebSocket as jest.Mock;
 
 describe('WebMQClient', () => {
@@ -17,7 +23,7 @@ describe('WebMQClient', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     uuidCounter = 1;
-    mockUuid.mockImplementation(() => `uuid_${uuidCounter++}`);
+    mockNewMessageId.mockImplementation(() => `uuid_${uuidCounter++}`);
     mockWs = createMockWebSocket();
     MockReconnectingWebSocket.mockImplementation(() => mockWs);
   });
@@ -218,7 +224,7 @@ describe('WebMQClient', () => {
     expect(header).toEqual({
       action: 'identify',
       sessionId: 'dumb_sessionid',
-      messageId: 'uuid_1', // Same ID from connect() closure
+      messageId: 'uuid_2', // New ID generated on reconnect
     });
     const payloadText = new TextDecoder().decode(payload);
     expect(payloadText).toEqual('');
@@ -258,7 +264,7 @@ describe('WebMQClient', () => {
     expect(identifyHeader).toEqual({
       action: 'identify',
       sessionId: 'dumb_sessionid',
-      messageId: 'uuid_1', // Same ID from connect() closure
+      messageId: 'uuid_3', // New ID generated on reconnect
     });
     expect(new TextDecoder().decode(identifyPayload)).toEqual('');
 
@@ -269,7 +275,7 @@ describe('WebMQClient', () => {
     expect(publishHeader).toEqual({
       action: 'publish',
       routingKey: 'dumb_routing_key',
-      messageId: 'uuid_3', // New ID generated when flushing queue
+      messageId: 'uuid_2', // Original ID preserved during queue flush
     });
     expect(JSON.parse(new TextDecoder().decode(publishPayload))).toEqual({ hello: 'world' });
   });

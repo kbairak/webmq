@@ -259,23 +259,20 @@ const webMQServer = new WebMQServer({
 webMQServer.logLevel = 'info';
 ```
 
-### EventEmitter Events
+### Connection Events (EventTarget)
 
-The WebMQClient extends EventEmitter, providing connection state monitoring:
-
-**Frontend Events:**
+The WebMQClient extends `EventTarget`, dispatching `CustomEvent`s for connection state:
 
 - `'connected'`: Initial connection established
 - `'disconnected'`: Connection lost
-- `'reconnecting'`: Connection is attempting to reconnect (includes retry count in event data)
+- `'reconnecting'`: Attempting to reconnect (detail: `{ attempt }`)
+- `'reconnected'`: Connection restored after one or more reconnect attempts
 - `'error'`: WebSocket error occurred
 
 ```javascript
-// Frontend event monitoring
-import { webMQClient } from 'webmq-frontend';
-webMQClient.on('connected', () => console.log('Connected'));
-webMQClient.on('disconnected', () => console.log('Disconnected'));
-webMQClient.on('reconnecting', (event) => console.log('Reconnecting...', event));
+client.addEventListener('connected', () => console.log('Connected'));
+client.addEventListener('disconnected', () => console.log('Disconnected'));
+client.addEventListener('reconnecting', (event) => console.log('Reconnecting...', event.detail.attempt));
 ```
 
 **Note:** The backend WebMQServer does not currently emit custom events. For backend monitoring, use the built-in logging system by setting `server.logLevel = 'debug'` or Prometheus metrics integration.
@@ -436,14 +433,17 @@ rate(webmq_errors_total[5m])
 
 ## Features
 
-- **Auto-reconnection**: Exponential backoff handles network interruptions
-- **Message acknowledgments**: Guaranteed delivery with Promise-based confirmations
-- **Offline queuing**: Messages sent while disconnected are queued and sent on reconnect
+- **Auto-reconnection**: Infinite retry with capped exponential backoff, configurable delays
+- **Heartbeat & half-open detection**: Application-level ping/pong (client) + WebSocket ping/pong (server) to detect zombie connections within seconds
+- **Message acknowledgments**: Promise-based publish/listen/unlisten with server ACK; end-to-end ACK for RabbitMQ→client delivery (server withholds `channel.ack` until client confirms receipt)
+- **Offline queuing**: Messages sent while disconnected are queued, preserved across reconnects, and sent on reconnect with original message IDs
+- **Session dedup**: Server evicts stale consumers when a session reconnects, preventing duplicate delivery
 - **Graceful shutdowns**: Proper cleanup of connections and resources
 - **Flexible authentication**: Middleware-style hooks for custom auth logic
 - **Client-side hooks**: Express-style middleware for frontend message processing
 - **Topic wildcards**: Subscribe to event patterns with `*` and `#` wildcards
-- **Connection events**: React to connect/disconnect/reconnect states
+- **Connection events**: React to connect/disconnect/reconnect/reconnecting states via standard `EventTarget`
+- **Browser lifecycle**: Detects `online`/`visibilitychange` to trigger early reconnect
 - **Framework agnostic**: Works with React, Vue, Angular, or vanilla JS
 
 ## API Reference
@@ -487,17 +487,13 @@ new WebMQClient(options: WebMQClientOptions)
 
 Options:
 
-- `url` (string, optional): WebSocket server URL (e.g., 'ws://localhost:8080')
-- `hooks` (WebMQClientHooks, optional): Client-side middleware hooks
-  - `pre` (HookFunction[]): Run before all actions
-  - `onIdentify` (HookFunction[]): Run when establishing connection
-  - `onPublish` (HookFunction[]): Run for 'publish' actions
-  - `onListen` (HookFunction[]): Run for 'listen' actions
-  - `onUnlisten` (HookFunction[]): Run for 'unlisten' actions
-  - `onMessage` (HookFunction[]): Run for incoming messages
-- `ackTimeoutDelay` (number, optional): Timeout in ms for server acknowledgments (default: 5000)
-- `reconnectionDelay` (number, optional): Base delay in ms for exponential backoff (default: 1000)
-- `maxReconnectionAttempts` (number, optional): Max reconnection attempts (default: 5)
+- `url` (string, required): WebSocket server URL (e.g., 'ws://localhost:8080')
+- `sessionId` (string, required): Unique session identifier
+- `reconnectDelays` (number[], optional): Reconnection delay sequence; last value is capped for infinite retries (default: [0, 1000, 2000, 4000, 8000])
+- `pingInterval` (number, optional): Interval in ms between client ping messages (default: 5000)
+- `pongTimeout` (number, optional): Max ms without pong before force-reconnect (default: 10000)
+- `ackTimeout` (number, optional): Timeout in ms for server ACK (default: 5000)
+- `logLevel` ('DEBUG' | 'INFO' | 'WARNING' | 'ERROR' | 'SILENT', optional)
 
 **Methods:**
 
@@ -548,27 +544,17 @@ webMQClient.on('reconnecting', (attempt) => console.log(`Reconnecting... attempt
 new WebMQServer(options: WebMQServerOptions)
 ```
 
-Options (extends ws ServerOptions):
+Options:
 
-- `rabbitmqUrl` (string, **required**): AMQP connection URL (e.g., 'amqp://localhost' or 'amqp://user:pass@host:5672')
-- `exchangeName` (string, **required**): RabbitMQ exchange name (always created as durable topic exchange)
-- `port` (number, optional): Port to listen on for standalone WebSocket server
-- `server` (http.Server | https.Server, optional): Existing HTTP/HTTPS server to attach WebSocket server to
-- `healthCheck` (boolean | string, optional): Enable health check endpoint
-  - `true`: Automatically creates endpoint at `/health`
-  - `'/custom-path'`: Creates endpoint at specified path
-  - Works with both standalone (`port`) and attached (`server`) modes
-- `metrics` (boolean | string, optional): Enable Prometheus metrics endpoint
-  - `true`: Automatically creates endpoint at `/metrics`
-  - `'/custom-path'`: Creates endpoint at specified path
-  - Exposes metrics in Prometheus text format
-- `hooks` (WebMQHooks, optional): Server-side middleware hooks
-  - `pre` (HookFunction[]): Run before all actions
-  - `onIdentify` (HookFunction[]): Run when client sends identify message
-  - `onPublish` (HookFunction[]): Run for 'publish' actions
-  - `onListen` (HookFunction[]): Run for 'listen' actions
-  - `onUnlisten` (HookFunction[]): Run for 'unlisten' actions
-- All other options from [ws ServerOptions](https://github.com/websockets/ws/blob/master/doc/ws.md#new-websocketserveroptions-callback) (path, perMessageDeflate, clientTracking, etc.)
+- `rmqUrl` (string, **required**): AMQP connection URL (e.g., 'amqp://localhost')
+- `exchange` (string, **required**): RabbitMQ exchange name (always created as durable topic exchange)
+- `port` (number, **required**): Port to listen on for standalone WebSocket server
+- `healthEndpoint` (string, optional): Path for health check endpoint (e.g., '/health')
+- `metricsEndpoint` (string, optional): Path for Prometheus metrics endpoint (e.g., '/metrics')
+- `queueTimeout` (number, optional): Session queue TTL in ms (default: 300000 = 5 min)
+- `wsPingInterval` (number, optional): Interval in ms for server WebSocket ping (default: 15000); stale sockets are terminated
+- `clientAckTimeout` (number, optional): Max ms to wait for client ACK before requeueing RMQ message (default: 10000)
+- `logLevel` ('DEBUG' | 'INFO' | 'WARNING' | 'ERROR' | 'SILENT', optional)
 
 **Methods:**
 
@@ -703,6 +689,7 @@ For health check and metrics setup examples, see the [Health Check & Metrics](#h
 
 ```
 packages/
+├── protocol/    # Shared wire protocol (bundle format, types, message constructors). Private; must be published if frontend/backend ever are.
 ├── backend/     # Node.js WebSocket server library
 └── frontend/    # Framework-agnostic client library
 examples/
@@ -715,10 +702,12 @@ e2e-tests/       # Integration tests
 
 ```bash
 # Build specific packages
+npm run build -w webmq-protocol
 npm run build -w webmq-backend
 npm run build -w webmq-frontend
 
 # Run tests
+npm run test -w webmq-protocol
 npm run test -w webmq-backend
 npm run test -w webmq-frontend
 npm test  # Run e2e tests

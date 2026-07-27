@@ -3,7 +3,11 @@
   "compilerOptions": {
     "outDir": "./dist",
     "module": "ESNext",
-    "moduleResolution": "node"
+    "moduleResolution": "node",
+    "baseUrl": ".",
+    "paths": {
+      "webmq-protocol": ["../protocol/src/index.ts"]
+    }
   },
   "include": ["src"],
   "exclude": ["src/**/*.test.ts"]

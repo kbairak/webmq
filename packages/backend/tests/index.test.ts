@@ -1,5 +1,5 @@
 import WebMQServer, { MessageHeader, HookContext } from '../src';
-import { bundleData, unbundleData } from '../src/utils';
+import { bundleData, unbundleData } from 'webmq-protocol';
 import * as amqplib from 'amqplib';
 import * as ws from 'ws';
 import * as http from 'http';
@@ -72,6 +72,8 @@ function createMockWebSocket() {
   const mock: any = {
     send: jest.fn(),
     close: jest.fn(),
+    ping: jest.fn(),
+    terminate: jest.fn(),
     on: jest.fn((event: string, handler: Function) => {
       if (!listeners.has(event)) listeners.set(event, new Set());
       listeners.get(event)!.add(handler);
@@ -83,6 +85,7 @@ function createMockWebSocket() {
     readyState: 1, // OPEN
     binaryType: 'arraybuffer',
     OPEN: 1,
+    isAlive: true,
     _triggerEvent: (event: string, ...args: any[]) => {
       listeners.get(event)?.forEach((handler) => handler(...args));
     },
@@ -315,11 +318,16 @@ describe('WebMQServer', () => {
         rmqUrl: 'amqp://localhost',
         exchange: 'test-exchange',
         port: 8080,
+        clientAckTimeout: 50,
       });
 
       await server.start();
       mockWs = createMockWebSocket();
       mockWsServer._simulateConnection(mockWs);
+    });
+
+    afterEach(async () => {
+      await server.stop();
     });
 
     describe('Identify Action', () => {
@@ -546,8 +554,11 @@ describe('WebMQServer', () => {
 
         await waitForQueue();
 
-        // No ack/nack sent - operation just fails silently and logs error
-        expect(mockWs.send).not.toHaveBeenCalled();
+        // Nack sent for unknown action
+        expect(mockWs.send).toHaveBeenCalled();
+        const sent = unbundleData(mockWs.send.mock.calls[0][0] as ArrayBuffer);
+        expect(sent[0].action).toBe('nack');
+        expect(sent[0].messageId).toBe('msg-1');
       });
     });
   });
@@ -577,6 +588,10 @@ describe('WebMQServer', () => {
       jest.clearAllMocks();
     });
 
+    afterEach(async () => {
+      await server.stop();
+    });
+
     it('should forward RabbitMQ messages to WebSocket', async () => {
       const payload = Buffer.from('Hello, WebSocket!');
       const rmqMessage = createRabbitMQMessage('test.route', payload);
@@ -590,7 +605,18 @@ describe('WebMQServer', () => {
       const [header, receivedPayload] = unbundleData(sentData);
 
       expect(header.routingKey).toBe('test.route');
+      expect(header.messageId).toBeDefined();
       expect(Buffer.from(receivedPayload!)).toEqual(payload);
+      // RMQ ack is withheld until client ack arrives
+      expect(mockChannel.ack).not.toHaveBeenCalled();
+
+      // Simulate client ack
+      mockWs._receiveMessage({
+        action: 'ack',
+        messageId: header.messageId,
+      });
+      await waitForQueue();
+
       expect(mockChannel.ack).toHaveBeenCalledWith(rmqMessage);
     });
 
@@ -631,6 +657,10 @@ describe('WebMQServer', () => {
       await server.start();
       mockWs = createMockWebSocket();
       mockWsServer._simulateConnection(mockWs);
+    });
+
+    afterEach(async () => {
+      await server.stop();
     });
 
     it('should execute hooks in correct order', async () => {
@@ -726,7 +756,7 @@ describe('WebMQServer', () => {
       expect(hookFn).not.toHaveBeenCalled();
     });
 
-    it('should handle hook errors and not send nack', async () => {
+    it('should handle hook errors and send nack', async () => {
       server.addHook('publish', async () => {
         throw new Error('Hook processing failed');
       });
@@ -739,9 +769,12 @@ describe('WebMQServer', () => {
 
       await waitForQueue();
 
-      // No ack/nack sent - operation just fails silently and logs error
-      expect(mockWs.send).not.toHaveBeenCalled();
       expect(mockChannel.publish).not.toHaveBeenCalled();
+      // Nack sent for hook error
+      expect(mockWs.send).toHaveBeenCalled();
+      const sent = unbundleData(mockWs.send.mock.calls[0][0] as ArrayBuffer);
+      expect(sent[0].action).toBe('nack');
+      expect(sent[0].messageId).toBe('msg-1');
     });
   });
 
@@ -775,6 +808,10 @@ describe('WebMQServer', () => {
       jest.clearAllMocks();
     });
 
+    afterEach(async () => {
+      await server.stop();
+    });
+
     it('should cleanup on normal WebSocket close', async () => {
       mockWs._triggerEvent('close', 1000); // Normal closure
       await waitForQueue();
@@ -806,6 +843,10 @@ describe('WebMQServer', () => {
       await server.start();
       mockWs = createMockWebSocket();
       mockWsServer._simulateConnection(mockWs);
+    });
+
+    afterEach(async () => {
+      await server.stop();
     });
 
     it('should process messages serially per WebSocket', async () => {

@@ -1,15 +1,10 @@
 /** @type {import('ts-jest').JestConfigWithTsJest} */
 module.exports = {
   preset: 'ts-jest',
-  testEnvironment: 'jest-environment-jsdom',
-  setupFilesAfterEnv: ['<rootDir>/tests/setup.ts'],
+  testEnvironment: 'node',
   testPathIgnorePatterns: ['/node_modules/', '/dist/'],
   collectCoverage: true,
   coverageDirectory: 'coverage',
   coverageReporters: ['text', 'lcov', 'html'],
   collectCoverageFrom: ['src/**/*.ts', '!src/**/*.test.ts', '!src/**/*.d.ts'],
-  verbose: false,
-  moduleNameMapper: {
-    '^webmq-protocol$': '<rootDir>/../protocol/src/index.ts',
-  },
 };

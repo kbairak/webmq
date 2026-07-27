@@ -2,6 +2,8 @@ export default class ReconnectingWebSocket extends EventTarget {
   private _ws: WebSocket | null = null;
   private _reconnectAttempts = 0;
   private _shouldReconnect = true;
+  private _desiredBinaryType: BinaryType = 'blob';
+  private _reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     readonly url: string,
@@ -13,6 +15,7 @@ export default class ReconnectingWebSocket extends EventTarget {
 
   private _connect(): void {
     this._ws = new WebSocket(this.url);
+    this._ws.binaryType = this._desiredBinaryType;
 
     this._ws.addEventListener('open', () => {
       if (this._reconnectAttempts > 0) {
@@ -23,11 +26,8 @@ export default class ReconnectingWebSocket extends EventTarget {
       }
     });
 
-    this._ws.addEventListener('close', async (event: CloseEvent) => {
-      if (
-        !this._shouldReconnect ||
-        this._reconnectAttempts >= this.reconnectDelays.length
-      ) {
+    this._ws.addEventListener('close', (event: CloseEvent) => {
+      if (!this._shouldReconnect) {
         this.dispatchEvent(
           new CloseEvent(event.type, {
             code: event.code,
@@ -36,14 +36,21 @@ export default class ReconnectingWebSocket extends EventTarget {
           })
         );
       } else {
-        if (this._reconnectAttempts === 0) {
-          this.dispatchEvent(new Event('reconnecting'));
-        }
-        await new Promise((resolve) =>
-          setTimeout(resolve, this.reconnectDelays[this._reconnectAttempts])
-        ); // Exponential backoff
-        this._connect();
-        this._reconnectAttempts++;
+        this.dispatchEvent(
+          new CustomEvent('reconnecting', {
+            detail: { attempt: this._reconnectAttempts + 1 },
+          })
+        );
+        const delay = this.reconnectDelays[
+          Math.min(this._reconnectAttempts, this.reconnectDelays.length - 1)
+        ];
+        this._reconnectTimer = setTimeout(() => {
+          this._reconnectTimer = null;
+          if (this._shouldReconnect) {
+            this._reconnectAttempts++;
+            this._connect();
+          }
+        }, delay);
       }
     });
 
@@ -75,14 +82,34 @@ export default class ReconnectingWebSocket extends EventTarget {
 
   public close(code?: number, reason?: string): void {
     this._shouldReconnect = false;
+    if (this._reconnectTimer !== null) {
+      clearTimeout(this._reconnectTimer);
+      this._reconnectTimer = null;
+    }
     this._ws?.close(code, reason);
   }
 
+  public forceReconnect(): void {
+    if (this._reconnectTimer !== null) {
+      clearTimeout(this._reconnectTimer);
+      this._reconnectTimer = null;
+      this._reconnectAttempts++;
+      this._connect();
+      return;
+    }
+    if (this._ws) {
+      this._ws.close(4000, 'force reconnect');
+    }
+  }
+
   public get binaryType(): BinaryType {
-    return this._ws?.binaryType ?? 'arraybuffer';
+    return this._desiredBinaryType;
   }
   public set binaryType(value: BinaryType) {
-    this._ws!.binaryType = value;
+    this._desiredBinaryType = value;
+    if (this._ws) {
+      this._ws.binaryType = value;
+    }
   }
   public get bufferedAmount(): number {
     return this._ws?.bufferedAmount ?? 0;
