@@ -101,11 +101,11 @@ describe('ReconnectingWebSocket', () => {
     expect(ws.binaryType).toBe('arraybuffer');
   });
 
-  it('forceReconnect should close socket without stopping reconnect', () => {
+  it('forceReconnect should replace socket immediately', () => {
     const w = new ReconnectingWebSocket('ws://example.com');
-    (w as any)._shouldReconnect = true;
     w.forceReconnect();
-    expect(mockWs.close).toHaveBeenCalledWith(4000, 'force reconnect');
+    expect(MockWebSocketClass).toHaveBeenCalledTimes(2);
+    expect((w as any)._reconnectAttempts).toBe(0);
   });
 
   it('forceReconnect should skip waiting reconnect timer', () => {

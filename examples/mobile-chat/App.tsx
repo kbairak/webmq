@@ -11,6 +11,7 @@ import {
   SafeAreaView,
   StatusBar,
 } from 'react-native';
+import NetInfo from '@react-native-community/netinfo';
 import WebMQClient from 'webmq-frontend';
 
 interface Message {
@@ -70,6 +71,15 @@ export default function App() {
       webMQClient.disconnect();
     };
   }, [webMQClient, appendMessage]);
+
+  useEffect(() => {
+    const unsubscribe = NetInfo.addEventListener((state) => {
+      if (state.isConnected && state.isInternetReachable !== false) {
+        webMQClient.forceReconnect();
+      }
+    });
+    return () => unsubscribe();
+  }, [webMQClient]);
 
   const handleSend = () => {
     const text = draft.trim();

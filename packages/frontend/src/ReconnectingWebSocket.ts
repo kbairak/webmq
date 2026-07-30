@@ -17,10 +17,11 @@ export default class ReconnectingWebSocket extends EventTarget {
   }
 
   private _connect(): void {
-    this._ws = new WebSocket(this.url);
-    this._ws.binaryType = this._desiredBinaryType;
+    const ws = new WebSocket(this.url);
+    ws.binaryType = this._desiredBinaryType;
+    this._ws = ws;
 
-    this._ws.addEventListener('open', () => {
+    ws.addEventListener('open', () => {
       if (this._reconnectAttempts > 0) {
         this._reconnectAttempts = 0;
         this.dispatchEvent(new PolyfillEvent('reconnected'));
@@ -29,7 +30,8 @@ export default class ReconnectingWebSocket extends EventTarget {
       }
     });
 
-    this._ws.addEventListener('close', (event: CloseEvent) => {
+    ws.addEventListener('close', (event: CloseEvent) => {
+      if (ws !== this._ws) return;
       if (!this._shouldReconnect) {
         this.dispatchEvent(
           new PolyfillCloseEvent(event.type, {
@@ -57,7 +59,8 @@ export default class ReconnectingWebSocket extends EventTarget {
       }
     });
 
-    this._ws.addEventListener('error', (event: Event) => {
+    ws.addEventListener('error', (event: Event) => {
+      if (ws !== this._ws) return;
       this.dispatchEvent(
         new PolyfillEvent(event.type, {
           bubbles: event.bubbles,
@@ -66,7 +69,8 @@ export default class ReconnectingWebSocket extends EventTarget {
         })
       );
     });
-    this._ws.addEventListener('message', (event: MessageEvent) => {
+    ws.addEventListener('message', (event: MessageEvent) => {
+      if (ws !== this._ws) return;
       this.dispatchEvent(
         new PolyfillMessageEvent(event.type, {
           data: event.data,
@@ -98,13 +102,12 @@ export default class ReconnectingWebSocket extends EventTarget {
     if (this._reconnectTimer !== null) {
       clearTimeout(this._reconnectTimer);
       this._reconnectTimer = null;
-      this._reconnectAttempts++;
+      this._reconnectAttempts = 0;
       this._connect();
       return;
     }
-    if (this._ws) {
-      this._ws.close(4000, 'force reconnect');
-    }
+    this._reconnectAttempts = 0;
+    this._connect();
   }
 
   public get binaryType(): BinaryType {
