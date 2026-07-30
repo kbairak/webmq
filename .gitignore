@@ -26,5 +26,8 @@ lerna-debug.log*
 ehthumbs.db
 Thumbs.db
 
+# MkDocs build output
+/site/
+
 # uv environment
 examples/react-python-worker/worker/.venv/

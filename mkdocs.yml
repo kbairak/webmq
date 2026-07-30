@@ -1,0 +1,55 @@
+site_name: WebMQ
+site_description: A real-time messaging framework bridging web frontends with RabbitMQ via WebSockets
+site_url: https://kbairak.net/webmq
+repo_url: https://github.com/kbairak/webmq
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - content.code.copy
+    - navigation.sections
+    - navigation.top
+markdown_extensions:
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.highlight
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - admonition
+  - pymdownx.details
+  - toc:
+      permalink: true
+plugins:
+  - search
+nav:
+  - Home: index.md
+  - Getting Started: getting-started.md
+  - Architecture: architecture.md
+  - Guides:
+    - Vanilla JavaScript: vanilla-js.md
+    - React: react.md
+    - React Native: react-native.md
+    - Cross-Language Workers: cross-language.md
+    - Hooks & Middleware: hooks.md
+    - Connection Lifecycle: connection-lifecycle.md
+  - Observability: observability.md
+  - API Reference: api-reference.md
+  - Examples: examples.md
+  - Contributing: contributing.md
