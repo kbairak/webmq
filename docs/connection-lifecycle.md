@@ -101,6 +101,8 @@ await server.stop();  // Closes all WebSockets, cancels consumers, closes RMQ
 
 The server registers `SIGTERM`/`SIGINT` handlers that call `stop()` on all active `WebMQServer` instances.
 
+**Session queues are only deleted on a clean *client* disconnect.** When the server shuts down (or is scaled down), it does **not** delete session queues: clients reconnect to a remaining backend and resume with the same queue, and any messages published during the gap are buffered by RabbitMQ and delivered on reconnect. Queues left behind by abandoned connections are cleaned up by the `queueTimeout` TTL (default 5 min) once the last consumer leaves.
+
 ## Connection events
 
 `WebMQClient` extends `EventTarget` and dispatches `CustomEvent`s:

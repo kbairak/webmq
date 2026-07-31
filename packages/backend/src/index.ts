@@ -73,6 +73,7 @@ export default class WebMQServer {
   private _consecutiveChannelFailures = 0;
   private _lastSuccessfulConnectionAttempt: Date | null = null;
   private _heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  private _shuttingDown = false;
   private _pendingRmqAcks = new Map<
     string,
     {
@@ -117,6 +118,7 @@ export default class WebMQServer {
 
   public async start(): Promise<void> {
     WebMQServer._instances.add(this);
+    this._shuttingDown = false;
 
     const [channel, connection] = await this._getChannelFunc()();
     await channel.assertExchange(this._exchangeName, 'topic', { durable: true });
@@ -265,7 +267,7 @@ export default class WebMQServer {
         if (sessionInfo2 && sessionInfo2.ws === ws) {
           this._sessions.delete(currentSessionId!);
         }
-        if (isNormalClose && hookContext.sessionId) {
+        if (!this._shuttingDown && isNormalClose && hookContext.sessionId) {
           const currentSession = this._sessions.get(hookContext.sessionId);
           if (!currentSession || currentSession.ws === ws) {
             await channel.deleteQueue(hookContext.sessionId);
@@ -293,6 +295,7 @@ export default class WebMQServer {
   }
 
   public async stop(): Promise<void> {
+    this._shuttingDown = true;
     if (this._heartbeatTimer !== null) {
       clearInterval(this._heartbeatTimer);
       this._heartbeatTimer = null;
@@ -308,6 +311,7 @@ export default class WebMQServer {
     await Promise.all(
       [...this._consumerTags.values()].map((consumerTag) => channel.cancel(consumerTag))
     );
+    this._consumerTags.clear();
 
     await Promise.all([...this._queues.values()]);
 

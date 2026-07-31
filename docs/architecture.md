@@ -113,7 +113,8 @@ Each WebSocket connection gets a dedicated auto-delete queue on RabbitMQ, named 
 
 - Receives messages routed to topics the client subscribed to
 - Persists messages while the client is disconnected (if queue is still alive)
-- Is cleaned up on normal disconnect
+- Is deleted when the client disconnects normally
+- Survives abnormal disconnects and backend shutdown until the `queueTimeout` TTL expires (default 5 min), letting clients reconnect to any backend and resume without message loss
 - Supports session dedup: if a client reconnects with the same `sessionId`, the old consumer is cancelled and replaced
 
 ## Message Flow Detail

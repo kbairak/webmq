@@ -827,6 +827,14 @@ describe('WebMQServer', () => {
       expect(mockChannel.cancel).toHaveBeenCalledWith(consumerTag);
       expect(mockChannel.deleteQueue).not.toHaveBeenCalled();
     });
+
+    it('should not delete queue when server shuts down', async () => {
+      await server.stop();
+      mockWs._triggerEvent('close', 1001); // Server-initiated shutdown close
+      await waitForQueue();
+
+      expect(mockChannel.deleteQueue).not.toHaveBeenCalled();
+    });
   });
 
   describe('Message Queue Serialization', () => {
